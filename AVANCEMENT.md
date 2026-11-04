@@ -49,7 +49,7 @@ Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par troi
 
 1. **Exécuter le diagnostic M0** : installer `package.zip` dans un SiYuan en marche (le noyau ne tourne pas actuellement), avec des PDF importés, et lire le rapport. Restent à vérifier à la main : `openTab` à la page N, re-création du calque au zoom, expiration de session.
 2. Ajouter `icon.png`.
-3. Brancher l'indexeur dans `src/index.ts` (`loadPdf` sur le PDF.js de SiYuan, à valider avec le diagnostic ; `getViewport({scale:1})` doit fournir `transform`, `width`, `height`). Le chargement des index doit ignorer `manifest.json` (filtrer sur `.dsx`).
+3. (Branché : bouton « Réindexer » + état dans l'onglet, `src/indexer/loadPdf.ts` sur `window.pdfjsLib`; jamais exécuté dans un vrai SiYuan.) À valider : `getViewport({scale:1})` fournit `transform`, `width`, `height`. Le chargement des index doit ignorer `manifest.json` (filtrer sur `.dsx`).
 4. Onglet de recherche : saisie, BM25, regroupement, vignettes paresseuses (rendu + cache IndexedDB), clic → `openPdfAtPage`.
 5. Réglages, thème, mesures sur le corpus de 47 PDF (voir `CAHIER_DES_CHARGES.md` §8).
 

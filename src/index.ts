@@ -1,6 +1,10 @@
 import { Plugin, openTab, showMessage } from "siyuan";
 import { createKernelApi } from "./siyuan/kernelApi";
 import { formatReport, runM0Diagnostic, type PdfjsLike } from "./diagnostic/m0";
+import { createIndexer, type Indexer, type IndexerEvent } from "./indexer/indexer";
+import { createLoadPdf, type PdfjsLoader } from "./indexer/loadPdf";
+import { discoverPdfs } from "./siyuan/discovery";
+import { createPetalStore } from "./siyuan/petalStore";
 
 const TAB_TYPE = "docseeker";
 const TOP_BAR_ID = "docseeker-top-bar";
@@ -11,7 +15,28 @@ const MESSAGE_TIMEOUT_MS = 6000;
 
 declare global {
   interface Window {
-    pdfjsLib?: PdfjsLike;
+    pdfjsLib?: unknown;
+  }
+}
+
+function describeEvent(event: IndexerEvent): string {
+  switch (event.type) {
+    case "started":
+      return "Indexation démarrée";
+    case "progress":
+      return `${event.path} : page ${event.page}/${event.total}`;
+    case "indexed":
+      return `Indexé : ${event.path} (${event.pages} pages)`;
+    case "skipped-scanned":
+      return `PDF sans texte ignoré : ${event.path}`;
+    case "failed":
+      return `Échec : ${event.path} — ${event.message}`;
+    case "removed":
+      return `Index supprimé : ${event.path}`;
+    case "idle": {
+      const s = event.summary;
+      return `Terminé : ${s.indexed} indexé(s), ${s.skippedScanned} sans texte, ${s.failed} échec(s), ${s.removed} supprimé(s)${s.cancelled ? " (annulé)" : ""}`;
+    }
   }
 }
 
@@ -21,6 +46,9 @@ export default class DocSeekerPlugin extends Plugin {
     this.addTab({
       type: TAB_TYPE,
       init: (custom) => this.renderTab(custom.element),
+      destroy: () => {
+        for (const cleanup of this.tabCleanups.splice(0)) cleanup();
+      },
     });
 
     this.addTopBar({
@@ -38,7 +66,12 @@ export default class DocSeekerPlugin extends Plugin {
     });
   }
 
+  private indexer: Indexer | null = null;
+  private readonly tabCleanups: Array<() => void> = [];
+
   override onunload(): void {
+    this.indexer?.cancel();
+    for (const cleanup of this.tabCleanups.splice(0)) cleanup();
     this.removeTopBar(TOP_BAR_ID);
   }
 
@@ -89,14 +122,46 @@ export default class DocSeekerPlugin extends Plugin {
         });
     });
 
-    container.append(button, output);
+    const indexButton = document.createElement("button");
+    indexButton.className = "b3-button b3-button--outline";
+    indexButton.textContent = this.t("reindex");
+    const indexStatus = document.createElement("pre");
+    indexStatus.style.whiteSpace = "pre-wrap";
+    indexStatus.style.userSelect = "text";
+
+    const indexer = this.getIndexer();
+    const unsubscribe = indexer.onEvent((event) => {
+      indexStatus.textContent = describeEvent(event);
+    });
+    this.tabCleanups.push(unsubscribe);
+    indexButton.addEventListener("click", () => {
+      indexButton.disabled = true;
+      void indexer.start().finally(() => {
+        indexButton.disabled = false;
+      });
+    });
+
+    container.append(indexButton, indexStatus, button, output);
+  }
+
+  private getIndexer(): Indexer {
+    if (this.indexer) return this.indexer;
+    const kernel = createKernelApi();
+    this.indexer = createIndexer({
+      discover: () => discoverPdfs({ api: kernel }),
+      store: createPetalStore({ api: kernel, pluginName: this.name }),
+      loadPdf: createLoadPdf(() => window.pdfjsLib as PdfjsLoader | undefined),
+      now: () => Date.now(),
+      onListenerError: (error) => console.error("[docseeker] listener", error),
+    });
+    return this.indexer;
   }
 
   private async runDiagnostic(): Promise<string> {
     const report = await runM0Diagnostic({
       kernel: createKernelApi(),
       fetch: (input, init) => fetch(input, init),
-      pdfjs: window.pdfjsLib,
+      pdfjs: window.pdfjsLib as PdfjsLike | undefined,
       createWorker: (url) => new Worker(url, { type: "module" }),
       now: () => performance.now(),
       petalDir: `${PETAL_ROOT}/${this.name}`,
