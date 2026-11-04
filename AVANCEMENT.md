@@ -21,6 +21,7 @@
 | `src/siyuan/petalStore.ts` | Stockage des `.dsx` (écriture par `.tmp` + `.bak`, car `renameFile` n'écrase pas) |
 | `src/siyuan/discovery.ts` | Liste des PDF de `data/assets`, `complete` + `planIndexUpdate` (jamais de suppression sur un parcours incomplet) |
 | `src/siyuan/openPdf.ts`, `src/ui/highlightOverlay.ts` | Ouverture à la bonne page et calque de surlignage en % dans le visualiseur natif |
+| `src/indexer/indexer.ts` | Orchestrateur injectable : découverte, manifeste `manifest.json`, extraction, `.dsx`, annulation sans publication tardive (risque 4 traité), PDF scannés notés au manifeste |
 
 Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par trois agents de revue (TypeScript, échecs silencieux, sécurité) dont les constats ont été corrigés.
 
@@ -42,13 +43,13 @@ Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par troi
 1. **Mémoire de l'index de recherche** (nouveau, important). Un index synthétique de 3 000 pages décodé pour la recherche pèse 60 à 100 Mo, mesure bruitée. Le corpus réel (47 PDF, ~25 000 à 40 000 pages) pourrait atteindre le Go en objets JS. Pistes : ne pas décoder `wordOrdinals` pour la recherche (inutiles au classement), stocker les postings en tableaux typés, charger les index à la demande. **À mesurer sur le vrai corpus avant de continuer.**
 2. **Hypothèses jamais testées dans un vrai SiYuan** (spike M0) : chargement du PDF.js de SiYuan depuis un Worker ; numérotation des pages de `openTab` ; `openTab` sur un PDF déjà ouvert ; détection de l'onglet visible ; PDF.js remplace-t-il l'élément `.page` ; `HEAD` + `Content-Length` sur `/assets/*.pdf` ; limite de taille de `putFile` ; réponse d'auth quand la session expire.
 3. Les écritures concurrentes ne sont sérialisées que dans un onglet : deux onglets ou deux appareils restent exposés (le repli sur `.bak` atténue).
-4. Un traitement abandonné après annulation peut continuer à écrire dans l'index : l'indexeur réel devra vérifier avant de publier.
+4. (traité dans l'indexeur : signal vérifié avant chaque écriture). La pause n'interrompt pas les jobs en cours.
 
 ## Prochaines étapes
 
 1. **Exécuter le diagnostic M0** : installer `package.zip` dans un SiYuan en marche (le noyau ne tourne pas actuellement), avec des PDF importés, et lire le rapport. Restent à vérifier à la main : `openTab` à la page N, re-création du calque au zoom, expiration de session.
 2. Ajouter `icon.png`.
-3. Indexeur réel : worker + PDF.js de SiYuan + `buildDocumentIndex` + `encodeIndex` + `petalStore`, piloté par `queue`.
+3. Brancher l'indexeur dans `src/index.ts` (`loadPdf` sur le PDF.js de SiYuan, à valider avec le diagnostic ; `getViewport({scale:1})` doit fournir `transform`, `width`, `height`). Le chargement des index doit ignorer `manifest.json` (filtrer sur `.dsx`).
 4. Onglet de recherche : saisie, BM25, regroupement, vignettes paresseuses (rendu + cache IndexedDB), clic → `openPdfAtPage`.
 5. Réglages, thème, mesures sur le corpus de 47 PDF (voir `CAHIER_DES_CHARGES.md` §8).
 
