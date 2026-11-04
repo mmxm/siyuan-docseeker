@@ -1,0 +1,18 @@
+{
+  "name": "siyuan-docseeker",
+  "version": "0.1.0",
+  "description": "Plugin SiYuan : recherche plein texte dans les PDF avec vignettes surlignées",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^5.1.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
