@@ -280,6 +280,23 @@ describe("runM0Diagnostic", () => {
     expect(c.detail).toContain("3");
   });
 
+  it("pdfjs: ignore les PDF vides (0 octet) pour choisir le plus petit", async () => {
+    const getDocument = vi.fn((_s: { url: string }) => ({
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({ getTextContent: async () => ({ items: [] }) }),
+        destroy: vi.fn(),
+      }),
+    }));
+    const { deps } = makeDeps({
+      files: ["big é.pdf", "small.pdf", "vide.pdf"],
+      sizes: { "/assets/big é.pdf": 5000, "/assets/small.pdf": 100, "/assets/vide.pdf": 0 },
+      pdfjs: { version: "4.0.1", getDocument },
+    });
+    await runM0Diagnostic(deps);
+    expect(getDocument).toHaveBeenCalledWith({ url: "/assets/small.pdf" });
+  });
+
   it("pdfjs: destroy appelé, version absente tolérée, destroy optionnel", async () => {
     const destroy = vi.fn();
     const mk = (withDestroy: boolean): PdfjsLike => ({

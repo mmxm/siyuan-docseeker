@@ -321,6 +321,17 @@ describe("createKernelApi", () => {
     ]);
   });
 
+  // Constaté : un PDF vide (0 octet) est servi en 200 sans Content-Range ; sa taille (0) est connue.
+  it("headAsset : repli répondu en 200 -> taille depuis Content-Length (fichier vide)", async () => {
+    const api = createKernelApi({
+      fetch: async (_url, init) =>
+        init?.method === "HEAD"
+          ? new Response("x", { status: 404 })
+          : new Response(null, { status: 200, headers: { "Content-Length": "0" } }),
+    });
+    expect(await api.headAsset("/assets/vide.pdf")).toEqual({ size: 0 });
+  });
+
   it("headAsset : HEAD 404 et GET Range 404 -> NotFoundError", async () => {
     const api = createKernelApi({ fetch: async () => new Response("nope", { status: 404 }) });
     await expect(api.headAsset("/assets/zzz.pdf")).rejects.toBeInstanceOf(NotFoundError);

@@ -296,9 +296,11 @@ export function createKernelApi(options: KernelApiOptions = {}): KernelApi {
       signal,
     });
     if (response.status !== HTTP_PARTIAL_CONTENT && !response.ok) throw await failureFrom(response, true);
-    const total = CONTENT_RANGE_TOTAL.exec(response.headers.get("Content-Range") ?? "")?.[1];
-    // Le corps (1 octet) n'est pas lu ; on libère la connexion.
+    // Le corps n'est pas lu (Range ignoré => 200 avec tout le fichier) ; on libère la connexion.
     await response.body?.cancel().catch(() => undefined);
+    // Réponse 200 (Range ignoré, ex. fichier vide) : Content-Length est la taille totale.
+    if (response.status !== HTTP_PARTIAL_CONTENT) return { size: parseContentLength(response) };
+    const total = CONTENT_RANGE_TOTAL.exec(response.headers.get("Content-Range") ?? "")?.[1];
     const size = total === undefined ? Number.NaN : Number(total);
     if (!Number.isSafeInteger(size)) {
       throw new KernelApiError(response.status, CODE_UNKNOWN, "missing or invalid Content-Range total");
