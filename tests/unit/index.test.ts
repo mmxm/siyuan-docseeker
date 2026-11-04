@@ -8,6 +8,9 @@ const h = vi.hoisted(() => ({
   cancel: vi.fn(),
   unsubscribe: vi.fn(),
   listener: undefined as undefined | ((e: unknown) => void),
+  sharedStart: vi.fn(),
+  sharedDispose: vi.fn(),
+  sharedCreated: 0,
   mounts: [] as { dispose: ReturnType<typeof vi.fn>; onWarn: (m: string, e?: unknown) => void }[],
 }));
 
@@ -41,6 +44,12 @@ vi.mock("../../src/indexer/indexer", () => ({
     },
   }),
 }));
+vi.mock("../../src/search/sharedIndex", () => ({
+  createSharedIndex: () => {
+    h.sharedCreated++;
+    return { start: h.sharedStart, dispose: h.sharedDispose };
+  },
+}));
 vi.mock("../../src/searchTab", async (orig) => {
   const actual = await orig<typeof import("../../src/searchTab")>();
   return {
@@ -60,6 +69,7 @@ function setup() {
   const plugin = new (DocSeekerPlugin as unknown as new () => unknown)() as {
     onload(): void;
     onunload(): void;
+    onLayoutReady(): void;
     tab: { init: (this: TabModel, c: TabModel) => void; destroy: (this: TabModel) => void };
   };
   plugin.onload();
@@ -76,6 +86,9 @@ const flush = async (): Promise<void> => {
 
 beforeEach(() => {
   h.mounts.length = 0;
+  h.sharedStart.mockReset().mockResolvedValue(undefined);
+  h.sharedDispose.mockClear();
+  h.sharedCreated = 0;
   h.showMessage.mockClear();
   h.start.mockReset();
   h.cancel.mockClear();
@@ -103,6 +116,44 @@ describe("DocSeekerPlugin", () => {
     s.plugin.onunload();
     expect(h.mounts.every((m) => m.dispose.mock.calls.length === 1)).toBe(true);
     expect(h.cancel).toHaveBeenCalled();
+  });
+
+  it("onLayoutReady démarre le chargement de l'index partagé, créé une seule fois pour tous les onglets", () => {
+    const s = setup();
+    s.plugin.onLayoutReady();
+    expect(h.sharedStart).toHaveBeenCalledTimes(1);
+    s.render();
+    s.render();
+    expect(h.sharedCreated).toBe(1);
+  });
+
+  it("onunload libère l'index partagé", () => {
+    const s = setup();
+    s.plugin.onLayoutReady();
+    s.plugin.onunload();
+    expect(h.sharedDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("onLayoutReady ne lève pas si start() lève de façon synchrone, et journalise", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.sharedStart.mockImplementation(() => {
+      throw new Error("start KO");
+    });
+    const s = setup();
+    expect(() => s.plugin.onLayoutReady()).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("docseeker"), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it("renderTab après onunload ne recrée pas d'index partagé orphelin", () => {
+    const s = setup();
+    s.render();
+    s.plugin.onunload();
+    expect(h.sharedCreated).toBe(1);
+    const mounts = h.mounts.length;
+    s.render();
+    expect(h.sharedCreated).toBe(1);
+    expect(h.mounts.length).toBe(mounts);
   });
 
   it("signale visiblement un échec de indexer.start()", async () => {

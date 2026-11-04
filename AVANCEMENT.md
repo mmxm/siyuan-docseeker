@@ -10,14 +10,15 @@
 - **Mémoire de l'index traitée (2026-11-04)** : `Bm25Index` en segments par document, postings en `Uint32Array` (CSR), `wordOrdinals` non décodés pour la recherche. Mesure : ≈ 55 Ko/page → **2,89 Ko/page** (≈ 113 Mo pour 40 000 pages) via `COPIES=20 npm run measure:memory` (4 index réels recopiés ; à refaire sur les 47 PDF). 707 tests. Restes : termes dupliqués entre segments, coût de recherche O(D·log T).
 - **Onglet de recherche écrit (2026-11-04, commit 52d347b)** : saisie avec délai, BM25 groupé par document, vignettes paresseuses surlignées (PDF.js de SiYuan, cache IndexedDB), clic → `openPdfAtPage` + calque, états d'erreur visibles, accessibilité clavier/ARIA. 966 tests, `dist/index.js` 191 Ko. Relu par 5 agents (TS, erreurs avalées, a11y, perf, sécurité), corrections faites. **Jamais essayé dans un vrai SiYuan.**
 - **Validé à la main dans SiYuan 3.8.9 (2026-11-04, captures de l'utilisateur)** : recherche d'un mot (« BPCO », 3 documents, 30 pages), vignettes rendues avec mots surlignés, clic → PDF ouvert à la bonne page avec calque de surlignage, **PDF déjà ouvert**, **zoom**, **thème sombre**. Constaté : la section « Avancé » affichait la clé brute (`advanced`) car `i18n/fr_FR.json` installé était ancien ; corrigé en copiant le fichier.
-- **Requêtes multi-mots et préfixes** : validées hors interface sur les 4 vrais `.dsx` (`npm run measure:multiword`, 1 570 pages ; AND, préfixe sur le dernier mot seulement, accents/casse/ponctuation, requête vide, < 3 ms ; pages résultat = intersection des postings, boîtes cohérentes) + `tests/unit/search/queryConsistency.test.ts`. Aucun bug trouvé. Reste à les essayer à la main dans l'onglet.
+- **Requêtes multi-mots et préfixes** : validées hors interface sur les 4 vrais `.dsx` (`npm run measure:multiword`, 1 570 pages ; AND, préfixe sur le dernier mot seulement, accents/casse/ponctuation, requête vide, < 3 ms ; pages résultat = intersection des postings, boîtes cohérentes) + `tests/unit/search/queryConsistency.test.ts`. Aucun bug trouvé. Essayées à la main dans l'onglet : OK (confirmé par l'utilisateur).
 - **Cadrage des vignettes multi-termes** : la vignette se centre sur la zone de 300x120 pt qui couvre le plus de mots distincts de la requête (index de terme par ordinal, `makeTermIndexer`, `termIndexes`), repli sur l'ancien comportement sans info de terme ; version du cache de vignettes passée à 2. Vérifié sur le vrai .dsx (« classification bpco », ITEM_209 p. 6 → paragraphe I.2), relu (typescript-reviewer), findings corrigés. À revalider à la main après rebuild.
+- **Index partagé chargé au démarrage** : `src/search/sharedIndex.ts` (un seul `SearchStore`, chargé en arrière-plan à `onLayoutReady`, un seul refresh débouncé pour N onglets, erreurs visibles dans une zone dédiée de l'onglet, chargement retenté après échec, invalidations par document). Relu (typescript-reviewer, silent-failure-hunter), findings corrigés en TDD. À valider à la main après rebuild : plusieurs onglets, réindexation à chaud.
 - **Pas encore validé / fait** : plusieurs onglets PDF, réindexation à chaud, réglages, `icon.png`, mesures sur les 47 PDF (temps de chargement à froid, mémoire réelle).
 - **GitHub** : dépôt `git@github.com:mmxm/siyuan-docseeker.git`, branche `main`, à jour (le push avait échoué en début de session puis a fonctionné).
 
 ## Où on en est
 
-**Tests : 679, typage strict propre, couverture ~99 % des lignes de `src`.**
+**Tests : 1046, typage strict propre, couverture ~99 % des lignes de `src`.**
 
 | Module | Rôle |
 |---|---|
@@ -74,7 +75,7 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 1. **Valider à la main dans SiYuan** (avec l'accord de l'utilisateur pour copier `dist/index.js`) : chargement des index, première recherche, vignettes (rendu et surlignage), clic → bonne page surlignée, zoom, PDF déjà ouvert, plusieurs onglets PDF, thème clair/sombre.
 2. Corriger ce que la validation révèle ; puis les perf reportées (risque 1) selon les mesures réelles.
 3. Réglages, `icon.png`, mesures sur les 47 PDF du corpus réel (`/Users/francois/Documents/DocFastExplorer/data/documents`, hors fichiers de test OffNote/RaceNote/RT_/ZipExport…). Voir `CAHIER_DES_CHARGES.md` §8.
-4. Charger les index au démarrage du plugin (aujourd'hui à l'ouverture de l'onglet, résultats partiels pendant le chargement) ; chaque onglet recrée son `searchStore`.
+4. ~~Charger les index au démarrage du plugin~~ : fait (index partagé, voir ci-dessus).
 
 ## Commandes utiles
 

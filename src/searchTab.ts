@@ -3,12 +3,11 @@
  * rendu des vignettes, vue) et le clic vers l'ouverture du PDF surlignée. Tout est injecté : aucun accès
  * direct à `window`, au noyau ou à SiYuan (voir `index.ts` pour le câblage réel).
  */
-import { decodeIndexForSearch, decodePageMatches as realDecodePageMatches } from "./core/codec/decode";
+import { decodePageMatches as realDecodePageMatches } from "./core/codec/decode";
 import { rectToPercentStyle, wordBoxesToPageRects, type PercentStyle } from "./core/crop";
-import type { IndexerEvent } from "./indexer/indexer";
 import { createPageMatchService } from "./search/pageMatches";
 import { createSearchController } from "./search/searchController";
-import { createSearchStore, type SearchStoreDeps } from "./search/searchStore";
+import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
 import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
 import type { PetalStore } from "./siyuan/petalStore";
@@ -16,19 +15,19 @@ import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from ".
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
 import { mountSearchView } from "./ui/searchView";
 
-export const DSX_SUFFIX = ".dsx";
-export const REFRESH_DEBOUNCE_MS = 1000;
+export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
 const THUMBNAIL_DOC_VERSION = 2; // 2 : cadrage par termes distincts (le recadrage mis en cache change)
 const CACHE_MAX_ENTRIES = 2000;
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const MESSAGE_CLASS = "docseeker-message";
+const ERROR_CLASS = "docseeker-error";
 
 export interface SearchTabDeps {
-  readonly store: Pick<PetalStore, "list" | "read">;
-  readonly indexer: {
-    onEvent(listener: (event: IndexerEvent) => void): () => void;
-    start(): Promise<unknown>;
-  };
+  /** Lecture des `.dsx` pour les correspondances par page (le chargement de l'index n'est pas ici). */
+  readonly store: Pick<PetalStore, "read">;
+  /** Index partagé entre onglets, créé et chargé par le plugin : l'onglet ne le charge ni ne le libère. */
+  readonly sharedIndex: SharedIndex;
+  readonly indexer: { start(): Promise<unknown> };
   /** `openTab` de SiYuan et `app` du plugin, passés tels quels à `openPdfAtPage`. */
   readonly openTab: OpenPdfOptions["openTab"];
   readonly app: unknown;
@@ -36,7 +35,6 @@ export interface SearchTabDeps {
   readonly loadDocument: (path: string, signal?: AbortSignal) => Promise<RenderableDocument>;
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly onWarn: (message: string, error?: unknown) => void;
-  readonly decode?: SearchStoreDeps["decode"];
   readonly decodePageMatches?: typeof realDecodePageMatches;
   readonly openPdfAtPage?: typeof realOpenPdfAtPage;
   readonly observerFactory?: (
@@ -47,7 +45,6 @@ export interface SearchTabDeps {
   readonly indexedDB?: IDBFactory;
   readonly schedule?: (fn: () => void, ms: number) => unknown;
   readonly clear?: (handle: unknown) => void;
-  readonly refreshDebounceMs?: number;
   readonly t?: (key: string) => string;
 }
 
@@ -123,18 +120,9 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   const schedule = deps.schedule ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
   const clear = deps.clear ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const openPdf = deps.openPdfAtPage ?? realOpenPdfAtPage;
-  const lifetime = new AbortController();
   let disposed = false;
 
-  const dsxStore: Pick<PetalStore, "list" | "read"> = {
-    list: async () => (await deps.store.list()).filter((name) => name.endsWith(DSX_SUFFIX)),
-    read: (name) => deps.store.read(name),
-  };
-  const searchStore = createSearchStore({
-    store: dsxStore,
-    decode: deps.decode ?? decodeIndexForSearch,
-    onWarn,
-  });
+  const searchStore = deps.sharedIndex.store;
   const controllerListeners = new Set<() => void>();
   const controller = createSearchController({
     source: searchStore,
@@ -176,10 +164,16 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     onWarn,
   });
 
-  const messageEl = host.ownerDocument.createElement("div");
-  messageEl.className = MESSAGE_CLASS;
-  messageEl.setAttribute("role", "status");
-  messageEl.setAttribute("aria-live", "polite");
+  const statusRegion = (className: string): HTMLElement => {
+    const el = host.ownerDocument.createElement("div");
+    el.className = className;
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    return el;
+  };
+  // Deux régions distinctes : l'erreur d'index partagée (dérivée de l'état courant) et les messages d'action.
+  const errorEl = statusRegion(ERROR_CLASS);
+  const messageEl = statusRegion(MESSAGE_CLASS);
   const showMessage = (text: string): void => {
     if (!disposed) messageEl.textContent = text;
   };
@@ -259,6 +253,9 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       void open(docId, page, query);
     },
     onReindex: () => {
+      if (deps.sharedIndex.getError() !== undefined || searchStore.getPhase() === "error") {
+        void deps.sharedIndex.start(); // retente un chargement échoué (ne rejette jamais)
+      }
       void deps.indexer.start().catch((error: unknown) => {
         onWarn("Réindexation en échec", error);
         showMessage(`Réindexation en échec : ${messageOf(error)}.`);
@@ -270,63 +267,27 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     },
     ...(deps.t ? { t: deps.t } : {}),
   });
-  host.append(messageEl);
+  host.append(errorEl, messageEl);
 
-  // Rafraîchissement de l'index sur événements de l'indexeur (débouncé).
-  const debounceMs = deps.refreshDebounceMs ?? REFRESH_DEBOUNCE_MS;
-  let refreshHandle: unknown;
-  let refreshTimerSet = false;
-  const staleDocIds = new Set<string>();
-  const invalidatePending = (): void => {
-    for (const docId of staleDocIds) pageMatches.invalidate(docId);
+  // Le rafraîchissement et le chargement sont faits par l'index partagé ; l'onglet n'en garde que
+  // l'invalidation de ses propres correspondances par page et l'affichage de l'erreur éventuelle.
+  const syncSharedError = (): void => {
+    if (!disposed) errorEl.textContent = deps.sharedIndex.getError() ?? "";
   };
-  const reloadPaths = new Set<string>();
-  const runRefresh = (): void => {
-    refreshTimerSet = false;
+  const unsubscribeInvalidate = deps.sharedIndex.onInvalidate((docIds) => {
     if (disposed) return;
-    const paths = [...reloadPaths];
-    reloadPaths.clear();
-    searchStore
-      .refresh({ reloadPaths: paths, signal: lifetime.signal })
-      .catch((error: unknown) => {
-        if (lifetime.signal.aborted) return;
-        onWarn("Rafraîchissement de l'index en échec", error);
-        showMessage(`Rafraîchissement de l'index en échec : ${messageOf(error)}.`);
-      })
-      .finally(() => {
-        invalidatePending();
-        staleDocIds.clear();
-      });
-  };
-  const unsubscribeIndexer = deps.indexer.onEvent((event) => {
-    if (disposed || (event.type !== "indexed" && event.type !== "removed")) return;
-    for (const info of searchStore.listDocs()) {
-      if (info.path === event.path) staleDocIds.add(info.docId);
-    }
-    invalidatePending();
-    if (event.type === "indexed") reloadPaths.add(event.path);
-    if (refreshTimerSet) clear(refreshHandle);
-    refreshTimerSet = true;
-    refreshHandle = schedule(runRefresh, debounceMs);
+    for (const docId of docIds) pageMatches.invalidate(docId);
   });
-
-  void searchStore
-    .load(lifetime.signal)
-    .catch((error: unknown) => {
-      if (lifetime.signal.aborted) return;
-      onWarn("Chargement des index en échec", error);
-      showMessage(`Chargement des index en échec : ${messageOf(error)}.`);
-    });
+  const unsubscribeStatus = deps.sharedIndex.onStatus(syncSharedError);
+  syncSharedError();
 
   return {
     dispose() {
       if (disposed) return;
       disposed = true;
-      lifetime.abort();
       openController?.abort();
-      if (refreshTimerSet) clear(refreshHandle);
-      refreshTimerSet = false;
-      unsubscribeIndexer();
+      unsubscribeInvalidate();
+      unsubscribeStatus();
       view.dispose();
       controller.dispose();
       loader.dispose();
@@ -334,6 +295,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       lastOpened?.dispose();
       lastOpened = null;
       controllerListeners.clear();
+      errorEl.remove();
       messageEl.remove();
     },
   };

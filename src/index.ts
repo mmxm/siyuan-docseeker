@@ -5,6 +5,8 @@ import { createIndexer, type Indexer, type IndexerEvent } from "./indexer/indexe
 import { createLoadPdf, type PdfjsLoader } from "./indexer/loadPdf";
 import { discoverPdfs } from "./siyuan/discovery";
 import { createPetalStore, type PetalStore } from "./siyuan/petalStore";
+import { decodeIndexForSearch } from "./core/codec/decode";
+import { createSharedIndex, type SharedIndex } from "./search/sharedIndex";
 import { createWarnLog, mountSearchTab } from "./searchTab";
 import { ensureSearchStyle } from "./ui/searchStyles";
 import type { OpenTabFn } from "./siyuan/openPdf";
@@ -73,13 +75,28 @@ export default class DocSeekerPlugin extends Plugin {
     });
   }
 
+  /** Charge les index en arrière-plan dès que l'interface est prête, sans attendre l'ouverture d'un onglet. */
+  override onLayoutReady(): void {
+    if (this.unloaded) return;
+    try {
+      void this.getSharedIndex().start();
+    } catch (error) {
+      this.warnLog.warn("Démarrage de l'index partagé en échec", error);
+    }
+  }
+
+  private unloaded = false;
   private indexer: Indexer | null = null;
+  private sharedIndex: SharedIndex | null = null;
   private petalStore: PetalStore | null = null;
   private readonly tabCleanups = new Map<Element, Array<() => void>>();
   private readonly warnLog = createWarnLog();
 
   override onunload(): void {
+    this.unloaded = true;
     this.indexer?.cancel();
+    this.sharedIndex?.dispose();
+    this.sharedIndex = null;
     for (const host of [...this.tabCleanups.keys()]) this.disposeTab(host);
     this.removeTopBar(TOP_BAR_ID);
   }
@@ -125,6 +142,7 @@ export default class DocSeekerPlugin extends Plugin {
   }
 
   private renderTab(host: Element): void {
+    if (this.unloaded) return; // plugin déchargé : ne recrée ni index ni onglet orphelins
     this.disposeTab(host);
     const cleanups: Array<() => void> = [];
     this.tabCleanups.set(host, cleanups);
@@ -140,8 +158,11 @@ export default class DocSeekerPlugin extends Plugin {
     const kernel = createKernelApi();
     const getPdfjs = (): PdfjsLoader | undefined => window.pdfjsLib as PdfjsLoader | undefined;
     const loadPdf = createLoadPdf(getPdfjs);
+    const sharedIndex = this.getSharedIndex();
+    void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     const searchTab = mountSearchTab(searchHost, {
       store: this.getPetalStore(kernel),
+      sharedIndex,
       indexer,
       openTab: openTab as unknown as OpenTabFn,
       app: this.app,
@@ -239,6 +260,19 @@ export default class DocSeekerPlugin extends Plugin {
   private getPetalStore(kernel: ReturnType<typeof createKernelApi>): PetalStore {
     this.petalStore ??= createPetalStore({ api: kernel, pluginName: this.name });
     return this.petalStore;
+  }
+
+  /** Index de recherche unique, créé paresseusement ; `start()` y est idempotent (onLayoutReady ou 1er onglet). */
+  private getSharedIndex(): SharedIndex {
+    if (this.sharedIndex) return this.sharedIndex;
+    const shared = createSharedIndex({
+      store: this.getPetalStore(createKernelApi()),
+      decode: decodeIndexForSearch,
+      indexer: this.getIndexer(),
+      onWarn: (message, error) => this.warnLog.warn(message, error),
+    });
+    this.sharedIndex = shared;
+    return shared;
   }
 
   private getIndexer(): Indexer {

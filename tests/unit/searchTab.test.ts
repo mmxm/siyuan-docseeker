@@ -4,6 +4,7 @@ import type { SearchIndexData } from "../../src/core/codec/format";
 import type { IndexerEvent } from "../../src/indexer/indexer";
 import { InvalidPdfPathError } from "../../src/siyuan/openPdf";
 import { createWarnLog, mountSearchTab, type SearchTabDeps } from "../../src/searchTab";
+import { createSharedIndex, type SharedIndex } from "../../src/search/sharedIndex";
 
 const PDF_A = "assets/Alpha-20240101120000-abc1234.pdf";
 const PDF_B = "assets/Beta-20240101120000-def5678.pdf";
@@ -39,6 +40,7 @@ interface Harness {
   list: ReturnType<typeof vi.fn>;
   read: ReturnType<typeof vi.fn>;
   emit: (event: IndexerEvent) => void;
+  shared: SharedIndex;
   listeners: Set<(event: IndexerEvent) => void>;
   start: ReturnType<typeof vi.fn>;
   openPdfAtPage: ReturnType<typeof vi.fn>;
@@ -47,7 +49,9 @@ interface Harness {
   observerDisconnect: ReturnType<typeof vi.fn>;
 }
 
-function harness(over: { ids?: string[] } = {}): Harness {
+const sharedInstances: SharedIndex[] = [];
+
+function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
   const ids = over.ids ?? ["a"];
   const files = new Map<string, Uint8Array>();
   for (const id of ids) files.set(`${id}.dsx`, bytes(id));
@@ -68,17 +72,26 @@ function harness(over: { ids?: string[] } = {}): Harness {
   const observerDisconnect = vi.fn();
   const host = document.createElement("div");
   document.body.append(host);
-  const deps: SearchTabDeps = {
-    store: { list, read } as unknown as SearchTabDeps["store"],
-    decode: async (b) => data(new TextDecoder().decode(b) === "b" ? PDF_B : PDF_A),
-    decodePageMatches: decodePageMatches as unknown as NonNullable<SearchTabDeps["decodePageMatches"]>,
-    indexer: {
-      onEvent: (l) => {
-        listeners.add(l);
-        return () => listeners.delete(l);
-      },
-      start,
+  const indexerEvents = {
+    onEvent: (l: (event: IndexerEvent) => void) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
     },
+  };
+  // Index partagé : créé (et chargé) une fois par le plugin, jamais par l'onglet.
+  const shared = createSharedIndex({
+    store: { list, read } as unknown as SearchTabDeps["store"] & { list: () => Promise<string[]> },
+    decode: async (b) => data(new TextDecoder().decode(b) === "b" ? PDF_B : PDF_A),
+    indexer: indexerEvents,
+    onWarn,
+  });
+  sharedInstances.push(shared);
+  if (over.autoStart !== false) void shared.start();
+  const deps: SearchTabDeps = {
+    store: { read } as unknown as SearchTabDeps["store"],
+    sharedIndex: shared,
+    decodePageMatches: decodePageMatches as unknown as NonNullable<SearchTabDeps["decodePageMatches"]>,
+    indexer: { start },
     openTab: vi.fn(),
     app: { id: "app" },
     openPdfAtPage: openPdfAtPage as unknown as NonNullable<SearchTabDeps["openPdfAtPage"]>,
@@ -93,7 +106,7 @@ function harness(over: { ids?: string[] } = {}): Harness {
     onWarn,
   };
   return {
-    host, deps, files, list, read, listeners, start, openPdfAtPage, decodePageMatches, onWarn, observerDisconnect,
+    host, deps, shared, files, list, read, listeners, start, openPdfAtPage, decodePageMatches, onWarn, observerDisconnect,
     emit: (event) => {
       for (const l of [...listeners]) l(event);
     },
@@ -115,16 +128,17 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 afterEach(() => {
+  for (const shared of sharedInstances.splice(0)) shared.dispose();
   vi.useRealTimers();
   document.body.replaceChildren();
 });
 
 describe("mountSearchTab", () => {
-  it("charge les index au montage, en ignorant manifest.json, et affiche les résultats", async () => {
+  it("affiche les résultats de l'index partagé sans le charger lui-même (manifest.json ignoré)", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    expect(h.list).toHaveBeenCalledTimes(1);
+    expect(h.list).toHaveBeenCalledTimes(1); // le chargement vient du partagé, pas de l'onglet
     expect(h.read).toHaveBeenCalledWith("a.dsx");
     expect(h.read).not.toHaveBeenCalledWith("manifest.json");
     await type(h.host, "chat");
@@ -250,25 +264,99 @@ describe("mountSearchTab", () => {
     tab.dispose();
   });
 
-  it("dispose est idempotent et libère observateur, abonnements, minuteries et DOM", async () => {
+  it("dispose est idempotent, libère observateur et DOM, et laisse l'index partagé intact", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     await type(h.host, "chat");
-    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
-    const before = h.list.mock.calls.length;
+    const subscribersBefore = h.listeners.size;
+    expect(subscribersBefore).toBe(1); // l'abonnement à l'indexeur est celui du partagé
 
     tab.dispose();
     expect(() => tab.dispose()).not.toThrow();
     expect(h.observerDisconnect).toHaveBeenCalled();
-    expect(h.listeners.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
     expect(h.host.childElementCount).toBe(0);
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(h.list.mock.calls.length).toBe(before);
+    expect(h.listeners.size).toBe(subscribersBefore);
+    expect(h.shared.store.getPhase()).toBe("ready");
+    expect(h.shared.store.listDocs()).toHaveLength(1);
+
+    // Le partagé continue de se rafraîchir, sans plantage ni notification vers l'onglet disposé.
+    const before = h.list.mock.calls.length;
+    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    expect(h.list.mock.calls.length).toBe(before + 1);
+    expect(h.host.childElementCount).toBe(0);
   });
 
+  it("deux onglets partagent un seul chargement et un seul rafraîchissement", async () => {
+    const h = harness();
+    const host2 = document.createElement("div");
+    document.body.append(host2);
+    const tab1 = mountSearchTab(h.host, h.deps);
+    const tab2 = mountSearchTab(host2, h.deps);
+    await flush();
+    expect(h.list).toHaveBeenCalledTimes(1);
+    await type(h.host, "chat");
+    await type(host2, "chat");
+    expect(cards(h.host)).toHaveLength(2);
+    expect(cards(host2)).toHaveLength(2);
+    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    expect(h.list).toHaveBeenCalledTimes(2);
+    tab1.dispose();
+    tab2.dispose();
+  });
+
+  it("un onglet ouvert après le chargement voit directement les documents", async () => {
+    const h = harness();
+    await h.shared.start();
+    const tab = mountSearchTab(h.host, h.deps);
+    await type(h.host, "chat");
+    expect(cards(h.host)).toHaveLength(2);
+    expect(h.list).toHaveBeenCalledTimes(1);
+    tab.dispose();
+  });
+
+  it("invalide les correspondances de page de l'onglet quand le partagé signale un document périmé", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    cards(h.host)[0]!.click();
+    await flush();
+    h.read.mockClear();
+    cards(h.host)[0]!.click();
+    await flush();
+    expect(h.read).not.toHaveBeenCalledWith("a.dsx"); // en cache
+    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+    await flush();
+    cards(h.host)[0]!.click();
+    await flush();
+    expect(h.read).toHaveBeenCalledWith("a.dsx"); // relu après invalidation
+    tab.dispose();
+  });
+
+  it("affiche l'échec de chargement du partagé, même pour un onglet ouvert après coup", async () => {
+    const h = harness({ ids: [], autoStart: false });
+    h.list.mockRejectedValue(new Error("liste KO"));
+    await h.shared.start();
+    const late = mountSearchTab(h.host, h.deps);
+    expect(errMsg(h.host)).toMatch(/liste KO/);
+    late.dispose();
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringMatching(/Chargement/), expect.any(Error));
+  });
+
+  it("affiche l'échec de chargement survenu pendant que l'onglet est ouvert", async () => {
+    const h = harness({ ids: [], autoStart: false });
+    h.list.mockRejectedValue(new Error("liste KO"));
+    const tab = mountSearchTab(h.host, h.deps);
+    expect(errMsg(h.host)).toBe("");
+    await h.shared.start();
+    expect(errMsg(h.host)).toMatch(/liste KO/);
+    tab.dispose();
+  });
   it("ne rouvre rien après dispose pendant la récupération des correspondances", async () => {
     const h = harness();
     let release: () => void = () => undefined;
@@ -288,6 +376,7 @@ describe("mountSearchTab", () => {
 });
 
 const msg = (host: HTMLElement): string => host.querySelector(".docseeker-message")!.textContent ?? "";
+const errMsg = (host: HTMLElement): string => host.querySelector(".docseeker-error")!.textContent ?? "";
 
 describe("mountSearchTab (review fixes)", () => {
   it("ignore une ouverture périmée : handle jeté, pas de message, lastOpened intact", async () => {
@@ -394,23 +483,20 @@ describe("mountSearchTab (review fixes)", () => {
     tab.dispose();
   });
 
-  it("montre l'échec du rafraîchissement, du chargement et de la réindexation", async () => {
+  it("montre l'échec du rafraîchissement (puis l'efface) et celui de la réindexation", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    h.list.mockRejectedValue(new Error("noyau muet"));
+    h.list.mockRejectedValueOnce(new Error("noyau muet"));
     h.emit({ type: "indexed", path: PDF_A, pages: 3 });
     await vi.advanceTimersByTimeAsync(2000);
     await flush();
-    expect(msg(h.host)).toMatch(/noyau muet/);
-    tab.dispose();
-
-    const h2 = harness({ ids: [] });
-    h2.list.mockRejectedValue(new Error("liste KO"));
-    const tab2 = mountSearchTab(h2.host, h2.deps);
+    expect(errMsg(h.host)).toMatch(/noyau muet/);
+    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+    await vi.advanceTimersByTimeAsync(2000);
     await flush();
-    expect(msg(h2.host)).toMatch(/liste KO/);
-    tab2.dispose();
+    expect(errMsg(h.host)).toBe("");
+    tab.dispose();
 
     const h3 = harness({ ids: [] });
     h3.start.mockRejectedValue(new Error("indexeur KO"));
@@ -435,6 +521,96 @@ describe("mountSearchTab (review fixes)", () => {
     expect((ctor.mock.calls[0] as unknown[])[1]).toMatchObject({ rootMargin: "200px 0px" });
     tab.dispose();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("mountSearchTab (messages distincts)", () => {
+  const failRefresh = async (h: Harness): Promise<void> => {
+    h.list.mockRejectedValueOnce(new Error("noyau muet"));
+    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+  };
+
+  it("utilise deux régions status/polite distinctes", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    const err = h.host.querySelector(".docseeker-error")!;
+    const action = h.host.querySelector(".docseeker-message")!;
+    expect(err).not.toBe(action);
+    for (const el of [err, action]) {
+      expect(el.getAttribute("role")).toBe("status");
+      expect(el.getAttribute("aria-live")).toBe("polite");
+    }
+    tab.dispose();
+  });
+
+  it("un clic sur un résultat n'efface pas l'erreur d'index partagée", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    await failRefresh(h);
+    expect(errMsg(h.host)).toMatch(/noyau muet/);
+    cards(h.host)[0]!.click();
+    await flush();
+    expect(errMsg(h.host)).toMatch(/noyau muet/);
+    tab.dispose();
+  });
+
+  it("la fin de l'erreur partagée n'efface pas « Impossible d'ouvrir ce PDF »", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    await failRefresh(h);
+    h.openPdfAtPage.mockRejectedValueOnce(new Error("introuvable"));
+    cards(h.host)[0]!.click();
+    await flush();
+    expect(msg(h.host)).toMatch(/Impossible d'ouvrir/);
+    h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    expect(errMsg(h.host)).toBe("");
+    expect(msg(h.host)).toMatch(/Impossible d'ouvrir/);
+    tab.dispose();
+  });
+
+  it("l'apparition d'une erreur partagée n'écrase pas un message d'action", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    h.openPdfAtPage.mockRejectedValueOnce(new Error("introuvable"));
+    cards(h.host)[0]!.click();
+    await flush();
+    await failRefresh(h);
+    expect(msg(h.host)).toMatch(/Impossible d'ouvrir/);
+    expect(errMsg(h.host)).toMatch(/noyau muet/);
+    tab.dispose();
+  });
+
+  it("Réindexer relance le chargement de l'index partagé s'il avait échoué", async () => {
+    const h = harness({ ids: ["a"], autoStart: false });
+    h.list.mockRejectedValueOnce(new Error("liste KO"));
+    await h.shared.start();
+    const tab = mountSearchTab(h.host, h.deps);
+    expect(errMsg(h.host)).toMatch(/liste KO/);
+    h.host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.click();
+    await flush();
+    expect(h.list).toHaveBeenCalledTimes(2);
+    expect(errMsg(h.host)).toBe("");
+    tab.dispose();
+  });
+
+  it("Réindexer ne relance pas le chargement quand l'index va bien", async () => {
+    const h = harness();
+    await h.shared.start();
+    const tab = mountSearchTab(h.host, h.deps);
+    h.host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.click();
+    await flush();
+    expect(h.list).toHaveBeenCalledTimes(1);
+    tab.dispose();
   });
 });
 
