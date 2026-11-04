@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "measure:memory": "vitest run -c vitest.perf.config.ts"
+    "measure:memory": "vitest run -c vitest.perf.config.ts memory",
+    "measure:multiword": "vitest run -c vitest.perf.config.ts multiword"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
