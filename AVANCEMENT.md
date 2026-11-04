@@ -9,7 +9,8 @@
 - **Validé dans SiYuan 3.8.9** : diagnostic M0 6/6, indexation réelle de 4 PDF (dont 165 Mo).
 - **Mémoire de l'index traitée (2026-11-04)** : `Bm25Index` en segments par document, postings en `Uint32Array` (CSR), `wordOrdinals` non décodés pour la recherche. Mesure : ≈ 55 Ko/page → **2,89 Ko/page** (≈ 113 Mo pour 40 000 pages) via `COPIES=20 npm run measure:memory` (4 index réels recopiés ; à refaire sur les 47 PDF). 707 tests. Restes : termes dupliqués entre segments, coût de recherche O(D·log T).
 - **Onglet de recherche écrit (2026-11-04, commit 52d347b)** : saisie avec délai, BM25 groupé par document, vignettes paresseuses surlignées (PDF.js de SiYuan, cache IndexedDB), clic → `openPdfAtPage` + calque, états d'erreur visibles, accessibilité clavier/ARIA. 966 tests, `dist/index.js` 191 Ko. Relu par 5 agents (TS, erreurs avalées, a11y, perf, sécurité), corrections faites. **Jamais essayé dans un vrai SiYuan.**
-- **Pas encore fait** : validation manuelle dans SiYuan (rendu PDF.js `canvas`/`canvasContext`, ratio et surlignage des vignettes, ouverture à la bonne page, zoom), réglages, `icon.png`, mesures sur les 47 PDF.
+- **Validé à la main dans SiYuan 3.8.9 (2026-11-04, captures de l'utilisateur)** : recherche d'un mot (« BPCO », 3 documents, 30 pages), vignettes rendues avec mots surlignés, clic → PDF ouvert à la bonne page avec calque de surlignage, **PDF déjà ouvert**, **zoom**, **thème sombre**. Constaté : la section « Avancé » affichait la clé brute (`advanced`) car `i18n/fr_FR.json` installé était ancien ; corrigé en copiant le fichier.
+- **Pas encore validé / fait** : requêtes à plusieurs mots et préfixes, plusieurs onglets PDF, réindexation à chaud, réglages, `icon.png`, mesures sur les 47 PDF (temps de chargement à froid, mémoire réelle).
 - **GitHub** : dépôt `git@github.com:mmxm/siyuan-docseeker.git`, branche `main`, à jour (le push avait échoué en début de session puis a fonctionné).
 
 ## Où on en est
