@@ -1,0 +1,16 @@
+{
+  "pluginName": "DocSeeker",
+  "openSearch": "Ouvrir la recherche dans les PDF",
+  "tabTitle": "Recherche PDF",
+  "searchPlaceholder": "Rechercher dans vos PDF",
+  "indexing": "Indexation en cours",
+  "indexingPaused": "Indexation en pause",
+  "pause": "Pause",
+  "resume": "Reprendre",
+  "reindex": "Réindexer",
+  "noResults": "Aucun résultat",
+  "pageLabel": "Page {page}",
+  "occurrences": "{count} occ.",
+  "scannedSkipped": "PDF sans texte ignoré : {name}",
+  "diagnostic": "Diagnostic M0 (technique)"
+}

@@ -1,5 +1,6 @@
 import {
   BYTES_PER_BOX,
+  BudgetExceededError,
   CorruptDataError,
   CorruptOffsetError,
   DSX_FORMAT_VERSION,
@@ -7,10 +8,19 @@ import {
   DSX_MIN_FORMAT_VERSION,
   DsxFormatError,
   HEADER_OFFSETS,
+  BLOB_RATIO_GRACE_BYTES,
+  SECTION_RATIO_GRACE_BYTES,
   InvalidMagicError,
   MAGIC_LENGTH,
+  MAX_BOXES_PER_PAGE,
   MAX_INFLATED_BLOB_BYTES,
   MAX_INFLATED_BYTES,
+  MAX_INFLATION_RATIO,
+  MAX_PAGES,
+  MAX_TERMS,
+  MAX_TOTAL_BOXES,
+  MAX_TOTAL_INFLATED_BYTES,
+  MAX_TOTAL_POSTING_ITEMS,
   SECTION,
   SECTION_COUNT,
   SECTION_ENTRY_BYTES,
@@ -22,6 +32,7 @@ import {
   compareUtf8,
   mapInBatches,
   type DocumentIndex,
+  type SearchIndexData,
   type Posting,
   type TermEntry,
   type WordBox,
@@ -36,6 +47,48 @@ const UINT32_BYTES = 4;
 const MIN_TERM_BYTES = 4;
 /** Un posting occupe au moins 2 octets (delta de page, tf). */
 const MIN_POSTING_BYTES = 2;
+
+export interface BudgetLimits {
+  readonly maxInflatedBytes: number;
+  readonly maxBoxes: number;
+  readonly maxPostingItems: number;
+}
+
+const DEFAULT_LIMITS: BudgetLimits = {
+  maxInflatedBytes: MAX_TOTAL_INFLATED_BYTES,
+  maxBoxes: MAX_TOTAL_BOXES,
+  maxPostingItems: MAX_TOTAL_POSTING_ITEMS,
+};
+
+/** Budget cumulé partagé par toute une opération de décodage (un fichier non fiable ne peut pas le contourner). */
+export class DecodeBudget {
+  private inflatedBytes = 0;
+  private boxes = 0;
+  private postingItems = 0;
+
+  constructor(private readonly limits: BudgetLimits = DEFAULT_LIMITS) {}
+
+  addInflatedBytes(count: number): void {
+    this.inflatedBytes += count;
+    if (this.inflatedBytes > this.limits.maxInflatedBytes) {
+      throw new BudgetExceededError(`more than ${this.limits.maxInflatedBytes} inflated bytes in total`);
+    }
+  }
+
+  addBoxes(count: number): void {
+    this.boxes += count;
+    if (this.boxes > this.limits.maxBoxes) {
+      throw new BudgetExceededError(`more than ${this.limits.maxBoxes} boxes in total`);
+    }
+  }
+
+  addPostingItems(count: number): void {
+    this.postingItems += count;
+    if (this.postingItems > this.limits.maxPostingItems) {
+      throw new BudgetExceededError(`more than ${this.limits.maxPostingItems} postings and word ordinals in total`);
+    }
+  }
+}
 
 interface SectionRange {
   readonly offset: number;
@@ -112,6 +165,13 @@ class Reader {
   }
 }
 
+/** Une bombe de décompression dépasse largement le rapport réaliste d'un flux deflate. */
+function assertPlausibleRatio(inflated: number, compressed: number, graceBytes: number, what: string): void {
+  if (inflated > graceBytes && inflated > compressed * MAX_INFLATION_RATIO) {
+    throw new BudgetExceededError(`${what} inflates more than ${MAX_INFLATION_RATIO}x its compressed size`);
+  }
+}
+
 function concatChunks(chunks: readonly Uint8Array[], total: number): Uint8Array {
   const out = new Uint8Array(total);
   let at = 0;
@@ -123,7 +183,22 @@ function concatChunks(chunks: readonly Uint8Array[], total: number): Uint8Array 
 }
 
 /** Décompresse en s'arrêtant dès que `limit` est dépassé. Les erreurs d'environnement remontent telles quelles. */
-async function inflateRaw(data: Uint8Array, limit: number, what: string): Promise<Uint8Array> {
+interface InflateLimits {
+  /** Taille maximale de la sortie pour ce flux. */
+  readonly limit: number;
+  /** Sortie en dessous de laquelle le ratio n'est pas contrôlé. */
+  readonly ratioGraceBytes: number;
+}
+
+const SECTION_LIMITS: InflateLimits = { limit: MAX_INFLATED_BYTES, ratioGraceBytes: SECTION_RATIO_GRACE_BYTES };
+const BLOB_LIMITS: InflateLimits = { limit: MAX_INFLATED_BLOB_BYTES, ratioGraceBytes: BLOB_RATIO_GRACE_BYTES };
+
+async function inflateRaw(
+  data: Uint8Array,
+  { limit, ratioGraceBytes }: InflateLimits,
+  what: string,
+  budget: DecodeBudget,
+): Promise<Uint8Array> {
   const decompressor = new DecompressionStream("deflate-raw"); // hors du try : erreur d'environnement
   const reader = new Blob([data as BlobPart]).stream().pipeThrough(decompressor).getReader();
   const chunks: Uint8Array[] = [];
@@ -133,6 +208,8 @@ async function inflateRaw(data: Uint8Array, limit: number, what: string): Promis
       const { done, value } = await reader.read();
       if (done) break;
       total += value.length;
+      budget.addInflatedBytes(value.length);
+      assertPlausibleRatio(total, data.length, ratioGraceBytes, what);
       if (total > limit) {
         await reader.cancel().catch(() => undefined);
         throw new CorruptDataError(`${what} inflates beyond ${limit} bytes`);
@@ -162,6 +239,7 @@ function parseHeader(bytes: Uint8Array): ParsedHeader {
   const strings = readHeaderStrings(bytes, view);
   const sections = readSectionTable(view, strings.tableStart, bytes.length);
   const pageCount = view.getUint32(HEADER_OFFSETS.pageCount, true);
+  if (pageCount > MAX_PAGES) throw new BudgetExceededError(`${pageCount} pages exceed the limit of ${MAX_PAGES}`);
   const boxes = sections[SECTION.boxes];
   if (boxes && boxes.length < pageCount * UINT32_BYTES) throw new TruncatedFileError("incomplete page box table");
   return {
@@ -228,7 +306,13 @@ function decodePageLengths(raw: Uint8Array, pageCount: number): number[] {
   return lengths;
 }
 
-function decodePostings(reader: Reader, count: number, pageCount: number, term: string): Posting[] {
+function decodePostings(
+  reader: Reader,
+  count: number,
+  pageCount: number,
+  term: string,
+  budget: DecodeBudget,
+): Posting[] {
   reader.requireRoom(count, MIN_POSTING_BYTES, `document frequency of "${term}"`);
   const postings: Posting[] = [];
   let page = 0;
@@ -239,6 +323,7 @@ function decodePostings(reader: Reader, count: number, pageCount: number, term: 
     if (page > pageCount) throw new CorruptDataError(`posting page ${page} exceeds ${pageCount} pages`);
     const termFrequency = reader.varint();
     reader.requireRoom(termFrequency, 1, `term frequency of "${term}"`);
+    budget.addPostingItems(1 + termFrequency);
     const wordOrdinals: number[] = [];
     let ordinal = 0;
     for (let k = 0; k < termFrequency; k++) {
@@ -261,10 +346,16 @@ function readTermBytes(dict: Reader, previous: Uint8Array): Uint8Array {
   return current;
 }
 
-function decodeTerms(dictionary: Uint8Array, postingsRaw: Uint8Array, pageCount: number): TermEntry[] {
+function decodeTerms(
+  dictionary: Uint8Array,
+  postingsRaw: Uint8Array,
+  pageCount: number,
+  budget: DecodeBudget,
+): TermEntry[] {
   const dict = new Reader(dictionary);
   const postingsReader = new Reader(postingsRaw);
   const termCount = dict.varint();
+  if (termCount > MAX_TERMS) throw new BudgetExceededError(`${termCount} terms exceed the limit of ${MAX_TERMS}`);
   dict.requireRoom(termCount, MIN_TERM_BYTES, "term count");
   const terms: TermEntry[] = [];
   let previous: Uint8Array | undefined;
@@ -279,7 +370,7 @@ function decodeTerms(dictionary: Uint8Array, postingsRaw: Uint8Array, pageCount:
     if (declaredOffset !== postingsReader.position) {
       throw new CorruptOffsetError(`term "${term}" postings at ${declaredOffset}, expected ${postingsReader.position}`);
     }
-    terms.push({ term, postings: decodePostings(postingsReader, documentFrequency, pageCount, term) });
+    terms.push({ term, postings: decodePostings(postingsReader, documentFrequency, pageCount, term, budget) });
     previous = current;
   }
   dict.assertEnd("dictionary section");
@@ -287,12 +378,22 @@ function decodeTerms(dictionary: Uint8Array, postingsRaw: Uint8Array, pageCount:
   return terms;
 }
 
-function decodeBoxes(raw: Uint8Array): WordBox[] {
+/** Valide la structure d'un blob de boîtes sans rien matérialiser ; renvoie le nombre et les octets bruts. */
+function parseBoxBlob(raw: Uint8Array, budget: DecodeBudget): { count: number; data: Uint8Array } {
   const reader = new Reader(raw);
   const count = reader.varint();
+  if (count > MAX_BOXES_PER_PAGE) {
+    throw new BudgetExceededError(`${count} boxes on one page exceed the limit of ${MAX_BOXES_PER_PAGE}`);
+  }
   reader.requireRoom(count, BYTES_PER_BOX, "box count");
+  budget.addBoxes(count);
   const data = reader.take(count * BYTES_PER_BOX);
   reader.assertEnd("page box blob");
+  return { count, data };
+}
+
+function decodeBoxes(raw: Uint8Array, budget: DecodeBudget): WordBox[] {
+  const { count, data } = parseBoxBlob(raw, budget);
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const boxes: WordBox[] = [];
   for (let i = 0; i < count; i++) {
@@ -326,11 +427,16 @@ export function pageBlobOffsets(section: Uint8Array, pageCount: number): number[
   return offsets;
 }
 
-async function decodePageBlob(section: Uint8Array, offsets: readonly number[], pageIndex: number): Promise<WordBox[]> {
+async function inflatePageBlob(
+  section: Uint8Array,
+  offsets: readonly number[],
+  pageIndex: number,
+  budget: DecodeBudget,
+): Promise<Uint8Array> {
   const start = offsets[pageIndex] ?? 0;
   const end = offsets[pageIndex + 1] ?? start;
-  const raw = await inflateRaw(section.subarray(start, end), MAX_INFLATED_BLOB_BYTES, `page ${pageIndex + 1} boxes`);
-  return decodeBoxes(raw);
+  const what = `page ${pageIndex + 1} boxes`;
+  return inflateRaw(section.subarray(start, end), BLOB_LIMITS, what, budget);
 }
 
 /** Décode uniquement les boîtes de la page demandée (base 1). */
@@ -339,30 +445,63 @@ export async function decodePageBoxes(bytes: Uint8Array, pageNumber: number): Pr
   if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > header.pageCount) {
     throw new RangeError(`Page ${pageNumber} out of range 1..${header.pageCount}`);
   }
+  const budget = new DecodeBudget();
   const section = sectionBytes(bytes, header.sections[SECTION.boxes]);
-  return decodePageBlob(section, pageBlobOffsets(section, header.pageCount), pageNumber - 1);
+  const offsets = pageBlobOffsets(section, header.pageCount);
+  return decodeBoxes(await inflatePageBlob(section, offsets, pageNumber - 1, budget), budget);
 }
 
-export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
+interface DecodedCore {
+  readonly data: SearchIndexData;
+  readonly boxesSection: Uint8Array;
+  readonly offsets: readonly number[];
+}
+
+/** Tout sauf les boîtes : sections 0 à 2 décodées, table des blobs de boîtes validée. */
+async function decodeCore(bytes: Uint8Array, budget: DecodeBudget): Promise<DecodedCore> {
   const header = parseHeader(bytes);
   const part = (id: number) => sectionBytes(bytes, header.sections[id]);
+  const inflate = (id: number, what: string) => inflateRaw(part(id), SECTION_LIMITS, what, budget);
   const [lengths, dictionary, postings] = await Promise.all([
-    inflateRaw(part(SECTION.pageLengths), MAX_INFLATED_BYTES, "page lengths section"),
-    inflateRaw(part(SECTION.dictionary), MAX_INFLATED_BYTES, "dictionary section"),
-    inflateRaw(part(SECTION.postings), MAX_INFLATED_BYTES, "postings section"),
+    inflate(SECTION.pageLengths, "page lengths section"),
+    inflate(SECTION.dictionary, "dictionary section"),
+    inflate(SECTION.postings, "postings section"),
   ]);
   const boxesSection = part(SECTION.boxes);
   const offsets = pageBlobOffsets(boxesSection, header.pageCount);
-  const pages = Array.from(offsets.slice(1), (_, i) => i);
-  const pageBoxes = await mapInBatches(pages, STREAM_CONCURRENCY, (i) => decodePageBlob(boxesSection, offsets, i));
-  return {
+  const data: SearchIndexData = {
     normalizerVersion: header.normalizerVersion,
     extractorVersion: header.extractorVersion,
     sourcePath: header.sourcePath,
     pdfSize: header.pdfSize,
     pdfModifiedMs: header.pdfModifiedMs,
     pageTermCounts: decodePageLengths(lengths, header.pageCount),
-    terms: decodeTerms(dictionary, postings, header.pageCount),
-    pageBoxes,
+    terms: decodeTerms(dictionary, postings, header.pageCount, budget),
   };
+  return { data, boxesSection, offsets };
+}
+
+const pageIndexes = (offsets: readonly number[]): number[] => Array.from(offsets.slice(1), (_, i) => i);
+
+/** Décodage complet (tests, outils) : une WordBox par boîte. Préférer decodeIndexForSearch pour la recherche. */
+export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
+  const budget = new DecodeBudget();
+  const { data, boxesSection, offsets } = await decodeCore(bytes, budget);
+  const pageBoxes = await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) =>
+    decodeBoxes(await inflatePageBlob(boxesSection, offsets, i, budget), budget),
+  );
+  return { ...data, pageBoxes };
+}
+
+/**
+ * Décodage pour la recherche : termes, postings et pageTermCounts. Les blobs de boîtes sont inflatés
+ * et leur structure validée page par page, sans jamais créer de WordBox.
+ */
+export async function decodeIndexForSearch(bytes: Uint8Array): Promise<SearchIndexData> {
+  const budget = new DecodeBudget();
+  const { data, boxesSection, offsets } = await decodeCore(bytes, budget);
+  await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) => {
+    parseBoxBlob(await inflatePageBlob(boxesSection, offsets, i, budget), budget);
+  });
+  return data;
 }

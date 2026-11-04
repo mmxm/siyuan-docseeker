@@ -154,10 +154,20 @@ describe("calculateCropBounds validation and invariants", () => {
         const b = calculateCropBounds(x0, y0, x1, y1, pw, ph);
         expect(b.x0).toBe(0);
         expect(b.width).toBeCloseTo(pw, 9);
-        expect(b.height).toBe(DEFAULT_CROP_HEIGHT);
+        expect(b.height).toBeCloseTo(DEFAULT_CROP_HEIGHT, 9);
         expect(b.y0 + b.height).toBeLessThanOrEqual(ph + 1e-9);
       }),
     );
+  });
+});
+
+describe("calculateCropBounds float rounding", () => {
+  // Contre-exemple trouvé par fast-check : la hauteur est calculée par soustraction
+  // (end - origin), donc 119.99999999999999 au lieu de 120. Même arithmétique que
+  // crop-worker.js : on garde la formule et on compare avec une tolérance.
+  it("keeps the target height up to float rounding (fast-check regression)", () => {
+    const b = calculateCropBounds(0, 145.42709871837158, 0, 0, 1, 500);
+    expect(b.height).toBeCloseTo(DEFAULT_CROP_HEIGHT, 9);
   });
 });
 

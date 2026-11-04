@@ -20,6 +20,11 @@
  *   Les sections se suivent sans trou, la première commence juste après la table, et la
  *   dernière finit exactement à la fin du fichier (aucun octet en trop).
  *
+ * Bornes anti-DoS (fichiers synchronisés donc non fiables) : P <= MAX_PAGES, T <= MAX_TERMS,
+ * n <= MAX_BOXES_PER_PAGE par page, et un budget global par opération de décodage
+ * (MAX_TOTAL_INFLATED_BYTES, MAX_TOTAL_BOXES, MAX_TOTAL_POSTING_ITEMS) ainsi qu'un ratio
+ * d'inflation <= MAX_INFLATION_RATIO ; sinon BudgetExceededError.
+ *
  * Sections 0 à 2 : flux deflate-raw ; une fois décompressées (<= MAX_INFLATED_BYTES), elles
  * doivent être entièrement consommées.
  *   0 longueurs   : P varint (nombre de termes de chaque page).
@@ -48,10 +53,31 @@ export const MAX_SOURCE_PATH_BYTES = UINT16_MAX;
 export const UINT32_MAX = 0xffff_ffff;
 export const DSX_MIN_FORMAT_VERSION = 1;
 
-/** Taille maximale d'une section décompressée (protection contre les bombes de décompression). */
-export const MAX_INFLATED_BYTES = 256 * 1024 * 1024;
-/** Taille maximale d'un blob de boîtes (une page) décompressé. */
-export const MAX_INFLATED_BLOB_BYTES = 16 * 1024 * 1024;
+/** Taille maximale d'une section 0 à 2 décompressée (64 Mio ; un PDF de 5 000 pages en occupe quelques Mio). */
+export const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
+/** Taille maximale d'un blob de boîtes (une page) décompressé : MAX_BOXES_PER_PAGE boîtes + varint, arrondi à 1 Mio. */
+export const MAX_INFLATED_BLOB_BYTES = 1024 * 1024;
+/** Budget global d'octets inflatés pour toute une opération de décodage (sections + blobs). */
+export const MAX_TOTAL_INFLATED_BYTES = 320 * 1024 * 1024;
+/** Nombre maximal de pages d'un document. */
+export const MAX_PAGES = 100_000;
+/** Nombre maximal de boîtes (mots) sur une page. */
+export const MAX_BOXES_PER_PAGE = 50_000;
+/** Budget global de boîtes pour toute une opération de décodage. */
+export const MAX_TOTAL_BOXES = 4_000_000;
+/** Nombre maximal de termes du dictionnaire. */
+export const MAX_TERMS = 2_000_000;
+/** Budget global de postings + ordinaux de mots (objets matérialisés) pour une opération de décodage. */
+export const MAX_TOTAL_POSTING_ITEMS = 12_000_000;
+/** Rapport maximal sortie/entrée d'un flux deflate ; deflate plafonne théoriquement vers 1032. */
+export const MAX_INFLATION_RATIO = 600;
+/** Blobs de boîtes : sortie en dessous de laquelle le ratio n'est pas contrôlé. */
+export const BLOB_RATIO_GRACE_BYTES = 256 * 1024;
+/**
+ * Sections 0 à 2 : les postings/longueurs réguliers (ordinaux consécutifs) sont légitimement très
+ * compressibles ; le ratio n'est donc contrôlé qu'au-delà de cette sortie (le plafond absolu reste MAX_INFLATED_BYTES).
+ */
+export const SECTION_RATIO_GRACE_BYTES = 16 * 1024 * 1024;
 /** Nombre maximal de flux de (dé)compression simultanés. */
 export const STREAM_CONCURRENCY = 8;
 /** Tolérance sur les coordonnées de boîtes hors de [0,1] avant de lever une erreur. */
@@ -152,6 +178,16 @@ export class CorruptDataError extends DsxFormatError {
     super(`Corrupt .dsx file: ${detail}`, cause === undefined ? undefined : { cause });
   }
 }
+
+/** Budget global (octets inflatés, boîtes, postings, ratio d'inflation, pages, termes) dépassé. */
+export class BudgetExceededError extends CorruptDataError {
+  constructor(detail: string) {
+    super(`decoding budget exceeded: ${detail}`);
+  }
+}
+
+/** Index sans boîtes : suffisant pour la recherche (termes, postings, pageTermCounts). */
+export type SearchIndexData = Omit<DocumentIndex, "pageBoxes">;
 
 /** Comparaison lexicographique d'octets UTF-8 (ordre des termes du dictionnaire). */
 export function compareUtf8(a: Uint8Array, b: Uint8Array): number {

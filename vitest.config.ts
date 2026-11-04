@@ -6,7 +6,8 @@ export default defineConfig({
     include: ["tests/unit/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      include: ["src/core/**/*.ts"],
+      include: ["src/**/*.ts"],
+      reporter: [["text", { skipFull: false }]],
       thresholds: {
         lines: 80,
         functions: 80,
