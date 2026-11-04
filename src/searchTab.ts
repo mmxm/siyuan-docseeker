@@ -18,7 +18,7 @@ import { mountSearchView } from "./ui/searchView";
 
 export const DSX_SUFFIX = ".dsx";
 export const REFRESH_DEBOUNCE_MS = 1000;
-const THUMBNAIL_DOC_VERSION = 1;
+const THUMBNAIL_DOC_VERSION = 2; // 2 : cadrage par termes distincts (le recadrage mis en cache change)
 const CACHE_MAX_ENTRIES = 2000;
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const MESSAGE_CLASS = "docseeker-message";

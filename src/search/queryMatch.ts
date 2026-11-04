@@ -19,6 +19,19 @@ export function makeTermMatcher(query: string): (term: string) => boolean {
   return (term) => term.startsWith(last) || whole.has(term);
 }
 
+/**
+ * Index (dans les mots distincts de la requête, par ordre d'apparition) du mot que `term` satisfait,
+ * -1 sinon. Mêmes règles que makeTermMatcher : mot entier, ou préfixe pour le dernier mot.
+ */
+export function makeTermIndexer(query: string): (term: string) => number {
+  const tokens = [...new Set(tokenize(query))];
+  const lastIndex = tokens.length - 1;
+  const last = tokens[lastIndex];
+  if (last === undefined) return () => -1;
+  const positions = new Map(tokens.map((token, i) => [token, i]));
+  return (term) => positions.get(term) ?? (term.startsWith(last) ? lastIndex : -1);
+}
+
 export function isSearchable(query: string): boolean {
   return tokenize(query).length > 0;
 }

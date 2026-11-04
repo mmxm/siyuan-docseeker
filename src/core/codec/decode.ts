@@ -468,22 +468,41 @@ function compactSink(): PostingSink<CompactPostings> {
 }
 
 /** Ne retient que les ordinaux de la page demandée pour les termes voulus : aucun objet par posting. */
-function pageMatchSink(pageNumber: number, wanted: (term: string) => boolean): PostingSink<number[]> {
+function pageMatchSink(
+  pageNumber: number,
+  wanted: (term: string) => boolean,
+  termIndexOf?: (term: string) => number,
+): PostingSink<{ ordinals: number[]; termIndexes: number[] | undefined }> {
   const ordinals: number[] = [];
+  const termIndexes: number[] | undefined = termIndexOf ? [] : undefined;
   let termWanted = false;
+  let termIndex = -1;
   return {
     keepOrdinals: (page) => termWanted && page === pageNumber,
     begin: () => undefined,
     beginTerm(term) {
       termWanted = wanted(term);
+      termIndex = termWanted && termIndexOf ? termIndexOf(term) : -1;
     },
     posting(page, _termFrequency, wordOrdinals) {
-      if (wordOrdinals && page === pageNumber) for (const o of wordOrdinals) ordinals.push(o);
+      if (!wordOrdinals || page !== pageNumber) return;
+      for (const o of wordOrdinals) {
+        ordinals.push(o);
+        termIndexes?.push(termIndex);
+      }
     },
     endTerm: () => undefined,
     finish: () => {
-      ordinals.sort((a, b) => a - b);
-      return ordinals.filter((o, i) => i === 0 || o !== ordinals[i - 1]);
+      // Tri par ordinal (puis index de terme) ; un ordinal partagé ne garde que son premier index.
+      const order = ordinals.map((_, i) => i).sort((a, b) => ordinals[a]! - ordinals[b]! || (termIndexes ? termIndexes[a]! - termIndexes[b]! : 0));
+      const outOrdinals: number[] = [];
+      const outTerms: number[] = [];
+      for (const i of order) {
+        if (outOrdinals[outOrdinals.length - 1] === ordinals[i]) continue;
+        outOrdinals.push(ordinals[i]!);
+        if (termIndexes) outTerms.push(termIndexes[i]!);
+      }
+      return { ordinals: outOrdinals, termIndexes: termIndexes ? outTerms : undefined };
     },
   };
 }
@@ -665,6 +684,11 @@ export interface PageMatch {
   readonly boxes: readonly WordBox[];
   /** Ordinaux des jetons correspondant aux termes voulus : triés, sans doublon, indices dans `boxes`. */
   readonly ordinals: readonly number[];
+  /**
+   * Index du mot de la requête satisfait par chaque ordinal (parallèle à `ordinals`).
+   * Absent quand aucun indexeur de termes n'est fourni.
+   */
+  readonly termIndexes?: readonly number[];
 }
 
 /**
@@ -677,22 +701,24 @@ export async function decodePageMatches(
   pageNumber: number,
   wanted: (term: string) => boolean,
   limits?: BudgetLimits,
+  termIndexOf?: (term: string) => number,
 ): Promise<PageMatch> {
   const { pageCount } = parseHeader(bytes);
   if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pageCount) {
     throw new RangeError(`Page ${pageNumber} out of range 1..${pageCount}`);
   }
   const budget = new DecodeBudget(limits);
-  const { postings: ordinals, boxesSection, offsets } = await decodeCore(
+  const { postings: matched, boxesSection, offsets } = await decodeCore(
     bytes,
     budget,
-    pageMatchSink(pageNumber, wanted),
+    pageMatchSink(pageNumber, wanted, termIndexOf),
     () => undefined,
   );
   const boxes = decodeBoxes(await inflatePageBlob(boxesSection, offsets, pageNumber - 1, budget), budget);
+  const { ordinals, termIndexes } = matched;
   const last = ordinals[ordinals.length - 1];
   if (last !== undefined && last >= boxes.length) {
     throw new CorruptDataError(`word ordinal ${last} beyond the ${boxes.length} boxes of page ${pageNumber}`);
   }
-  return { boxes, ordinals };
+  return termIndexes ? { boxes, ordinals, termIndexes } : { boxes, ordinals };
 }

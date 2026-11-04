@@ -91,4 +91,146 @@ describe("planThumbnail", () => {
   it("rejects non-finite page sizes through calculateCropBounds", () => {
     expect(() => planThumbnail([box(0.1, 0.1)], [0], { width: Number.NaN, height: 10 })).toThrow(RangeError);
   });
+
+  describe("multi-term window selection (termIndexes)", () => {
+    // Page 600x800 points; box y fractions: 0.05 -> 40pt, 0.625 -> 500pt.
+    const at = (xPt: number, yPt: number): FractionBox => box(xPt / 600, yPt / 800, 0.05, 0.015);
+    const rectTop = (plan: ReturnType<typeof planThumbnail>) => plan.crop.y0;
+
+    it("prefers the area covering the most distinct terms over the first group", () => {
+      // 0: "bpco" in a title at the top ; 1-2: "classification" + "bpco" in a paragraph lower down
+      const boxes = [at(50, 40), at(50, 500), at(120, 510), at(50, 700)];
+      const plan = planThumbnail(boxes, [0, 1, 2], PAGE, { termIndexes: [1, 0, 1] });
+      expect(plan.crop.y0).toBeLessThanOrEqual(500);
+      expect(plan.crop.y0 + plan.crop.height).toBeGreaterThanOrEqual(526);
+      expect(plan.highlights).toHaveLength(2);
+    });
+
+    it("on equal distinct terms prefers more highlighted words, then the highest area", () => {
+      // area A (y~100): terms {0,1}, 2 words ; area B (y~400): terms {0,1}, 3 words ; area C (y~700): same as B
+      const boxes = [
+        at(50, 100), at(120, 100),
+        at(50, 400), at(120, 400), at(190, 400),
+        at(50, 700), at(120, 700), at(190, 700),
+      ];
+      const ordinals = [0, 1, 2, 3, 4, 5, 6, 7];
+      const termIndexes = [0, 1, 0, 1, 1, 0, 1, 1];
+      const plan = planThumbnail(boxes, ordinals, PAGE, { termIndexes });
+      expect(plan.highlights).toHaveLength(3);
+      expect(rectTop(plan)).toBeGreaterThan(300);
+      expect(rectTop(plan)).toBeLessThan(400);
+
+      const tie = planThumbnail(boxes.slice(0, 2), [0, 1], PAGE, { termIndexes: [0, 1] });
+      expect(tie.highlights).toHaveLength(2);
+    });
+
+    it("breaks a full tie by the highest area in the page", () => {
+      const boxes = [at(50, 600), at(120, 600), at(50, 100), at(120, 100)];
+      const plan = planThumbnail(boxes, [0, 1, 2, 3], PAGE, { termIndexes: [0, 1, 0, 1] });
+      expect(plan.crop.y0).toBeLessThan(100);
+      expect(plan.highlights).toHaveLength(2);
+    });
+
+    it("highlights every matched word falling in the crop, even beyond the ordinal gap", () => {
+      const boxes = Array.from({ length: 40 }, (_, i) => at(50 + (i % 4) * 60, 500 + Math.floor(i / 4) * 5));
+      const plan = planThumbnail(boxes, [0, 1, 30, 31], PAGE, { termIndexes: [0, 1, 0, 1] });
+      expect(plan.highlights).toHaveLength(4);
+    });
+
+    it("clips highlights to the crop and never exceeds the crop size", () => {
+      const boxes = [at(50, 300), at(120, 300), at(50, 700)];
+      const plan = planThumbnail(boxes, [0, 1, 2], PAGE, { termIndexes: [0, 1, 0] });
+      const w = plan.crop.width * plan.scale;
+      const h = plan.crop.height * plan.scale;
+      for (const r of plan.highlights) {
+        expect(r.x).toBeGreaterThanOrEqual(0);
+        expect(r.y).toBeGreaterThanOrEqual(0);
+        expect(r.x + r.width).toBeLessThanOrEqual(w + 1e-6);
+        expect(r.y + r.height).toBeLessThanOrEqual(h + 1e-6);
+      }
+      expect(plan.crop.width).toBe(DEFAULT_CROP_WIDTH);
+      expect(plan.crop.height).toBe(DEFAULT_CROP_HEIGHT);
+    });
+
+    it("single term: covers the densest area", () => {
+      const boxes = [at(50, 40), at(50, 500), at(120, 505), at(190, 510)];
+      const plan = planThumbnail(boxes, [0, 1, 2, 3], PAGE, { termIndexes: [0, 0, 0, 0] });
+      expect(plan.highlights).toHaveLength(3);
+    });
+
+    it("single occurrence: same as the legacy behavior", () => {
+      const boxes = [box(0.5, 0.5)];
+      expect(planThumbnail(boxes, [0], PAGE, { termIndexes: [0] })).toEqual(planThumbnail(boxes, [0], PAGE));
+    });
+
+    it("falls back to the legacy grouping when termIndexes is missing or misaligned", () => {
+      const boxes = [at(50, 40), at(50, 500), at(120, 510)];
+      const legacy = planThumbnail(boxes, [0, 1, 2], PAGE);
+      expect(planThumbnail(boxes, [0, 1, 2], PAGE, { termIndexes: [0, 1] })).toEqual(legacy);
+      expect(planThumbnail(boxes, [0, 1, 2], PAGE, { termIndexes: [] })).toEqual(legacy);
+    });
+
+    it("ignores invalid ordinals and invalid term indexes", () => {
+      const boxes = [at(50, 500), at(120, 510)];
+      const plan = planThumbnail(boxes, [0, 1, 9, -1], PAGE, { termIndexes: [0, 1, 0, 1] });
+      expect(plan.highlights).toHaveLength(2);
+      const none = planThumbnail(boxes, [0, 1], PAGE, { termIndexes: [-1, Number.NaN] });
+      expect(none.highlights).toEqual([]);
+      expect(none.crop.y0).toBe(0);
+      const empty = planThumbnail([], [], PAGE, { termIndexes: [] });
+      expect(empty.highlights).toEqual([]);
+    });
+
+    it("stays fast with thousands of matched words", () => {
+      const boxes = Array.from({ length: 5000 }, (_, i) => at((i * 7) % 550, (i * 13) % 780));
+      const ordinals = boxes.map((_, i) => i);
+      const termIndexes = ordinals.map((i) => i % 3);
+      const start = Date.now();
+      const plan = planThumbnail(boxes, ordinals, PAGE, { termIndexes });
+      expect(Date.now() - start).toBeLessThan(500);
+      expect(plan.highlights.length).toBeGreaterThan(0);
+    });
+
+    const expectValidCrop = (plan: ReturnType<typeof planThumbnail>) => {
+      for (const v of [plan.crop.x0, plan.crop.y0, plan.crop.width, plan.crop.height]) {
+        expect(Number.isFinite(v)).toBe(true);
+      }
+      expect(plan.crop.width).toBeGreaterThan(0);
+      expect(plan.crop.height).toBeGreaterThan(0);
+    };
+
+    it("returns a valid crop when a word is taller than the crop", () => {
+      const boxes = [box(0.1, 0.1, 0.1, 0.3), box(0.5, 0.6, 0.05, 0.015)];
+      const plan = planThumbnail(boxes, [0, 1], PAGE, { termIndexes: [0, 1] });
+      expectValidCrop(plan);
+    });
+
+    it("returns a valid crop when a word is wider than the crop", () => {
+      const boxes = [box(0.05, 0.5, 0.9, 0.015)];
+      const plan = planThumbnail(boxes, [0], PAGE, { termIndexes: [0] });
+      expectValidCrop(plan);
+      expect(plan.crop.y0).toBeLessThanOrEqual(400);
+    });
+
+    it("tolerates floating point rounding on the band edge", () => {
+      // height exactly the crop height: (y1 - h) + h may be below y1 in floating point
+      const h = DEFAULT_CROP_HEIGHT / 800;
+      const boxes = [box(0.1, 0.1234567, 0.05, h)];
+      const plan = planThumbnail(boxes, [0], PAGE, { termIndexes: [0] });
+      expectValidCrop(plan);
+      expect(plan.highlights).toHaveLength(1);
+    });
+
+    it("covers both terms even when the first term floods the page before the first rare term", () => {
+      const flood = Array.from({ length: 400 }, (_, i) => at(10 + (i % 8) * 60, 20 + Math.floor(i / 8) * 2));
+      const rare = [at(50, 700), at(120, 700)];
+      const boxes = [...flood, ...rare];
+      const ordinals = boxes.map((_, i) => i);
+      const termIndexes = boxes.map((_, i) => (i === 400 ? 1 : 0));
+      const plan = planThumbnail(boxes, ordinals, PAGE, { termIndexes });
+      // "rapport" (ordinal 400, y=700) and a "le" next to it (ordinal 401) must share the crop
+      expect(plan.crop.y0 + plan.crop.height).toBeGreaterThanOrEqual(715);
+      expect(plan.crop.y0).toBeLessThanOrEqual(700);
+    });
+  });
 });

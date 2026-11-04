@@ -44,6 +44,18 @@ describe("createPageMatchService", () => {
     expect((await service.getPageMatches("d", 3, "zzz")).ordinals).toEqual([3, 0]);
   });
 
+  it("passe aussi un indexeur de termes a decode", async () => {
+    const seen: number[] = [];
+    const readDsx = vi.fn(async () => new Uint8Array(1));
+    const decode = vi.fn(async (_b: Uint8Array, _p: number, _w: unknown, _l: unknown, indexOf?: (t: string) => number) => {
+      seen.push(indexOf?.("classification") ?? -2, indexOf?.("bpco") ?? -2);
+      return { boxes: [], ordinals: [] } as PageMatch;
+    });
+    const service = createPageMatchService({ readDsx, decode: decode as never });
+    await service.getPageMatches("d", 1, "classification bpco");
+    expect(seen).toEqual([0, 1]);
+  });
+
   it("met en cache par requete normalisee", async () => {
     const { service, decode } = setup();
     const a = await service.getPageMatches("d", 1, "Plan  RECH");

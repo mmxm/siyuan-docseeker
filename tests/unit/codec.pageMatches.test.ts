@@ -71,6 +71,22 @@ describe("decodePageMatches", () => {
     expect(result.boxes).toHaveLength(6);
   });
 
+  it("reports the query-term index of each ordinal, parallel to ordinals, when a term indexer is given", async () => {
+    const bytes = await encodeIndex(makeIndex());
+    const indexOf = (t: string): number => (t === "alpha" ? 0 : t === "beta" ? 1 : -1);
+    const result = await decodePageMatches(bytes, 1, (t) => indexOf(t) >= 0, undefined, indexOf);
+    expect(result.ordinals).toEqual([0, 4, 5]);
+    expect(result.termIndexes).toHaveLength(3);
+    expect(result.termIndexes?.[0]).toBe(0); // ordinal 0 : alpha
+    expect(result.termIndexes?.[2]).toBe(1); // ordinal 5 : beta
+    expect([0, 1]).toContain(result.termIndexes?.[1]); // ordinal 4 partage entre alpha et beta
+  });
+
+  it("omits termIndexes without a term indexer", async () => {
+    const result = await decodePageMatches(await encodeIndex(makeIndex()), 1, () => true);
+    expect(result.termIndexes).toBeUndefined();
+  });
+
   it("returns the ordinals of the last page", async () => {
     const result = await decodePageMatches(await encodeIndex(makeIndex()), 3, (t) => t === "alpha");
     expect(result.ordinals).toEqual([0]);

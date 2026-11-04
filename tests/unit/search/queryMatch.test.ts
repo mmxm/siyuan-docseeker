@@ -1,6 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { buildIndex, postingsOf, vocabulary } from "../../../src/core/bm25";
-import { isSearchable, makeTermMatcher, titleBonuses } from "../../../src/search/queryMatch";
+import { isSearchable, makeTermIndexer, makeTermMatcher, titleBonuses } from "../../../src/search/queryMatch";
+
+describe("makeTermIndexer", () => {
+  it("renvoie l'index du mot de la requete (mots distincts, ordre d'apparition), -1 sinon", () => {
+    const indexOf = makeTermIndexer("Classification BPCO");
+    expect(indexOf("classification")).toBe(0);
+    expect(indexOf("bpco")).toBe(1);
+    expect(indexOf("classifications")).toBe(-1);
+    expect(indexOf("autre")).toBe(-1);
+  });
+
+  it("le dernier mot est un prefixe, les autres des mots entiers", () => {
+    const indexOf = makeTermIndexer("plan rech");
+    expect(indexOf("planete")).toBe(-1);
+    expect(indexOf("recherche")).toBe(1);
+  });
+
+  it("deduplique les mots repetes et reste coherent avec makeTermMatcher", () => {
+    const indexOf = makeTermIndexer("plan plan rech");
+    const match = makeTermMatcher("plan plan rech");
+    expect(indexOf("plan")).toBe(0);
+    expect(indexOf("recherche")).toBe(1);
+    for (const t of ["plan", "planete", "rech", "recherche", "x"]) expect(indexOf(t) >= 0).toBe(match(t));
+  });
+
+  it("requete sans jeton : -1", () => {
+    expect(makeTermIndexer("")("a")).toBe(-1);
+  });
+});
 
 describe("makeTermMatcher", () => {
   it("egalite pour un mot unique en tant que dernier mot : prefixe", () => {

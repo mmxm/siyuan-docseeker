@@ -77,6 +77,24 @@ describe("thumbnailLoader", () => {
     expect(s.renderer.renderCrop).toHaveBeenCalledTimes(1);
   });
 
+  it("crops on the area covering most query terms (termIndexes forwarded to the plan)", async () => {
+    const wb = (xPt: number, yPt: number) => ({ x: xPt / 600, y: yPt / 800, width: 0.05, height: 0.015 });
+    const getPageMatches = vi.fn(async () => ({
+      boxes: [wb(50, 40), wb(50, 500), wb(120, 510)],
+      ordinals: [0, 1, 2],
+      termIndexes: [1, 0, 1],
+    }));
+    const s = setup({ getPageMatches });
+    const el = document.createElement("div");
+    s.loader.attach(el, req);
+    s.show(el);
+    await flush();
+    const call = (s.renderer.renderCrop as unknown as { mock: { calls: [{ crop: { y0: number; height: number } }][] } }).mock
+      .calls[0]![0];
+    expect(call.crop.y0).toBeGreaterThan(300);
+    expect(call.crop.y0 + call.crop.height).toBeGreaterThanOrEqual(522);
+  });
+
   it("uses cache on second attach without rendering", async () => {
     const s = setup();
     const a = document.createElement("div");

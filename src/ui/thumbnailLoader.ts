@@ -198,7 +198,12 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
     try {
       const match = await options.getPageMatches(req.docId, req.page, req.query, signal);
       const size = await renderer.getPageSize(req.path, req.page, signal);
-      const plan = planThumbnail(match.boxes, match.ordinals, size);
+      const plan = planThumbnail(
+        match.boxes,
+        match.ordinals,
+        size,
+        match.termIndexes ? { termIndexes: match.termIndexes } : {},
+      );
       const ratio = `${plan.crop.width} / ${plan.crop.height}`;
       el.style.setProperty("aspect-ratio", ratio);
       el.dataset["aspectRatio"] = ratio;
