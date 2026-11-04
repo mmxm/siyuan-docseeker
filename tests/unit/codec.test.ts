@@ -12,11 +12,13 @@ import {
 } from "../../src/core/codec/format";
 
 const QUANTUM = 1 / 65535;
+const MAX_JSON_RATIO_INVERSE = 4;
 
 function makeIndex(overrides: Partial<DocumentIndex> = {}): DocumentIndex {
   return {
     normalizerVersion: 1,
     extractorVersion: "4.0.379",
+    sourcePath: "assets/doc.pdf",
     pdfSize: 1234567,
     pdfModifiedMs: 1700000000000,
     pageTermCounts: [],
@@ -56,20 +58,27 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Début de la table des sections : 29 + E + 2 + S (voir la spécification de format.ts). */
+function sectionTableStart(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const afterExtractor = 29 + (bytes[28] ?? 0);
+  return afterExtractor + 2 + view.getUint16(afterExtractor, true);
+}
+
 function expectBoxesClose(actual: readonly WordBox[], expected: readonly WordBox[]): void {
   expect(actual).toHaveLength(expected.length);
   expected.forEach((e, i) => {
     const a = actual[i];
-    expect(a).toBeDefined();
-    expect(Math.abs((a?.x ?? 9) - e.x)).toBeLessThanOrEqual(QUANTUM);
-    expect(Math.abs((a?.y ?? 9) - e.y)).toBeLessThanOrEqual(QUANTUM);
-    expect(Math.abs((a?.width ?? 9) - e.width)).toBeLessThanOrEqual(QUANTUM);
-    expect(Math.abs((a?.height ?? 9) - e.height)).toBeLessThanOrEqual(QUANTUM);
+    if (a === undefined) throw new Error(`box ${i} is missing in the decoded page`);
+    expect(Math.abs(a.x - e.x)).toBeLessThanOrEqual(QUANTUM);
+    expect(Math.abs(a.y - e.y)).toBeLessThanOrEqual(QUANTUM);
+    expect(Math.abs(a.width - e.width)).toBeLessThanOrEqual(QUANTUM);
+    expect(Math.abs(a.height - e.height)).toBeLessThanOrEqual(QUANTUM);
   });
 }
 
 describe("varint", () => {
-  it.each([0, 1, 127, 128, 300, 16384, 2 ** 32 - 1])("round-trips %i", (value) => {
+  it.each([0, 1, 127, 128, 300, 16384, 2 ** 32 - 1, Number.MAX_SAFE_INTEGER])("round-trips %i", (value) => {
     const bytes = encodeVarint(value);
     expect(readVarint(bytes, 0)).toEqual({ value, next: bytes.length });
   });
@@ -180,12 +189,13 @@ describe("round trip", () => {
   });
 
   it("quantizes boxes at the 0 and 1 bounds within 1/65535", async () => {
-    const boxes = [box(0, 0, 0, 0), box(1, 1, 1, 1), box(0.123456, 0.654321, 0.333333, 0.999999)];
+    const boxes = [box(0, 0, 0, 0), box(0, 0, 1, 1), box(1, 1, 0, 0), box(0.123456, 0.654321, 0.333333, 0.345678)];
     const index = makeIndex({ pageTermCounts: [0], pageBoxes: [boxes] });
     const decoded = await decodeIndex(await encodeIndex(index));
     expectBoxesClose(decoded.pageBoxes[0] ?? [], boxes);
     expect(decoded.pageBoxes[0]?.[0]).toEqual(box(0, 0, 0, 0));
-    expect(decoded.pageBoxes[0]?.[1]).toEqual(box(1, 1, 1, 1));
+    expect(decoded.pageBoxes[0]?.[1]).toEqual(box(0, 0, 1, 1));
+    expect(decoded.pageBoxes[0]?.[2]).toEqual(box(1, 1, 0, 0));
   });
 
   it("is idempotent after quantization", async () => {
@@ -236,9 +246,7 @@ describe("invalid files", () => {
 
   it("rejects an inconsistent section offset", async () => {
     const bytes = (await encodeIndex(smallIndex())).slice();
-    const extractorLength = bytes[28] ?? 0;
-    const tableStart = 29 + extractorLength;
-    new DataView(bytes.buffer).setUint32(tableStart + 8, 7, true);
+    new DataView(bytes.buffer).setUint32(sectionTableStart(bytes) + 8, 7, true);
     await expect(decodeIndex(bytes)).rejects.toThrow(CorruptOffsetError);
     await expect(decodePageBoxes(bytes, 1)).rejects.toThrow(CorruptOffsetError);
   });
@@ -253,7 +261,7 @@ describe("invalid files", () => {
 describe("lazy page box decoding", () => {
   it("decodes one page without decoding the others", async () => {
     const bytes = (await encodeIndex(smallIndex())).slice();
-    const boxesSectionStart = new DataView(bytes.buffer).getUint32(29 + 7 + 24 + 0, true);
+    const boxesSectionStart = new DataView(bytes.buffer).getUint32(sectionTableStart(bytes) + 24, true);
     expect(boxesSectionStart).toBeGreaterThan(0);
     const clean = await decodePageBoxes(bytes, 3);
     expectBoxesClose(clean, smallIndex().pageBoxes[2] ?? []);
@@ -269,14 +277,14 @@ describe("lazy page box decoding", () => {
   });
 });
 
-describe("byte stability and compression", () => {
-  it("produces a stable header and sections for a small example", async () => {
+describe("stabilité du format et compression", () => {
+  it("stabilité du format : octets figés pour un petit exemple (à régénérer volontairement)", async () => {
     const bytes = await encodeIndex(smallIndex());
     expect(toHex(bytes.slice(0, 8))).toBe("44535831" + "0100" + "0100");
     expect(toHex(bytes)).toBe(EXPECTED_SMALL_HEX);
   });
 
-  it("compresses a repetitive example well below the equivalent JSON", async () => {
+  it("compresses a repetitive example far below the equivalent JSON", async () => {
     const pages = Array.from({ length: 300 }, (_, i) => i + 1);
     const index = makeIndex({
       pageTermCounts: pages.map(() => 40),
@@ -288,9 +296,11 @@ describe("byte stability and compression", () => {
     });
     const bytes = await encodeIndex(index);
     const jsonSize = new TextEncoder().encode(JSON.stringify(index)).length;
-    expect(bytes.length).toBeLessThan(jsonSize / 10);
+    // Borne large et documentée : mesuré à environ 1/30 du JSON ; on exige seulement < 1/4,
+    // pour ne casser que sur une régression réelle (compression absente) et non sur un réglage deflate.
+    expect(bytes.length).toBeLessThan(jsonSize / MAX_JSON_RATIO_INVERSE);
   });
 });
 
 const EXPECTED_SMALL_HEX =
-  "4453583101000100030000000000000087d6324100008056febc784207342e302e3337394400000005000000490000001d000000660000000f000000750000002e00000063666002006366604dcc29c84864646060494a2d49646261604d4fcccd4d64e402006364626062646464626460666404000f0000000300000010000000636600810606073006c2fffb213c00630000639a25696c7cd6272ded3f1030000100";
+  "4453583101000100030000000000000087d6324100008056febc784207342e302e3337390e006173736574732f646f632e7064665400000005000000590000001d000000760000000f000000850000003000000063666002006366604dcc29c84864646060494a2d49646261604d4fcccd4d64e40200636462606264646462646066640400110000000300000010000000636600810606073006c2fffb41acfff500630000639a25696c7cd6272ded3f1030000100";

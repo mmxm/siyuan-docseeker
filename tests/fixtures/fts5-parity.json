@@ -1,0 +1,552 @@
+{
+  "generatedBy": "node scripts/gen-fts5-fixture.mjs",
+  "sqliteVersion": "3.54.0",
+  "tokenizer": "unicode61 remove_diacritics 2",
+  "prefix": "2 3 4",
+  "pages": [
+    {
+      "docId": "contrats",
+      "page": 1,
+      "text": "Le contrat de travail est conclu entre l'employeur et le salarié. Contrat à durée déterminée."
+    },
+    {
+      "docId": "contrats",
+      "page": 2,
+      "text": "Les obligations du salarié : exécution du contrat, loyauté, discrétion."
+    },
+    {
+      "docId": "contrats",
+      "page": 3,
+      "text": "Résiliation du contrat : préavis, indemnité, motifs légitimes."
+    },
+    {
+      "docId": "contrats",
+      "page": 4,
+      "text": "Annexe : modèle de contrat, signature des deux parties. Contrat Contrat."
+    },
+    {
+      "docId": "contrats",
+      "page": 5,
+      "text": "Dispositions générales et définitions utiles pour le contrat."
+    },
+    {
+      "docId": "cuisine",
+      "page": 1,
+      "text": "Crème brûlée : battre les œufs, ajouter la crème et le sucre."
+    },
+    {
+      "docId": "cuisine",
+      "page": 2,
+      "text": "Le contrat de la pâtissière : crème pâtissière, cuisson douce, four à 150 degrés."
+    },
+    {
+      "docId": "cuisine",
+      "page": 3,
+      "text": "Élève cuisinier : épluchez les légumes, émincez l'oignon."
+    },
+    {
+      "docId": "cuisine",
+      "page": 4,
+      "text": "Tarte aux pommes, pâte brisée, crème d'amande et pommes caramélisées."
+    },
+    {
+      "docId": "ecole",
+      "page": 1,
+      "text": "L'élève doit relire le contrat de l'école avant la rentrée."
+    },
+    {
+      "docId": "ecole",
+      "page": 2,
+      "text": "Les élèves de CM2 étudient l'électricité et les circuits."
+    },
+    {
+      "docId": "ecole",
+      "page": 3,
+      "text": "Électricité statique : expérience avec un ballon et des cheveux."
+    },
+    {
+      "docId": "ecole",
+      "page": 4,
+      "text": "Le conseil de l'école élit les délégués élèves chaque année."
+    },
+    {
+      "docId": "ecole",
+      "page": 5,
+      "text": "Calendrier scolaire : vacances d'été, rentrée en septembre. Contrat de classe."
+    },
+    {
+      "docId": "voyage",
+      "page": 1,
+      "text": "Voyage à Genève : hôtel près de la gare, réservation du contrat de location."
+    },
+    {
+      "docId": "voyage",
+      "page": 2,
+      "text": "Zürich et Genève : train de nuit, café crème sur la place."
+    },
+    {
+      "docId": "voyage",
+      "page": 3,
+      "text": "Été à la mer : plage, soleil, glace à la fraise et crème solaire."
+    },
+    {
+      "docId": "voyage",
+      "page": 4,
+      "text": "Contrôle des billets à la frontière ; contrat d'assurance voyage."
+    },
+    {
+      "docId": "voyage",
+      "page": 5,
+      "text": "STRASBOURG, Cathédrale ET marché de Noël. Strasbourg la nuit."
+    },
+    {
+      "docId": "voyage",
+      "page": 6,
+      "text": "Retour en train, valises, souvenirs et contrats signés."
+    },
+    {
+      "docId": "voyage",
+      "page": 7,
+      "text": ""
+    }
+  ],
+  "queries": [
+    {
+      "label": "un mot",
+      "query": "genève",
+      "match": "geneve*",
+      "results": [
+        {
+          "docId": "voyage",
+          "page": 2,
+          "bm25": -1.97339397996952
+        },
+        {
+          "docId": "voyage",
+          "page": 1,
+          "bm25": -1.829583892360406
+        }
+      ]
+    },
+    {
+      "label": "un mot rare",
+      "query": "cathedrale",
+      "match": "cathedrale*",
+      "results": [
+        {
+          "docId": "voyage",
+          "page": 5,
+          "bm25": -2.7264983467676
+        }
+      ]
+    },
+    {
+      "label": "mot a casse variee",
+      "query": "STRASBOURG",
+      "match": "strasbourg*",
+      "results": [
+        {
+          "docId": "voyage",
+          "page": 5,
+          "bm25": -3.69962155091938
+        }
+      ]
+    },
+    {
+      "label": "ET deux mots",
+      "query": "contrat crème",
+      "match": "contrat AND creme*",
+      "results": [
+        {
+          "docId": "cuisine",
+          "page": 2,
+          "bm25": -1.059548561588032
+        }
+      ]
+    },
+    {
+      "label": "ET trois mots",
+      "query": "école élève contrat",
+      "match": "ecole AND eleve AND contrat*",
+      "results": [
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -3.797540600109414
+        }
+      ]
+    },
+    {
+      "label": "prefixe court",
+      "query": "elec",
+      "match": "elec*",
+      "results": [
+        {
+          "docId": "ecole",
+          "page": 3,
+          "bm25": -2.141740385843698
+        },
+        {
+          "docId": "ecole",
+          "page": 2,
+          "bm25": -2.054123733695546
+        }
+      ]
+    },
+    {
+      "label": "prefixe chevauchant (df union)",
+      "query": "eleve",
+      "match": "eleve*",
+      "results": [
+        {
+          "docId": "cuisine",
+          "page": 3,
+          "bm25": -1.479144388681697
+        },
+        {
+          "docId": "ecole",
+          "page": 2,
+          "bm25": -1.358123484153194
+        },
+        {
+          "docId": "ecole",
+          "page": 4,
+          "bm25": -1.304747452024903
+        },
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -1.255408262662617
+        }
+      ]
+    },
+    {
+      "label": "prefixe 2 lettres",
+      "query": "el",
+      "match": "el*",
+      "results": [
+        {
+          "docId": "ecole",
+          "page": 2,
+          "bm25": -1.510591896918651
+        },
+        {
+          "docId": "ecole",
+          "page": 4,
+          "bm25": -1.469268714328171
+        },
+        {
+          "docId": "cuisine",
+          "page": 3,
+          "bm25": -1.196508433202892
+        },
+        {
+          "docId": "ecole",
+          "page": 3,
+          "bm25": -1.145472528469119
+        },
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -1.01552396431506
+        }
+      ]
+    },
+    {
+      "label": "prefixe sur terme frequent",
+      "query": "contr",
+      "match": "contr*",
+      "results": [
+        {
+          "docId": "contrats",
+          "page": 4,
+          "bm25": -0.000001571428571428571
+        },
+        {
+          "docId": "voyage",
+          "page": 4,
+          "bm25": -0.000001375
+        },
+        {
+          "docId": "contrats",
+          "page": 1,
+          "bm25": -0.000001176470588235294
+        },
+        {
+          "docId": "contrats",
+          "page": 3,
+          "bm25": -0.000001139896373056995
+        },
+        {
+          "docId": "contrats",
+          "page": 5,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "voyage",
+          "page": 6,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "contrats",
+          "page": 2,
+          "bm25": -0.000001042654028436019
+        },
+        {
+          "docId": "ecole",
+          "page": 5,
+          "bm25": -9.60698689956332e-7
+        },
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -9.243697478991598e-7
+        },
+        {
+          "docId": "cuisine",
+          "page": 2,
+          "bm25": -8.906882591093117e-7
+        },
+        {
+          "docId": "voyage",
+          "page": 1,
+          "bm25": -8.906882591093117e-7
+        }
+      ]
+    },
+    {
+      "label": "terme frequent exact-ish",
+      "query": "contrat",
+      "match": "contrat*",
+      "results": [
+        {
+          "docId": "contrats",
+          "page": 4,
+          "bm25": -0.000001571428571428571
+        },
+        {
+          "docId": "contrats",
+          "page": 1,
+          "bm25": -0.000001176470588235294
+        },
+        {
+          "docId": "contrats",
+          "page": 3,
+          "bm25": -0.000001139896373056995
+        },
+        {
+          "docId": "contrats",
+          "page": 5,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "voyage",
+          "page": 6,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "contrats",
+          "page": 2,
+          "bm25": -0.000001042654028436019
+        },
+        {
+          "docId": "voyage",
+          "page": 4,
+          "bm25": -0.000001
+        },
+        {
+          "docId": "ecole",
+          "page": 5,
+          "bm25": -9.60698689956332e-7
+        },
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -9.243697478991598e-7
+        },
+        {
+          "docId": "cuisine",
+          "page": 2,
+          "bm25": -8.906882591093117e-7
+        },
+        {
+          "docId": "voyage",
+          "page": 1,
+          "bm25": -8.906882591093117e-7
+        }
+      ]
+    },
+    {
+      "label": "ET avec prefixe sur frequent",
+      "query": "école contr",
+      "match": "ecole AND contr*",
+      "results": [
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -1.898770762239581
+        }
+      ]
+    },
+    {
+      "label": "ET exact frequent puis prefixe",
+      "query": "contrat ecole",
+      "match": "contrat AND ecole*",
+      "results": [
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -1.982861397555799
+        }
+      ]
+    },
+    {
+      "label": "mot absent",
+      "query": "zebre",
+      "match": "zebre*",
+      "results": []
+    },
+    {
+      "label": "ET dont un mot absent",
+      "query": "contrat zebre",
+      "match": "contrat AND zebre*",
+      "results": []
+    },
+    {
+      "label": "mots accentues",
+      "query": "été",
+      "match": "ete*",
+      "results": [
+        {
+          "docId": "ecole",
+          "page": 5,
+          "bm25": -1.97339397996952
+        },
+        {
+          "docId": "voyage",
+          "page": 3,
+          "bm25": -1.829583892360406
+        }
+      ]
+    },
+    {
+      "label": "accents requete sans accent",
+      "query": "creme brulee",
+      "match": "creme AND brulee*",
+      "results": [
+        {
+          "docId": "cuisine",
+          "page": 1,
+          "bm25": -3.981457147376047
+        }
+      ]
+    },
+    {
+      "label": "prefixe 1 lettre",
+      "query": "c",
+      "match": "c*",
+      "results": [
+        {
+          "docId": "contrats",
+          "page": 4,
+          "bm25": -0.000001571428571428571
+        },
+        {
+          "docId": "ecole",
+          "page": 5,
+          "bm25": -0.000001538461538461539
+        },
+        {
+          "docId": "cuisine",
+          "page": 2,
+          "bm25": -0.000001476510067114094
+        },
+        {
+          "docId": "contrats",
+          "page": 1,
+          "bm25": -0.000001392405063291139
+        },
+        {
+          "docId": "ecole",
+          "page": 2,
+          "bm25": -0.000001375
+        },
+        {
+          "docId": "voyage",
+          "page": 4,
+          "bm25": -0.000001375
+        },
+        {
+          "docId": "cuisine",
+          "page": 1,
+          "bm25": -0.000001337386018237082
+        },
+        {
+          "docId": "cuisine",
+          "page": 4,
+          "bm25": -0.000001337386018237082
+        },
+        {
+          "docId": "ecole",
+          "page": 4,
+          "bm25": -0.000001337386018237082
+        },
+        {
+          "docId": "voyage",
+          "page": 2,
+          "bm25": -0.000001337386018237082
+        },
+        {
+          "docId": "contrats",
+          "page": 3,
+          "bm25": -0.000001139896373056995
+        },
+        {
+          "docId": "contrats",
+          "page": 5,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "cuisine",
+          "page": 3,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "voyage",
+          "page": 6,
+          "bm25": -0.000001089108910891089
+        },
+        {
+          "docId": "contrats",
+          "page": 2,
+          "bm25": -0.000001042654028436019
+        },
+        {
+          "docId": "ecole",
+          "page": 3,
+          "bm25": -0.000001042654028436019
+        },
+        {
+          "docId": "voyage",
+          "page": 5,
+          "bm25": -0.000001042654028436019
+        },
+        {
+          "docId": "ecole",
+          "page": 1,
+          "bm25": -9.243697478991598e-7
+        },
+        {
+          "docId": "voyage",
+          "page": 1,
+          "bm25": -8.906882591093117e-7
+        },
+        {
+          "docId": "voyage",
+          "page": 3,
+          "bm25": -8.906882591093117e-7
+        }
+      ]
+    }
+  ]
+}

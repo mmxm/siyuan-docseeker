@@ -75,7 +75,11 @@ describe("tokenize", () => {
 
   it("traite 10 000 mots sans erreur", () => {
     const text = Array.from({ length: 10_000 }, (_, i) => `mot${i}`).join(" ");
-    expect(tokenize(text)).toHaveLength(10_000);
+    const tokens = tokenize(text);
+    expect(tokens).toHaveLength(10_000);
+    expect(tokens[0]).toBe("mot0");
+    expect(tokens[4_999]).toBe("mot4999");
+    expect(tokens[tokens.length - 1]).toBe("mot9999");
   });
 });
 

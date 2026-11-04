@@ -37,6 +37,8 @@ export interface PageInput {
 export interface Bm25Index {
   /** terme normalise -> une entree par page contenant le terme (df = longueur). */
   readonly postings: ReadonlyMap<string, readonly Posting[]>;
+  /** Termes du vocabulaire tries (unites de code) : recherche dichotomique des prefixes. */
+  readonly sortedTerms: readonly string[];
   /** pageKey(docId, page) -> nombre de tokens de la page. */
   readonly pageLengths: ReadonlyMap<string, number>;
   /** N : nombre total de pages indexees. */
@@ -92,46 +94,128 @@ export function termScore({ tf, pageLength, avgPageLength, idf: termIdf }: TermS
   return (termIdf * tf * (BM25_K1 + 1)) / (tf + BM25_K1 * lengthNorm);
 }
 
+/** Page inseree deux fois : indexer deux fois doublerait les postings et fausserait N (decision : erreur explicite). */
+export class DuplicatePageError extends Error {
+  readonly docId: string;
+  readonly page: number;
+
+  constructor(docId: string, page: number) {
+    super(`Page en double dans l'index BM25 : docId=${docId} page=${page}`);
+    this.name = "DuplicatePageError";
+    this.docId = docId;
+    this.page = page;
+  }
+}
+
+function countTokens(tokens: readonly string[]): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const token of tokens) counts.set(token, (counts.get(token) ?? 0) + 1);
+  return counts;
+}
+
+/** @throws DuplicatePageError si un meme (docId, page) apparait deux fois. */
 export function buildIndex(pages: readonly PageInput[]): Bm25Index {
   const postings = new Map<string, Posting[]>();
   const pageLengths = new Map<string, number>();
   let totalTokens = 0;
   for (const { docId, page, text } of pages) {
+    const key = pageKey(docId, page);
+    if (pageLengths.has(key)) throw new DuplicatePageError(docId, page);
     const tokens = tokenize(text);
-    pageLengths.set(pageKey(docId, page), tokens.length);
+    pageLengths.set(key, tokens.length);
     totalTokens += tokens.length;
-    const counts = new Map<string, number>();
-    for (const token of tokens) counts.set(token, (counts.get(token) ?? 0) + 1);
-    for (const [term, tf] of counts) {
-      postings.set(term, [...(postings.get(term) ?? []), { docId, page, tf }]);
+    for (const [term, tf] of countTokens(tokens)) {
+      const list = postings.get(term);
+      if (list) list.push({ docId, page, tf });
+      else postings.set(term, [{ docId, page, tf }]);
     }
   }
   const pageCount = pages.length;
   return {
     postings,
+    sortedTerms: [...postings.keys()].sort(),
     pageLengths,
     pageCount,
     averagePageLength: pageCount === 0 ? 0 : totalTokens / pageCount,
   };
 }
 
+/** tf cumule par page (docId -> page -> tf) et nombre de pages distinctes (= df FTS5 du terme ou du prefixe). */
+interface TermMatches {
+  readonly size: number;
+  readonly tfByPage: ReadonlyMap<string, ReadonlyMap<number, number>>;
+}
+
+/** Premier indice de `sorted` dont le terme est >= `prefix` (ordre des unites de code, coherent avec startsWith). */
+function lowerBound(sorted: readonly string[], prefix: string): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((sorted[mid] ?? "") < prefix) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function matchingTermLists(index: Bm25Index, term: string, asPrefix: boolean): readonly (readonly Posting[])[] {
+  if (!asPrefix) {
+    const list = index.postings.get(term);
+    return list ? [list] : [];
+  }
+  const lists: (readonly Posting[])[] = [];
+  for (let i = lowerBound(index.sortedTerms, term); i < index.sortedTerms.length; i++) {
+    const candidate = index.sortedTerms[i] ?? "";
+    if (!candidate.startsWith(term)) break;
+    const list = index.postings.get(candidate);
+    if (list) lists.push(list);
+  }
+  return lists;
+}
+
 /** Postings d'un terme (ou de tous les termes ayant ce prefixe), tf sommes par page. */
-function collectPostings(index: Bm25Index, term: string, asPrefix: boolean): ReadonlyMap<string, Posting> {
-  const merged = new Map<string, Posting>();
-  for (const [candidate, list] of index.postings) {
-    const matches = asPrefix ? candidate.startsWith(term) : candidate === term;
-    if (!matches) continue;
-    for (const posting of list) {
-      const key = pageKey(posting.docId, posting.page);
-      const previous = merged.get(key);
-      merged.set(key, previous ? { ...previous, tf: previous.tf + posting.tf } : posting);
+function collectPostings(index: Bm25Index, term: string, asPrefix: boolean): TermMatches {
+  const tfByPage = new Map<string, Map<number, number>>();
+  let size = 0;
+  for (const list of matchingTermLists(index, term, asPrefix)) {
+    for (const { docId, page, tf } of list) {
+      let pages = tfByPage.get(docId);
+      if (!pages) tfByPage.set(docId, (pages = new Map()));
+      const previous = pages.get(page);
+      if (previous === undefined) size++;
+      pages.set(page, (previous ?? 0) + tf);
     }
   }
-  return merged;
+  return { size, tfByPage };
+}
+
+/** Comparaison par points de code Unicode : deterministe, independante de la locale. */
+export function compareCodePoints(a: string, b: string): number {
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const ca = a.codePointAt(i) ?? 0;
+    const cb = b.codePointAt(j) ?? 0;
+    if (ca !== cb) return ca - cb;
+    i += ca > 0xffff ? 2 : 1;
+    j += cb > 0xffff ? 2 : 1;
+  }
+  return a.length - i - (b.length - j);
 }
 
 function compareHits(a: PageHit, b: PageHit): number {
-  return b.score - a.score || a.docId.localeCompare(b.docId) || a.page - b.page;
+  return b.score - a.score || compareCodePoints(a.docId, b.docId) || a.page - b.page;
+}
+
+function scorePage(index: Bm25Index, perTerm: readonly TermMatches[], docId: string, page: number): number {
+  const pageLength = index.pageLengths.get(pageKey(docId, page)) ?? 0;
+  let score = 0;
+  for (const matches of perTerm) {
+    const tf = matches.tfByPage.get(docId)?.get(page) ?? 0;
+    const termIdf = idf(index.pageCount, matches.size);
+    score += termScore({ tf, pageLength, avgPageLength: index.averagePageLength, idf: termIdf });
+  }
+  return score;
 }
 
 /** Recherche ET multi-mots ; le prefixe ne s'applique qu'au dernier mot. */
@@ -142,15 +226,11 @@ export function searchPages(index: Bm25Index, query: string): readonly PageHit[]
   const [first, ...rest] = perTerm;
   if (!first) return [];
   const hits: PageHit[] = [];
-  for (const [key, posting] of first) {
-    if (!rest.every((m) => m.has(key))) continue;
-    const pageLength = index.pageLengths.get(key) ?? 0;
-    const score = perTerm.reduce((sum, matches) => {
-      const tf = matches.get(key)?.tf ?? 0;
-      const termIdf = idf(index.pageCount, matches.size);
-      return sum + termScore({ tf, pageLength, avgPageLength: index.averagePageLength, idf: termIdf });
-    }, 0);
-    hits.push({ docId: posting.docId, page: posting.page, score });
+  for (const [docId, pages] of first.tfByPage) {
+    for (const page of pages.keys()) {
+      if (!rest.every((m) => m.tfByPage.get(docId)?.has(page))) continue;
+      hits.push({ docId, page, score: scorePage(index, perTerm, docId, page) });
+    }
   }
   return hits.sort(compareHits);
 }
@@ -171,8 +251,12 @@ function toDocumentHit(docId: string, pageHits: readonly PageHit[], titleBonus: 
 /** Regroupe par document et classe par pertinence decroissante (formule de sql.rs:213-218). */
 export function groupByDocument(hits: readonly PageHit[], options: GroupOptions = {}): readonly DocumentHit[] {
   const byDoc = new Map<string, PageHit[]>();
-  for (const hit of hits) byDoc.set(hit.docId, [...(byDoc.get(hit.docId) ?? []), hit]);
+  for (const hit of hits) {
+    const list = byDoc.get(hit.docId);
+    if (list) list.push(hit);
+    else byDoc.set(hit.docId, [hit]);
+  }
   return [...byDoc]
     .map(([docId, list]) => toDocumentHit(docId, list, options.titleBonuses?.get(docId) ?? 0))
-    .sort((a, b) => b.relevance - a.relevance || a.docId.localeCompare(b.docId));
+    .sort((a, b) => b.relevance - a.relevance || compareCodePoints(a.docId, b.docId));
 }

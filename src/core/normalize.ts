@@ -12,15 +12,27 @@ const LIGATURE_EXPANSIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/æ/g, "ae"],
 ];
 
+/** FTS5 replie le sigma final (ς) sur σ ; toLowerCase() de JS produit ς en fin de mot (ΟΔΟΣ -> οδος). */
+const FINAL_SIGMA = /ς/g;
+const SIGMA = "σ";
+
 export interface TokenWithOffset {
   readonly token: string;
   /** Position ordinale du token dans le texte (0, 1, 2...), pas un offset en caracteres. */
   readonly index: number;
 }
 
-/** NFKD, suppression des diacritiques, minuscules, oe/ae. La ponctuation est conservee. */
+/**
+ * Divergences connues et voulues avec FTS5 (qui ne replie pas la compatibilite Unicode) : NFKD replie
+ * ﬁ, Ａ pleine largeur, exposants, ½ ; oe/ae sont developpes (FTS5 garde œ/æ). Voir tests/unit/normalize.fts5.test.ts.
+ *
+ * NFKD, suppression des diacritiques, minuscules, oe/ae. La ponctuation est conservee. */
 export function normalizeText(text: string): string {
-  const lowered = text.normalize("NFKD").replace(DIACRITIC_MARKS, "").toLowerCase();
+  const lowered = text
+    .normalize("NFKD")
+    .replace(DIACRITIC_MARKS, "")
+    .toLowerCase()
+    .replace(FINAL_SIGMA, SIGMA);
   return LIGATURE_EXPANSIONS.reduce((acc, [pattern, expansion]) => acc.replace(pattern, expansion), lowered);
 }
 

@@ -14,8 +14,8 @@ export interface CropBounds {
 export interface FractionBox {
   readonly x: number;
   readonly y: number;
-  readonly w: number;
-  readonly h: number;
+  readonly width: number;
+  readonly height: number;
 }
 
 /** Rectangle in crop pixels. */
@@ -49,7 +49,18 @@ function cropAxis(center: number, target: number, pageSize: number): AxisCrop {
   return { origin, size: Math.max(MIN_CROP_SIZE, end - origin) };
 }
 
-/** Faithful port of crop-worker.js / crop.rs calculate_crop_bounds. */
+function assertFinite(inputs: Readonly<Record<string, number>>): void {
+  for (const [name, value] of Object.entries(inputs)) {
+    if (!Number.isFinite(value)) {
+      throw new RangeError(`${name} must be a finite number, got ${value}`);
+    }
+  }
+}
+
+/**
+ * Faithful port of crop-worker.js / crop.rs calculate_crop_bounds.
+ * Throws RangeError if any input is not finite. A finite page size <= 0 yields size 1.
+ */
 export function calculateCropBounds(
   x0: number,
   y0: number,
@@ -60,6 +71,7 @@ export function calculateCropBounds(
   targetW: number = DEFAULT_CROP_WIDTH,
   targetH: number = DEFAULT_CROP_HEIGHT,
 ): CropBounds {
+  assertFinite({ x0, y0, x1, y1, pageWidth, pageHeight, targetW, targetH });
   const horizontal = cropAxis((x0 + x1) / 2, targetW, pageWidth);
   const vertical = cropAxis((y0 + y1) / 2, targetH, pageHeight);
   return {
@@ -90,11 +102,11 @@ export function wordBoxesToPageRects(
   pageWidth: number,
   pageHeight: number,
 ): readonly PageRect[] {
-  return boxesFraction.map(({ x, y, w, h }): PageRect => [
+  return boxesFraction.map(({ x, y, width, height }): PageRect => [
     x * pageWidth,
     y * pageHeight,
-    (x + w) * pageWidth,
-    (y + h) * pageHeight,
+    (x + width) * pageWidth,
+    (y + height) * pageHeight,
   ]);
 }
 

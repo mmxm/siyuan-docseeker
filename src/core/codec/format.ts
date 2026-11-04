@@ -1,4 +1,39 @@
-/** Types et constantes du format binaire `.dsx` (un index par PDF). */
+/**
+ * Format binaire `.dsx` (un index par PDF), version de format 1.
+ * Tous les entiers fixes sont little-endian. `varint` = LEB128 non signé canonique
+ * (7 bits par octet, poids faible d'abord, bit 7 = suite ; pas d'octet final nul superflu ;
+ * valeur <= 2^53-1).
+ *
+ * En-tête (taille variable) :
+ *   0   4  magic ASCII "DSX1"
+ *   4   2  u16 version du format (>= 1)
+ *   6   2  u16 version du normaliseur
+ *   8   4  u32 nombre de pages P
+ *   12  8  f64 taille du PDF en octets (fini, >= 0)
+ *   20  8  f64 date de modification du PDF en ms (finie, >= 0)
+ *   28  1  u8  E = longueur en octets UTF-8 de la version de l'extracteur (0..255)
+ *   29  E  version de l'extracteur (UTF-8)
+ *   29+E      2  u16 S = longueur en octets UTF-8 de `sourcePath` (0..65535)
+ *   31+E      S  `sourcePath` (UTF-8) : chemin du PDF indexé ; l'appelant le compare au
+ *                chemin attendu pour détecter une collision d'empreinte de nom de fichier
+ *   31+E+S    32 table des 4 sections : 4 x (u32 offset absolu, u32 longueur)
+ *   Les sections se suivent sans trou, la première commence juste après la table, et la
+ *   dernière finit exactement à la fin du fichier (aucun octet en trop).
+ *
+ * Sections 0 à 2 : flux deflate-raw ; une fois décompressées (<= MAX_INFLATED_BYTES), elles
+ * doivent être entièrement consommées.
+ *   0 longueurs   : P varint (nombre de termes de chaque page).
+ *   1 dictionnaire: varint T (nombre de termes), puis T fois, en ordre UTF-8 strictement
+ *                   croissant : varint préfixe commun avec le terme précédent, varint longueur
+ *                   du suffixe, suffixe UTF-8, varint df (nombre de postings), varint offset
+ *                   des postings du terme dans la section 2 (doit égaler l'offset réel).
+ *   2 postings    : par terme, df fois : varint delta de page (> 0, pages strictement
+ *                   croissantes, base 1, <= P), varint tf, tf varint de deltas d'ordinaux.
+ *   3 boîtes      : P u32 (longueurs des blobs), puis P blobs deflate-raw (chacun
+ *                   <= MAX_INFLATED_BLOB_BYTES une fois décompressé, décodable seul) contenant
+ *                   varint n, puis n boîtes de 4 u16 (x, y, largeur, hauteur) en
+ *                   fractions de 65535 ; la somme des longueurs doit égaler la section.
+ */
 
 export const DSX_MAGIC = "DSX1";
 export const DSX_MAGIC_BYTES: Readonly<Uint8Array> = new Uint8Array([0x44, 0x53, 0x58, 0x31]);
@@ -8,6 +43,19 @@ export const MAGIC_LENGTH = 4;
 export const UINT16_MAX = 0xffff;
 export const BYTES_PER_BOX = 8;
 export const MAX_EXTRACTOR_VERSION_BYTES = 255;
+export const SOURCE_PATH_LENGTH_BYTES = 2;
+export const MAX_SOURCE_PATH_BYTES = UINT16_MAX;
+export const UINT32_MAX = 0xffff_ffff;
+export const DSX_MIN_FORMAT_VERSION = 1;
+
+/** Taille maximale d'une section décompressée (protection contre les bombes de décompression). */
+export const MAX_INFLATED_BYTES = 256 * 1024 * 1024;
+/** Taille maximale d'un blob de boîtes (une page) décompressé. */
+export const MAX_INFLATED_BLOB_BYTES = 16 * 1024 * 1024;
+/** Nombre maximal de flux de (dé)compression simultanés. */
+export const STREAM_CONCURRENCY = 8;
+/** Tolérance sur les coordonnées de boîtes hors de [0,1] avant de lever une erreur. */
+export const BOX_EPSILON = 1e-6;
 
 /** Offsets des champs de l'en-tête de taille fixe (little-endian). */
 export const HEADER_OFFSETS = {
@@ -55,6 +103,8 @@ export interface TermEntry {
 export interface DocumentIndex {
   readonly normalizerVersion: number;
   readonly extractorVersion: string;
+  /** Chemin du PDF indexé (UTF-8, <= 65535 octets) ; sert à détecter les collisions d'empreinte. */
+  readonly sourcePath: string;
   readonly pdfSize: number;
   readonly pdfModifiedMs: number;
   /** Nombre de termes par page ; la longueur donne le nombre de pages. */
@@ -65,8 +115,8 @@ export interface DocumentIndex {
 }
 
 export class DsxFormatError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
     this.name = new.target.name;
   }
 }
@@ -98,7 +148,31 @@ export class CorruptOffsetError extends DsxFormatError {
 }
 
 export class CorruptDataError extends DsxFormatError {
-  constructor(detail: string) {
-    super(`Corrupt .dsx file: ${detail}`);
+  constructor(detail: string, cause?: unknown) {
+    super(`Corrupt .dsx file: ${detail}`, cause === undefined ? undefined : { cause });
   }
+}
+
+/** Comparaison lexicographique d'octets UTF-8 (ordre des termes du dictionnaire). */
+export function compareUtf8(a: Uint8Array, b: Uint8Array): number {
+  const shared = Math.min(a.length, b.length);
+  for (let i = 0; i < shared; i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return a.length - b.length;
+}
+
+/** Applique `task` à chaque élément par lots de `size`, en conservant l'ordre. */
+export async function mapInBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += size) {
+    const batch = items.slice(start, start + size);
+    results.push(...(await Promise.all(batch.map((item, i) => task(item, start + i)))));
+  }
+  return results;
 }

@@ -1,0 +1,205 @@
+{
+  "generatedBy": "node scripts/gen-fts5-tokens-fixture.mjs",
+  "tokenizer": "unicode61 remove_diacritics 2",
+  "cases": [
+    {
+      "label": "eszett",
+      "text": "Straße",
+      "tokens": [
+        "straße"
+      ]
+    },
+    {
+      "label": "l barre",
+      "text": "Łódź",
+      "tokens": [
+        "łodz"
+      ]
+    },
+    {
+      "label": "I majuscule pointe",
+      "text": "İstanbul",
+      "tokens": [
+        "istanbul"
+      ]
+    },
+    {
+      "label": "i sans point",
+      "text": "ısı",
+      "tokens": [
+        "ısı"
+      ]
+    },
+    {
+      "label": "ligature fi",
+      "text": "ﬁnal ﬂux",
+      "tokens": [
+        "ﬁnal",
+        "ﬂux"
+      ]
+    },
+    {
+      "label": "pleine largeur",
+      "text": "Ａｂｃ１２３",
+      "tokens": [
+        "ａｂｃ１２３"
+      ]
+    },
+    {
+      "label": "arabo-indiques",
+      "text": "٠١٢٣ ٤٥٦",
+      "tokens": [
+        "٠١٢٣",
+        "٤٥٦"
+      ]
+    },
+    {
+      "label": "CJK",
+      "text": "日本語 テスト",
+      "tokens": [
+        "日本語",
+        "テスト"
+      ]
+    },
+    {
+      "label": "emoji",
+      "text": "ok 😀 go",
+      "tokens": [
+        "ok",
+        "go"
+      ]
+    },
+    {
+      "label": "marque combinante isolee",
+      "text": "́ abc",
+      "tokens": [
+        "abc"
+      ]
+    },
+    {
+      "label": "marque combinante apres espace",
+      "text": "a ́b",
+      "tokens": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "label": "NFC",
+      "text": "café",
+      "tokens": [
+        "cafe"
+      ]
+    },
+    {
+      "label": "NFD",
+      "text": "café",
+      "tokens": [
+        "cafe"
+      ]
+    },
+    {
+      "label": "oe ligature",
+      "text": "Œuvre cœur",
+      "tokens": [
+        "œuvre",
+        "cœur"
+      ]
+    },
+    {
+      "label": "ae ligature",
+      "text": "Æon",
+      "tokens": [
+        "æon"
+      ]
+    },
+    {
+      "label": "apostrophe",
+      "text": "l'été aujourd’hui",
+      "tokens": [
+        "l",
+        "ete",
+        "aujourd",
+        "hui"
+      ]
+    },
+    {
+      "label": "souligne",
+      "text": "snake_case",
+      "tokens": [
+        "snake",
+        "case"
+      ]
+    },
+    {
+      "label": "chiffres exposants",
+      "text": "m² x³",
+      "tokens": [
+        "m²",
+        "x³"
+      ]
+    },
+    {
+      "label": "grec sigma final majuscule",
+      "text": "ΟΔΟΣ",
+      "tokens": [
+        "οδοσ"
+      ]
+    },
+    {
+      "label": "grec sigma final minuscule",
+      "text": "οδος",
+      "tokens": [
+        "οδοσ"
+      ]
+    },
+    {
+      "label": "turc i point",
+      "text": "Iİiı",
+      "tokens": [
+        "iiiı"
+      ]
+    },
+    {
+      "label": "SS majuscule",
+      "text": "STRASSE",
+      "tokens": [
+        "strasse"
+      ]
+    },
+    {
+      "label": "tiret et nbsp",
+      "text": "a b–c",
+      "tokens": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "label": "cyrillique",
+      "text": "Привет Мир",
+      "tokens": [
+        "привет",
+        "мир"
+      ]
+    },
+    {
+      "label": "ordinal",
+      "text": "1ᵉ º",
+      "tokens": [
+        "1ᵉ",
+        "º"
+      ]
+    },
+    {
+      "label": "fraction",
+      "text": "½ 3/4",
+      "tokens": [
+        "½",
+        "3",
+        "4"
+      ]
+    }
+  ]
+}
