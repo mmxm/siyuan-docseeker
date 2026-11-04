@@ -44,6 +44,11 @@ Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par troi
 - **Écart trouvé et corrigé** : `HEAD` renvoie **404** pour `Méd Travail  Légale - 3E 2025-….pdf` (nom accentué, NFD, double espace) alors que `GET` + `Range` répond 206. `headAsset` se replie sur `GET Range: bytes=0-0` et lit `Content-Range` (TDD, 677 tests verts). À revérifier en relançant le diagnostic.
 - **Non testé** : expiration de session ; `openTab` à la page N ; calque au zoom ; index réel du PDF de 165 Mo (durée, mémoire).
 
+## Premiers index réels (indexation lancée dans SiYuan, 2026-11-04)
+
+4 PDF indexés (le 5e, Hématologie, fait 0 octet). Index `.dsx` : 62 Ko pour 23 pages, 1,2 à 1,5 Mo pour 380 à 480 pages (≈ 3 Ko/page sur disque). Le PDF de 165 Mo (378 pages, 181 508 mots) donne 1,5 Mo.
+**Mémoire de l'index de recherche décodé** (`decodeIndexForSearch`, mesure sans ramasse-miettes forcé, donc indicative) : ≈ 27 à 28 Mo pour ~460 pages, soit ≈ 60 Ko/page. Extrapolé à 25 000-40 000 pages : **1,5 à 2,5 Go** : trop. Le risque 1 est confirmé ; l'étape suivante est de réduire ce coût (ne pas décoder `wordOrdinals`, postings en tableaux typés, chargement à la demande) avant l'onglet de recherche.
+
 ## Risques ouverts (à ne pas oublier)
 
 1. **Mémoire de l'index de recherche** (nouveau, important). Un index synthétique de 3 000 pages décodé pour la recherche pèse 60 à 100 Mo, mesure bruitée. Le corpus réel (47 PDF, ~25 000 à 40 000 pages) pourrait atteindre le Go en objets JS. Pistes : ne pas décoder `wordOrdinals` pour la recherche (inutiles au classement), stocker les postings en tableaux typés, charger les index à la demande. **À mesurer sur le vrai corpus avant de continuer.**
