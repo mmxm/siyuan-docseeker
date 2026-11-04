@@ -237,13 +237,73 @@ function syntheticIndex(pages: number, wordsPerPage: number): DocumentIndex {
 }
 
 describe("decodeIndexForSearch", () => {
-  it("renvoie l'index sans pageBoxes, identique à decodeIndex pour le reste", async () => {
+  it("renvoie un index compact (tableaux typés), équivalent à decodeIndex sans ordinaux ni boîtes", async () => {
     const index = syntheticIndex(5, 7);
     const bytes = await encodeIndex(index);
-    const { pageBoxes: _omitted, ...expected } = await decodeIndex(bytes);
+    const full = await decodeIndex(bytes);
     const search = await decodeIndexForSearch(bytes);
-    expect(search).toEqual(expected);
     expect("pageBoxes" in search).toBe(false);
+    expect("terms" in search).toBe(false);
+    expect(search.pageTermCounts).toBeInstanceOf(Uint32Array);
+    expect(Array.from(search.pageTermCounts)).toEqual(full.pageTermCounts);
+    const { postings } = search;
+    expect(postings.pages).toBeInstanceOf(Uint32Array);
+    expect(postings.termFrequencies).toBeInstanceOf(Uint32Array);
+    expect(postings.offsets).toBeInstanceOf(Uint32Array);
+    expect(postings.terms).toEqual(full.terms.map((t) => t.term));
+    expect(postings.offsets).toHaveLength(full.terms.length + 1);
+    expect(postings.pages.buffer.byteLength).toBe(postings.pages.byteLength); // pas de tampon surdimensionné
+    full.terms.forEach((entry, i) => {
+      const from = postings.offsets[i] ?? -1;
+      const to = postings.offsets[i + 1] ?? -1;
+      expect(Array.from(postings.pages.subarray(from, to))).toEqual(entry.postings.map((p) => p.page));
+      expect(Array.from(postings.termFrequencies.subarray(from, to))).toEqual(entry.postings.map((p) => p.termFrequency));
+    });
+    expect({ ...search, pageTermCounts: undefined, postings: undefined }).toEqual({
+      normalizerVersion: full.normalizerVersion,
+      extractorVersion: full.extractorVersion,
+      sourcePath: full.sourcePath,
+      pdfSize: full.pdfSize,
+      pdfModifiedMs: full.pdfModifiedMs,
+      pageTermCounts: undefined,
+      postings: undefined,
+    });
+  });
+
+  it("rejette une longueur de page supérieure à 2^32-1", async () => {
+    const bytes = await buildDsx({ pageCount: 1, lengths: encodeVarint(2 ** 32), blobs: [await deflate(encodeVarint(0))] });
+    await expect(decodeIndexForSearch(bytes)).rejects.toThrow(CorruptDataError);
+  });
+
+  it("decodeIndex fournit toujours les wordOrdinals", async () => {
+    const decoded = await decodeIndex(await encodeIndex(syntheticIndex(2, 3)));
+    expect(decoded.terms[1]?.postings[0]?.wordOrdinals).toEqual([1]);
+  });
+
+  describe("ordinaux de mots non matérialisés mais toujours validés", () => {
+    const dictionary = cat(encodeVarint(1), encodeVarint(0), encodeVarint(1), new Uint8Array([0x61]), encodeVarint(1), encodeVarint(0));
+    const buildOneTerm = async (postings: Uint8Array): Promise<Uint8Array> =>
+      buildDsx({ pageCount: 1, lengths: encodeVarint(2), dict: dictionary, postings, blobs: [await deflate(encodeVarint(0))] });
+
+    it("rejette un dépassement de 2^53 dans la somme des ordinaux", async () => {
+      const huge = encodeVarint(Number.MAX_SAFE_INTEGER);
+      const bytes = await buildOneTerm(cat(encodeVarint(1), encodeVarint(2), huge, huge));
+      await expect(decodeIndexForSearch(bytes)).rejects.toThrow(CorruptDataError);
+      await expect(decodeIndex(bytes)).rejects.toThrow(CorruptDataError);
+    });
+
+    it("rejette des ordinaux tronqués", async () => {
+      const bytes = await buildOneTerm(cat(encodeVarint(1), encodeVarint(3), encodeVarint(0)));
+      await expect(decodeIndexForSearch(bytes)).rejects.toThrow(CorruptDataError);
+    });
+
+    it("accepte un fichier valide", async () => {
+      const bytes = await buildOneTerm(cat(encodeVarint(1), encodeVarint(2), encodeVarint(0), encodeVarint(3)));
+      const search = await decodeIndexForSearch(bytes);
+      expect(search.postings.terms).toEqual(["a"]);
+      expect(Array.from(search.postings.pages)).toEqual([1]);
+      expect(Array.from(search.postings.termFrequencies)).toEqual([2]);
+    });
   });
 
   it(
@@ -257,7 +317,7 @@ describe("decodeIndexForSearch", () => {
       const search = await decodeIndexForSearch(bytes);
       const elapsed = performance.now() - started;
       expect(search.pageTermCounts).toHaveLength(SEARCH_PAGES);
-      expect(search.terms).toHaveLength(SEARCH_TERMS);
+      expect(search.postings.terms).toHaveLength(SEARCH_TERMS);
       expect("pageBoxes" in search).toBe(false);
       expect(elapsed).toBeLessThan(SEARCH_TIME_LIMIT_MS);
     },

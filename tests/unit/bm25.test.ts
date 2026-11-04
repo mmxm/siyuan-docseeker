@@ -3,6 +3,7 @@ import {
   BM25_B,
   BM25_K1,
   buildIndex,
+  postingsOf,
   groupByDocument,
   idf,
   searchPages,
@@ -75,7 +76,7 @@ describe("buildIndex", () => {
     const index = buildIndex(CORPUS);
     expect(index.pageCount).toBe(6);
     expect(index.averagePageLength).toBe(3);
-    expect(index.postings.get("chat")).toEqual([
+    expect(postingsOf(index, "chat")).toEqual([
       { docId: "A", page: 1, tf: 2 },
       { docId: "B", page: 1, tf: 1 },
     ]);
@@ -85,6 +86,22 @@ describe("buildIndex", () => {
     const index = buildIndex([]);
     expect(index.pageCount).toBe(0);
     expect(index.averagePageLength).toBe(0);
+  });
+});
+
+describe("buildIndex : numeros de page", () => {
+  it.each([0, -1, 1.5, Number.NaN, 10_000_001])("rejette la page %s", (page) => {
+    expect(() => buildIndex([{ docId: "A", page, text: "chat" }])).toThrow(RangeError);
+  });
+
+  it("accepte des numeros de page creux (longueur 0 pour les pages absentes, N compte les pages indexees)", () => {
+    const index = buildIndex([
+      { docId: "A", page: 1, text: "chat" },
+      { docId: "A", page: 5, text: "chat chien" },
+    ]);
+    expect(index.pageCount).toBe(2);
+    expect(index.averagePageLength).toBe(1.5);
+    expect(searchPages(index, "chien").map((h) => h.page)).toEqual([5]);
   });
 });
 

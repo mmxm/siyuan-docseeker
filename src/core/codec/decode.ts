@@ -28,11 +28,13 @@ import {
   STREAM_CONCURRENCY,
   TruncatedFileError,
   UINT16_MAX,
+  toUint32Lengths,
   UnsupportedVersionError,
   compareUtf8,
   mapInBatches,
   type DocumentIndex,
   type SearchIndexData,
+  type CompactPostings,
   type Posting,
   type TermEntry,
   type WordBox,
@@ -306,15 +308,41 @@ function decodePageLengths(raw: Uint8Array, pageCount: number): number[] {
   return lengths;
 }
 
-function decodePostings(
+/**
+ * Lit les ordinaux d'un posting : validation identique dans tous les modes (varint canoniques,
+ * somme <= 2^53-1), mais le tableau n'est construit que si `keep` est vrai.
+ */
+function readOrdinals(reader: Reader, termFrequency: number, term: string, keep: boolean): number[] | undefined {
+  const ordinals: number[] | undefined = keep ? [] : undefined;
+  let ordinal = 0;
+  for (let k = 0; k < termFrequency; k++) {
+    ordinal += reader.varint();
+    if (!Number.isSafeInteger(ordinal)) throw new CorruptDataError(`word ordinal overflow for "${term}"`);
+    ordinals?.push(ordinal);
+  }
+  return ordinals;
+}
+
+/** Destination des postings décodés : objets complets (decodeIndex) ou tableaux compacts (recherche). */
+interface PostingSink<R> {
+  /** Ordinaux de mots à construire ? Sinon ils sont seulement validés. */
+  readonly keepOrdinals: boolean;
+  begin(termCount: number): void;
+  beginTerm(term: string): void;
+  posting(page: number, termFrequency: number, wordOrdinals: number[] | undefined): void;
+  endTerm(): void;
+  finish(): R;
+}
+
+function readPostings(
   reader: Reader,
   count: number,
   pageCount: number,
   term: string,
   budget: DecodeBudget,
-): Posting[] {
+  sink: PostingSink<unknown>,
+): void {
   reader.requireRoom(count, MIN_POSTING_BYTES, `document frequency of "${term}"`);
-  const postings: Posting[] = [];
   let page = 0;
   for (let i = 0; i < count; i++) {
     const delta = reader.varint();
@@ -324,16 +352,8 @@ function decodePostings(
     const termFrequency = reader.varint();
     reader.requireRoom(termFrequency, 1, `term frequency of "${term}"`);
     budget.addPostingItems(1 + termFrequency);
-    const wordOrdinals: number[] = [];
-    let ordinal = 0;
-    for (let k = 0; k < termFrequency; k++) {
-      ordinal += reader.varint();
-      if (!Number.isSafeInteger(ordinal)) throw new CorruptDataError(`word ordinal overflow for "${term}"`);
-      wordOrdinals.push(ordinal);
-    }
-    postings.push({ page, termFrequency, wordOrdinals });
+    sink.posting(page, termFrequency, readOrdinals(reader, termFrequency, term, sink.keepOrdinals));
   }
-  return postings;
 }
 
 function readTermBytes(dict: Reader, previous: Uint8Array): Uint8Array {
@@ -346,18 +366,19 @@ function readTermBytes(dict: Reader, previous: Uint8Array): Uint8Array {
   return current;
 }
 
-function decodeTerms(
+function decodeTerms<R>(
   dictionary: Uint8Array,
   postingsRaw: Uint8Array,
   pageCount: number,
   budget: DecodeBudget,
-): TermEntry[] {
+  sink: PostingSink<R>,
+): R {
   const dict = new Reader(dictionary);
   const postingsReader = new Reader(postingsRaw);
   const termCount = dict.varint();
   if (termCount > MAX_TERMS) throw new BudgetExceededError(`${termCount} terms exceed the limit of ${MAX_TERMS}`);
   dict.requireRoom(termCount, MIN_TERM_BYTES, "term count");
-  const terms: TermEntry[] = [];
+  sink.begin(termCount);
   let previous: Uint8Array | undefined;
   for (let i = 0; i < termCount; i++) {
     const current = readTermBytes(dict, previous ?? new Uint8Array(0));
@@ -370,12 +391,80 @@ function decodeTerms(
     if (declaredOffset !== postingsReader.position) {
       throw new CorruptOffsetError(`term "${term}" postings at ${declaredOffset}, expected ${postingsReader.position}`);
     }
-    terms.push({ term, postings: decodePostings(postingsReader, documentFrequency, pageCount, term, budget) });
+    sink.beginTerm(term);
+    readPostings(postingsReader, documentFrequency, pageCount, term, budget, sink);
+    sink.endTerm();
     previous = current;
   }
   dict.assertEnd("dictionary section");
   postingsReader.assertEnd("postings section");
-  return terms;
+  return sink.finish();
+}
+
+/** Un objet par posting, avec ordinaux : pour decodeIndex (tests, outils). */
+function objectSink(): PostingSink<TermEntry[]> {
+  const terms: TermEntry[] = [];
+  let current: Posting[] = [];
+  let name = "";
+  return {
+    keepOrdinals: true,
+    begin: () => undefined,
+    beginTerm(term) {
+      name = term;
+      current = [];
+    },
+    posting(page, termFrequency, wordOrdinals) {
+      if (!wordOrdinals) throw new Error("invariant : objectSink exige les ordinaux de mots (keepOrdinals)");
+      current.push({ page, termFrequency, wordOrdinals });
+    },
+    endTerm() {
+      terms.push({ term: name, postings: current });
+    },
+    finish: () => terms,
+  };
+}
+
+const INITIAL_POSTING_CAPACITY = 1024;
+
+/** Tableaux typés (disposition CSR) : aucun objet par posting, tampons finaux de taille exacte. */
+function compactSink(): PostingSink<CompactPostings> {
+  const terms: string[] = [];
+  let offsets = new Uint32Array(1);
+  let pages = new Uint32Array(INITIAL_POSTING_CAPACITY);
+  let frequencies = new Uint32Array(INITIAL_POSTING_CAPACITY);
+  let size = 0;
+  return {
+    keepOrdinals: false,
+    begin(termCount) {
+      offsets = new Uint32Array(termCount + 1);
+    },
+    beginTerm(term) {
+      terms.push(term);
+    },
+    posting(page, termFrequency) {
+      if (size === pages.length) {
+        const grownPages = new Uint32Array(size * 2);
+        grownPages.set(pages);
+        pages = grownPages;
+        const grownFrequencies = new Uint32Array(size * 2);
+        grownFrequencies.set(frequencies);
+        frequencies = grownFrequencies;
+      }
+      pages[size] = page;
+      frequencies[size] = termFrequency;
+      size++;
+    },
+    endTerm() {
+      offsets[terms.length] = size;
+    },
+    // Évite le pic double : pas de copie quand les tampons sont déjà de taille exacte.
+    finish: () => ({
+      terms,
+      offsets,
+      pages: size === pages.length ? pages : pages.slice(0, size),
+      termFrequencies: size === frequencies.length ? frequencies : frequencies.slice(0, size),
+    }),
+  };
 }
 
 /** Valide la structure d'un blob de boîtes sans rien matérialiser ; renvoie le nombre et les octets bruts. */
@@ -451,14 +540,34 @@ export async function decodePageBoxes(bytes: Uint8Array, pageNumber: number): Pr
   return decodeBoxes(await inflatePageBlob(section, offsets, pageNumber - 1, budget), budget);
 }
 
-interface DecodedCore {
-  readonly data: SearchIndexData;
+interface DecodedCore<L, R> {
+  readonly header: ParsedHeader;
+  readonly pageTermCounts: L;
+  readonly postings: R;
   readonly boxesSection: Uint8Array;
   readonly offsets: readonly number[];
 }
 
+/**
+ * Tableau compact des longueurs de page. La borne réelle est celle de la représentation (u32) : le format
+ * ne limite pas autrement le nombre de tokens d'une page, une valeur plus grande est donc corrompue.
+ */
+function toUint32PageLengths(lengths: readonly number[]): Uint32Array {
+  try {
+    return toUint32Lengths(lengths, "page length");
+  } catch (error) {
+    if (error instanceof RangeError) throw new CorruptDataError(error.message);
+    throw error;
+  }
+}
+
 /** Tout sauf les boîtes : sections 0 à 2 décodées, table des blobs de boîtes validée. */
-async function decodeCore(bytes: Uint8Array, budget: DecodeBudget): Promise<DecodedCore> {
+async function decodeCore<L, R>(
+  bytes: Uint8Array,
+  budget: DecodeBudget,
+  sink: PostingSink<R>,
+  lengthsOf: (lengths: readonly number[]) => L,
+): Promise<DecodedCore<L, R>> {
   const header = parseHeader(bytes);
   const part = (id: number) => sectionBytes(bytes, header.sections[id]);
   const inflate = (id: number, what: string) => inflateRaw(part(id), SECTION_LIMITS, what, budget);
@@ -469,39 +578,64 @@ async function decodeCore(bytes: Uint8Array, budget: DecodeBudget): Promise<Deco
   ]);
   const boxesSection = part(SECTION.boxes);
   const offsets = pageBlobOffsets(boxesSection, header.pageCount);
-  const data: SearchIndexData = {
+  return {
+    header,
+    pageTermCounts: lengthsOf(decodePageLengths(lengths, header.pageCount)),
+    postings: decodeTerms(dictionary, postings, header.pageCount, budget, sink),
+    boxesSection,
+    offsets,
+  };
+}
+
+const pageIndexes = (offsets: readonly number[]): number[] => Array.from(offsets.slice(1), (_, i) => i);
+
+/** Décodage complet (tests, outils) : une WordBox par boîte et les ordinaux de mots. Préférer decodeIndexForSearch pour la recherche. */
+export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
+  const budget = new DecodeBudget();
+  const { header, pageTermCounts, postings, boxesSection, offsets } = await decodeCore(
+    bytes,
+    budget,
+    objectSink(),
+    (lengths) => lengths,
+  );
+  const pageBoxes = await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) =>
+    decodeBoxes(await inflatePageBlob(boxesSection, offsets, i, budget), budget),
+  );
+  return {
     normalizerVersion: header.normalizerVersion,
     extractorVersion: header.extractorVersion,
     sourcePath: header.sourcePath,
     pdfSize: header.pdfSize,
     pdfModifiedMs: header.pdfModifiedMs,
-    pageTermCounts: decodePageLengths(lengths, header.pageCount),
-    terms: decodeTerms(dictionary, postings, header.pageCount, budget),
+    pageTermCounts,
+    terms: postings,
+    pageBoxes,
   };
-  return { data, boxesSection, offsets };
-}
-
-const pageIndexes = (offsets: readonly number[]): number[] => Array.from(offsets.slice(1), (_, i) => i);
-
-/** Décodage complet (tests, outils) : une WordBox par boîte. Préférer decodeIndexForSearch pour la recherche. */
-export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
-  const budget = new DecodeBudget();
-  const { data, boxesSection, offsets } = await decodeCore(bytes, budget);
-  const pageBoxes = await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) =>
-    decodeBoxes(await inflatePageBlob(boxesSection, offsets, i, budget), budget),
-  );
-  return { ...data, pageBoxes };
 }
 
 /**
- * Décodage pour la recherche : termes, postings et pageTermCounts. Les blobs de boîtes sont inflatés
- * et leur structure validée page par page, sans jamais créer de WordBox.
+ * Décodage pour la recherche, en mémoire compacte : longueurs de page et postings en tableaux typés
+ * (page + tf ; les ordinaux de mots sont validés et budgétés mais jamais matérialisés). Les blobs de boîtes
+ * sont inflatés et leur structure validée page par page, sans jamais créer de WordBox.
  */
 export async function decodeIndexForSearch(bytes: Uint8Array): Promise<SearchIndexData> {
   const budget = new DecodeBudget();
-  const { data, boxesSection, offsets } = await decodeCore(bytes, budget);
+  const { header, pageTermCounts, postings, boxesSection, offsets } = await decodeCore(
+    bytes,
+    budget,
+    compactSink(),
+    toUint32PageLengths,
+  );
   await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) => {
     parseBoxBlob(await inflatePageBlob(boxesSection, offsets, i, budget), budget);
   });
-  return data;
+  return {
+    normalizerVersion: header.normalizerVersion,
+    extractorVersion: header.extractorVersion,
+    sourcePath: header.sourcePath,
+    pdfSize: header.pdfSize,
+    pdfModifiedMs: header.pdfModifiedMs,
+    pageTermCounts,
+    postings,
+  };
 }

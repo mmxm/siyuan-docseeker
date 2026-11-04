@@ -7,7 +7,7 @@
 
 - **Fait** : toute la logique sans interface (normalisation, BM25, codec `.dsx`, extraction, indexeur, client noyau, découverte, ouverture + calque de surlignage) et un plugin minimal chargé dans un vrai SiYuan (onglet avec « Diagnostic M0 » et « Réindexer »).
 - **Validé dans SiYuan 3.8.9** : diagnostic M0 6/6, indexation réelle de 4 PDF (dont 165 Mo).
-- **Problème bloquant pour la recherche** : mémoire de l'index décodé ≈ 60 Ko/page, soit 1,5 à 2,5 Go pour les 47 PDF. À traiter **avant** l'onglet de recherche.
+- **Mémoire de l'index traitée (2026-11-04)** : `Bm25Index` en segments par document, postings en `Uint32Array` (CSR), `wordOrdinals` non décodés pour la recherche. Mesure : ≈ 55 Ko/page → **2,89 Ko/page** (≈ 113 Mo pour 40 000 pages) via `COPIES=20 npm run measure:memory` (4 index réels recopiés ; à refaire sur les 47 PDF). 707 tests. Restes : termes dupliqués entre segments, coût de recherche O(D·log T).
 - **Pas encore fait** : onglet de recherche, vignettes, clic → PDF à la bonne page surlignée (jamais essayé en vrai), réglages, `icon.png`.
 - **GitHub** : dépôt `git@github.com:mmxm/siyuan-docseeker.git`, branche `main`. **Des commits locaux ne sont pas poussés** (GitHub était en panne le 2026-11-04) : faire `git push origin main` dès que possible (voir `git log origin/main..HEAD`).
 

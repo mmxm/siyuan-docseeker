@@ -5,6 +5,7 @@ import {
   DuplicatePageError,
   groupByDocument,
   idf,
+  postingsOf,
   searchPages,
   termScore,
   type PageHit,
@@ -25,7 +26,7 @@ describe("performance de buildIndex / groupByDocument", () => {
     }));
     const start = performance.now();
     const index = buildIndex(pages);
-    expect(index.postings.get("commun")).toHaveLength(PERF_PAGES);
+    expect(postingsOf(index, "commun")).toHaveLength(PERF_PAGES);
     expect(performance.now() - start).toBeLessThan(PERF_BUDGET_MS);
   });
 

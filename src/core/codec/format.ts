@@ -186,8 +186,48 @@ export class BudgetExceededError extends CorruptDataError {
   }
 }
 
-/** Index sans boîtes : suffisant pour la recherche (termes, postings, pageTermCounts). */
-export type SearchIndexData = Omit<DocumentIndex, "pageBoxes">;
+/**
+ * Postings de tous les termes d'un document en disposition compacte (CSR) : quelques tableaux typés
+ * au lieu d'un objet par posting. Les postings du terme `i` occupent [offsets[i], offsets[i+1]) dans
+ * `pages` (strictement croissantes, base 1) et `termFrequencies`.
+ */
+export interface CompactPostings {
+  /** Termes dans l'ordre du dictionnaire `.dsx` (UTF-8 strictement croissant). */
+  readonly terms: readonly string[];
+  /** terms.length + 1 offsets. */
+  readonly offsets: Uint32Array;
+  readonly pages: Uint32Array;
+  readonly termFrequencies: Uint32Array;
+}
+
+/** Index sans boîtes ni ordinaux de mots, compact : suffisant pour la recherche. */
+export interface SearchIndexData {
+  readonly normalizerVersion: number;
+  readonly extractorVersion: string;
+  readonly sourcePath: string;
+  readonly pdfSize: number;
+  readonly pdfModifiedMs: number;
+  /** Nombre de termes par page (longueur = nombre de pages). */
+  readonly pageTermCounts: Uint32Array;
+  readonly postings: CompactPostings;
+}
+
+/**
+ * Copie `values` dans un Uint32Array après avoir vérifié que chacune est un entier de [0, UINT32_MAX]
+ * (Uint32Array.from tronquerait ou réduirait modulo 2^32 en silence).
+ * @throws RangeError contextualisé par `what` sur la première valeur invalide.
+ */
+export function toUint32Lengths(values: readonly number[], what: string): Uint32Array {
+  const out = new Uint32Array(values.length);
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i] as number;
+    if (!Number.isInteger(value) || value < 0 || value > UINT32_MAX) {
+      throw new RangeError(`${what}[${i}] = ${value} n'est pas un entier de [0, ${UINT32_MAX}]`);
+    }
+    out[i] = value;
+  }
+  return out;
+}
 
 /** Comparaison lexicographique d'octets UTF-8 (ordre des termes du dictionnaire). */
 export function compareUtf8(a: Uint8Array, b: Uint8Array): number {

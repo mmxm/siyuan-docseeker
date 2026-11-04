@@ -1,9 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { buildIndex, searchPages, type Bm25Index, type PageInput } from "../../src/core/bm25";
-import { decodeIndex } from "../../src/core/codec/decode";
+import { buildIndex, postingsOf, searchPages, vocabulary, type Bm25Index, type PageInput } from "../../src/core/bm25";
+import { decodeIndex, decodeIndexForSearch } from "../../src/core/codec/decode";
 import { encodeIndex } from "../../src/core/codec/encode";
-import { compareUtf8, type DocumentIndex, type Posting, type TermEntry } from "../../src/core/codec/format";
+import { compareUtf8, type DocumentIndex, type Posting, type SearchIndexData, type TermEntry } from "../../src/core/codec/format";
 import {
   DuplicateDocumentError,
   toBm25Index,
@@ -15,6 +15,11 @@ import { tokenize } from "../../src/core/normalize";
 interface NamedDocument {
   readonly docId: string;
   readonly index: DocumentIndex;
+}
+
+interface NamedSearchData {
+  readonly docId: string;
+  readonly index: SearchIndexData;
 }
 
 const WORDS = ["été", "école", "Éléphant", "naïve", "cœur", "résumé", "chat", "chats", "château", "chateau", "a", "zèbre"];
@@ -79,7 +84,7 @@ const queriesArb = fc.array(queryArb, { minLength: 1, maxLength: 6 });
 function expectSameSearch(actual: Bm25Index, expected: Bm25Index, queries: readonly string[]): void {
   expect(actual.pageCount).toBe(expected.pageCount);
   expect(actual.averagePageLength).toBe(expected.averagePageLength);
-  expect(actual.sortedTerms).toEqual(expected.sortedTerms);
+  expect(vocabulary(actual)).toEqual(vocabulary(expected));
   for (const query of queries) expect(searchPages(actual, query)).toEqual(searchPages(expected, query));
 }
 
@@ -88,7 +93,7 @@ describe("toBm25Index", () => {
     const index = toBm25Index([]);
     expect(index.pageCount).toBe(0);
     expect(index.averagePageLength).toBe(0);
-    expect(index.sortedTerms).toEqual([]);
+    expect(vocabulary(index)).toEqual([]);
     expect(searchPages(index, "chat")).toEqual([]);
   });
 
@@ -108,7 +113,7 @@ describe("toBm25Index", () => {
     const pages = ["Ａ \u{20000}"];
     const expected = referenceIndex(new Map([["d", pages]]));
     const actual = toBm25Index(namedDocs(new Map([["d", pages]])));
-    expect(actual.sortedTerms).toEqual(expected.sortedTerms);
+    expect(vocabulary(actual)).toEqual(vocabulary(expected));
   });
 
   it("equivaut a buildIndex (proprietes)", () => {
@@ -152,9 +157,9 @@ describe("withDocument / withoutDocument", () => {
     const base = toBm25Index(namedDocs(new Map([["d0", ["chat"]], ["d1", ["zèbre"]]])));
     const removed = withoutDocument(base, "d1");
     expect(removed).not.toBe(base);
-    expect(removed.sortedTerms).toEqual(["chat"]);
-    expect(removed.postings.has("zebre")).toBe(false);
-    expect(removed.pageLengths.size).toBe(1);
+    expect(vocabulary(removed)).toEqual(["chat"]);
+    expect(postingsOf(removed, "zebre")).toEqual([]);
+    expect(removed.pageCount).toBe(1);
     expect(base.pageCount).toBe(2);
   });
 
@@ -262,52 +267,87 @@ describe("performance de la fusion", () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describe("metadonnees de retrait", () => {
+describe("retrait et clonage", () => {
   const MANY_TERMS = 60_000;
   const LOOSE_BOUND_MS = 1_000;
 
-  /** Index sans metadonnees (comme buildIndex) : un document, MANY_TERMS termes distincts. */
-  function bareIndex(): Bm25Index {
-    const sortedTerms = Array.from({ length: MANY_TERMS }, (_, i) => `t${String(i).padStart(6, "0")}`);
-    const postings = new Map(sortedTerms.map((term) => [term, [{ docId: "d", page: FIRST_PAGE, tf: 1 }]] as const));
-    return {
-      postings,
-      sortedTerms,
-      pageLengths: new Map([[`d\u0000${FIRST_PAGE}`, MANY_TERMS]]),
-      pageCount: 1,
-      averagePageLength: MANY_TERMS,
-    };
+  /** Un document, MANY_TERMS termes distincts sur une page. */
+  function bigDocument(): DocumentIndex {
+    const terms = Array.from({ length: MANY_TERMS }, (_, i) => ({
+      term: `t${String(i).padStart(6, "0")}`,
+      postings: [{ page: FIRST_PAGE, termFrequency: 1, wordOrdinals: [i] }],
+    }));
+    return { ...makeDocumentIndex([""]), pageTermCounts: [MANY_TERMS], terms };
   }
 
-  it("retombe vite sur le scan O(Q+Pg) pour un index sans metadonnees", () => {
-    const bare = bareIndex();
+  it("retire vite un gros document", () => {
+    const base = withDocument(toBm25Index([]), "d", bigDocument());
     const start = performance.now();
-    const removed = withoutDocument(bare, "d");
+    const removed = withoutDocument(base, "d");
     expect(performance.now() - start).toBeLessThan(LOOSE_BOUND_MS);
-    expect(removed.sortedTerms).toEqual([]);
+    expect(vocabulary(removed)).toEqual([]);
     expect(removed.pageCount).toBe(0);
-  });
-
-  it("n'attache aucune metadonnee a un index externe (non muté)", () => {
-    const bare = bareIndex();
-    withoutDocument(bare, "d");
-    expect(Object.getOwnPropertySymbols(bare)).toEqual([]);
   });
 
   it("survit a un clone par spread", () => {
     const base = toBm25Index(namedDocs(new Map([["d0", ["chat"]], ["d1", ["zèbre"]]])));
-    expect(Object.getOwnPropertySymbols(base)).toHaveLength(1);
     const clone: Bm25Index = { ...base };
-    expect(Object.getOwnPropertySymbols(clone)).toEqual(Object.getOwnPropertySymbols(base));
     const removed = withoutDocument(clone, "d1");
-    expect(removed.sortedTerms).toEqual(["chat"]);
-    expect(Object.getOwnPropertySymbols(removed)).toHaveLength(1);
+    expect(vocabulary(removed)).toEqual(["chat"]);
+    expect(vocabulary(base)).toEqual(["chat", "zebre"]);
   });
 
   it("accepte un type structurel minimal (sans boites)", () => {
     const full = makeDocumentIndex(["chat"]);
     const minimal: Pick<DocumentIndex, "terms" | "pageTermCounts"> = { terms: full.terms, pageTermCounts: full.pageTermCounts };
     expect(toBm25Index([{ docId: "x", index: minimal }]).pageCount).toBe(1);
-    expect(withDocument(toBm25Index([]), "x", minimal).sortedTerms).toEqual(["chat"]);
+    expect(vocabulary(withDocument(toBm25Index([]), "x", minimal))).toEqual(["chat"]);
+  });
+});
+
+describe("entree compacte (decodeIndexForSearch)", () => {
+  it("donne les memes resultats que l'entree objet, avant et apres encodage", async () => {
+    await fc.assert(
+      fc.asyncProperty(corpusArb, queriesArb, async (corpus, queries) => {
+        const compact: NamedSearchData[] = [];
+        for (const { docId, index } of namedDocs(corpus)) {
+          compact.push({ docId, index: await decodeIndexForSearch(await encodeIndex(index)) });
+        }
+        const fromCompact = toBm25Index(compact);
+        expectSameSearch(fromCompact, referenceIndex(corpus), queries);
+        expectSameSearch(fromCompact, toBm25Index(namedDocs(corpus)), queries);
+      }),
+      { numRuns: CODEC_RUNS },
+    );
+  });
+
+  it("withDocument accepte une entree compacte", async () => {
+    const compact = await decodeIndexForSearch(await encodeIndex(makeDocumentIndex(["chat chat", "été"])));
+    const index = withDocument(toBm25Index([]), "d", compact);
+    expect(searchPages(index, "chat").map((h) => [h.docId, h.page])).toEqual([["d", 1]]);
+  });
+
+  it("remet en ordre d'unites de code UTF-16 un dictionnaire en ordre UTF-8 (caracteres astraux)", async () => {
+    // UTF-8 : U+FF21 (EF BC A1) < U+10400 (F0 90 90 80) ; UTF-16 : U+10400 (D801 DC00) < U+FF21.
+    const wide = "\uFF21";
+    const astral = "\u{10400}";
+    const posting = (page: number, tf: number) => ({ page, termFrequency: tf, wordOrdinals: Array.from({ length: tf }, (_, k) => k) });
+    const document: DocumentIndex = {
+      ...makeDocumentIndex(["", ""]),
+      pageTermCounts: [3, 1],
+      terms: [
+        { term: wide, postings: [posting(1, 2), posting(2, 1)] },
+        { term: astral, postings: [posting(1, 1)] },
+      ],
+    };
+    const compact = await decodeIndexForSearch(await encodeIndex(document));
+    expect(compact.postings.terms).toEqual([wide, astral]);
+    for (const input of [document, compact]) {
+      const index = toBm25Index([{ docId: "d", index: input }]);
+      expect(vocabulary(index)).toEqual([astral, wide]);
+      expect(index.segments[0]?.terms).toEqual([astral, wide]);
+      expect(postingsOf(index, wide)).toEqual([{ docId: "d", page: 1, tf: 2 }, { docId: "d", page: 2, tf: 1 }]);
+      expect(postingsOf(index, astral)).toEqual([{ docId: "d", page: 1, tf: 1 }]);
+    }
   });
 });
