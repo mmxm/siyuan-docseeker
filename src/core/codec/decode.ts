@@ -325,8 +325,8 @@ function readOrdinals(reader: Reader, termFrequency: number, term: string, keep:
 
 /** Destination des postings décodés : objets complets (decodeIndex) ou tableaux compacts (recherche). */
 interface PostingSink<R> {
-  /** Ordinaux de mots à construire ? Sinon ils sont seulement validés. */
-  readonly keepOrdinals: boolean;
+  /** Ordinaux de mots à construire pour ce posting (terme courant, page donnée) ? Sinon ils sont seulement validés. */
+  keepOrdinals(page: number): boolean;
   begin(termCount: number): void;
   beginTerm(term: string): void;
   posting(page: number, termFrequency: number, wordOrdinals: number[] | undefined): void;
@@ -352,7 +352,7 @@ function readPostings(
     const termFrequency = reader.varint();
     reader.requireRoom(termFrequency, 1, `term frequency of "${term}"`);
     budget.addPostingItems(1 + termFrequency);
-    sink.posting(page, termFrequency, readOrdinals(reader, termFrequency, term, sink.keepOrdinals));
+    sink.posting(page, termFrequency, readOrdinals(reader, termFrequency, term, sink.keepOrdinals(page)));
   }
 }
 
@@ -407,7 +407,7 @@ function objectSink(): PostingSink<TermEntry[]> {
   let current: Posting[] = [];
   let name = "";
   return {
-    keepOrdinals: true,
+    keepOrdinals: () => true,
     begin: () => undefined,
     beginTerm(term) {
       name = term;
@@ -434,7 +434,7 @@ function compactSink(): PostingSink<CompactPostings> {
   let frequencies = new Uint32Array(INITIAL_POSTING_CAPACITY);
   let size = 0;
   return {
-    keepOrdinals: false,
+    keepOrdinals: () => false,
     begin(termCount) {
       offsets = new Uint32Array(termCount + 1);
     },
@@ -464,6 +464,27 @@ function compactSink(): PostingSink<CompactPostings> {
       pages: size === pages.length ? pages : pages.slice(0, size),
       termFrequencies: size === frequencies.length ? frequencies : frequencies.slice(0, size),
     }),
+  };
+}
+
+/** Ne retient que les ordinaux de la page demandée pour les termes voulus : aucun objet par posting. */
+function pageMatchSink(pageNumber: number, wanted: (term: string) => boolean): PostingSink<number[]> {
+  const ordinals: number[] = [];
+  let termWanted = false;
+  return {
+    keepOrdinals: (page) => termWanted && page === pageNumber,
+    begin: () => undefined,
+    beginTerm(term) {
+      termWanted = wanted(term);
+    },
+    posting(page, _termFrequency, wordOrdinals) {
+      if (wordOrdinals && page === pageNumber) for (const o of wordOrdinals) ordinals.push(o);
+    },
+    endTerm: () => undefined,
+    finish: () => {
+      ordinals.sort((a, b) => a - b);
+      return ordinals.filter((o, i) => i === 0 || o !== ordinals[i - 1]);
+    },
   };
 }
 
@@ -638,4 +659,41 @@ export async function decodeIndexForSearch(bytes: Uint8Array): Promise<SearchInd
     pageTermCounts,
     postings,
   };
+}
+
+export interface PageMatch {
+  /** Boîtes de la page demandée (une par jeton). */
+  readonly boxes: readonly WordBox[];
+  /** Ordinaux des jetons correspondant aux termes voulus : triés, sans doublon, indices dans `boxes`. */
+  readonly ordinals: readonly number[];
+}
+
+/**
+ * Pour une page (base 1) : ordinaux des mots des termes `wanted` et boîtes de cette seule page.
+ * Mêmes validations et budgets que decodeIndexForSearch ; mémoire transitoire (seuls les ordinaux retenus survivent).
+ * Un ordinal au-delà des boîtes de la page est une donnée corrompue.
+ */
+export async function decodePageMatches(
+  bytes: Uint8Array,
+  pageNumber: number,
+  wanted: (term: string) => boolean,
+  limits?: BudgetLimits,
+): Promise<PageMatch> {
+  const { pageCount } = parseHeader(bytes);
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pageCount) {
+    throw new RangeError(`Page ${pageNumber} out of range 1..${pageCount}`);
+  }
+  const budget = new DecodeBudget(limits);
+  const { postings: ordinals, boxesSection, offsets } = await decodeCore(
+    bytes,
+    budget,
+    pageMatchSink(pageNumber, wanted),
+    () => undefined,
+  );
+  const boxes = decodeBoxes(await inflatePageBlob(boxesSection, offsets, pageNumber - 1, budget), budget);
+  const last = ordinals[ordinals.length - 1];
+  if (last !== undefined && last >= boxes.length) {
+    throw new CorruptDataError(`word ordinal ${last} beyond the ${boxes.length} boxes of page ${pageNumber}`);
+  }
+  return { boxes, ordinals };
 }
