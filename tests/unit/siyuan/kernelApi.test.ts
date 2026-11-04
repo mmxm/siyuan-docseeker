@@ -83,6 +83,12 @@ function createFakeKernel(): FakeKernel {
       if (length === undefined) return new Response(null, { status: 404 });
       return new Response(null, { status: 200, headers: length === null ? {} : { "Content-Length": length } });
     }
+    if (init.method === "GET") {
+      const path = decodeURIComponent(new URL(url, "http://k").pathname);
+      const length = assetSizes.get(path);
+      if (length === undefined) return new Response(null, { status: 404 });
+      return new Response("%", { status: 206, headers: { "Content-Range": `bytes 0-0/${length ?? ""}` } });
+    }
     if (init.body instanceof FormData) return handlePut(init.body);
     return handleJson(url, JSON.parse(String(init.body)) as Record<string, string>);
   };
@@ -295,6 +301,43 @@ describe("createKernelApi", () => {
     await expect(api.headAsset("/assets/zzz.pdf")).rejects.toBeInstanceOf(NotFoundError);
     for (const name of ["nolen", "bad", "neg"]) {
       await expect(api.headAsset(`/assets/${name}.pdf`)).rejects.toBeInstanceOf(KernelApiError);
+    }
+  });
+
+  // Constaté dans un vrai SiYuan 3.8.9 (diagnostic M0) : HEAD renvoie 404 pour un asset au nom accentué
+  // alors que GET avec Range répond 206. Repli : GET Range bytes=0-0, taille lue dans Content-Range.
+  it("headAsset : HEAD 404 puis GET Range 206 -> taille depuis Content-Range", async () => {
+    const calls: { method: string | undefined; range: string | null }[] = [];
+    const fetchMock = async (_url: string, init?: RequestInit): Promise<Response> => {
+      calls.push({ method: init?.method, range: new Headers(init?.headers).get("Range") });
+      if (init?.method === "HEAD") return new Response("404 page not found", { status: 404 });
+      return new Response("%", { status: 206, headers: { "Content-Range": "bytes 0-0/164843520" } });
+    };
+    const api = createKernelApi({ fetch: fetchMock });
+    expect(await api.headAsset("/assets/Méd.pdf")).toEqual({ size: 164843520 });
+    expect(calls).toEqual([
+      { method: "HEAD", range: null },
+      { method: "GET", range: "bytes=0-0" },
+    ]);
+  });
+
+  it("headAsset : HEAD 404 et GET Range 404 -> NotFoundError", async () => {
+    const api = createKernelApi({ fetch: async () => new Response("nope", { status: 404 }) });
+    await expect(api.headAsset("/assets/zzz.pdf")).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("headAsset : repli avec Content-Range absent ou invalide -> KernelApiError", async () => {
+    for (const contentRange of [null, "bytes 0-0/*", "bytes 0-0/abc"]) {
+      const api = createKernelApi({
+        fetch: async (_url, init) =>
+          init?.method === "HEAD"
+            ? new Response("x", { status: 404 })
+            : new Response("%", {
+                status: 206,
+                headers: contentRange === null ? {} : { "Content-Range": contentRange },
+              }),
+      });
+      await expect(api.headAsset("/assets/a.pdf")).rejects.toBeInstanceOf(KernelApiError);
     }
   });
 

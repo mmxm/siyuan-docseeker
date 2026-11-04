@@ -74,6 +74,8 @@ const CODE_NOT_FOUND = 404;
 const CODE_CONFLICT = 409;
 const HTTP_OK = 200;
 const HTTP_NOT_FOUND = 404;
+const HTTP_PARTIAL_CONTENT = 206;
+const CONTENT_RANGE_TOTAL = /^bytes \d+-\d+\/(\d+)$/;
 const CODE_UNKNOWN = -1;
 const CREDENTIALS_MODE = "same-origin";
 const JSON_CONTENT_TYPE = "application/json";
@@ -285,16 +287,34 @@ export function createKernelApi(options: KernelApiOptions = {}): KernelApi {
       await readEnvelope(response);
     });
 
+  /** GET `Range: bytes=0-0` : la taille totale est dans `Content-Range: bytes 0-0/<total>`. */
+  const sizeFromRangeProbe = async (url: string, signal: AbortSignal): Promise<AssetHead> => {
+    const response = await doFetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+      credentials: CREDENTIALS_MODE,
+      signal,
+    });
+    if (response.status !== HTTP_PARTIAL_CONTENT && !response.ok) throw await failureFrom(response, true);
+    const total = CONTENT_RANGE_TOTAL.exec(response.headers.get("Content-Range") ?? "")?.[1];
+    // Le corps (1 octet) n'est pas lu ; on libère la connexion.
+    await response.body?.cancel().catch(() => undefined);
+    const size = total === undefined ? Number.NaN : Number(total);
+    if (!Number.isSafeInteger(size)) {
+      throw new KernelApiError(response.status, CODE_UNKNOWN, "missing or invalid Content-Range total");
+    }
+    return { size };
+  };
+
   const headAsset = (url: string, external?: AbortSignal): Promise<AssetHead> =>
     guarded(external, async (signal) => {
       const absolute = url.startsWith("/") ? url : `/${url}`;
-      const response = await doFetch(`${baseUrl}${encodeUrlPath(absolute)}`, {
-        method: "HEAD",
-        credentials: CREDENTIALS_MODE,
-        signal,
-      });
-      if (!response.ok) throw await failureFrom(response, true);
-      return { size: parseContentLength(response) };
+      const assetUrl = `${baseUrl}${encodeUrlPath(absolute)}`;
+      const response = await doFetch(assetUrl, { method: "HEAD", credentials: CREDENTIALS_MODE, signal });
+      if (response.ok) return { size: parseContentLength(response) };
+      if (response.status !== HTTP_NOT_FOUND) throw await failureFrom(response, true);
+      // Constaté (SiYuan 3.8.9) : HEAD répond 404 pour certains noms accentués alors que GET fonctionne.
+      return sizeFromRangeProbe(assetUrl, signal);
     });
 
   return {

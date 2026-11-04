@@ -38,6 +38,12 @@ Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par troi
 - PDF scannés : ignorés et signalés. Documents SiYuan : hors périmètre. Interface en français.
 - Préfixe sur le **dernier mot seulement** (DocSeeker l'applique à tous) ; écarts Unicode volontaires documentés dans les tests.
 
+## Résultats du diagnostic M0 (SiYuan 3.8.9, webapp desktop, 2026-11-04)
+
+- **Confirmé** : `HEAD /assets/*.pdf` avec `Content-Length` (PDF ASCII) ; `Range` → 206 ; `putFile`/`getFile` de 50 Mio identiques, ≈ 18 Mo/s ; `window.pdfjsLib` 6.4.299 : `getDocument` + texte fonctionnent (23 pages, 123 items en page 1) ; Worker module same-origin sur `/stage/protyle/js/pdf/pdf.worker.min.mjs`.
+- **Écart trouvé et corrigé** : `HEAD` renvoie **404** pour `Méd Travail  Légale - 3E 2025-….pdf` (nom accentué, NFD, double espace) alors que `GET` + `Range` répond 206. `headAsset` se replie sur `GET Range: bytes=0-0` et lit `Content-Range` (TDD, 677 tests verts). À revérifier en relançant le diagnostic.
+- **Non testé** : expiration de session ; `openTab` à la page N ; calque au zoom ; index réel du PDF de 165 Mo (durée, mémoire).
+
 ## Risques ouverts (à ne pas oublier)
 
 1. **Mémoire de l'index de recherche** (nouveau, important). Un index synthétique de 3 000 pages décodé pour la recherche pèse 60 à 100 Mo, mesure bruitée. Le corpus réel (47 PDF, ~25 000 à 40 000 pages) pourrait atteindre le Go en objets JS. Pistes : ne pas décoder `wordOrdinals` pour la recherche (inutiles au classement), stocker les postings en tableaux typés, charger les index à la demande. **À mesurer sur le vrai corpus avant de continuer.**
