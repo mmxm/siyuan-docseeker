@@ -24,7 +24,7 @@
 
 Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par trois agents de revue (TypeScript, échecs silencieux, sécurité) dont les constats ont été corrigés.
 
-**Squelette du plugin :** `plugin.json`, `i18n/fr_FR.json`, `vite.config.ts` créés ; **`src/index.ts` n'existe pas encore**, donc `vite build` ne peut pas encore tourner.
+**Plugin :** `src/index.ts` (icône, commande, onglet avec bouton « Diagnostic M0 »), `src/diagnostic/m0.ts` (7 contrôles : discovery, head, range, roundtrip, pdfjs, worker, auth), `npm run package` produit `package.zip` (build vérifié, jamais chargé dans un vrai SiYuan). Pas encore d'`icon.png`.
 
 **Dépôt :** `git@github.com:mmxm/siyuan-docseeker.git`, branche `main`. Identité de commit passée à la volée (`-c user.name=francois -c user.email=…`), rien dans la config git globale.
 
@@ -46,8 +46,8 @@ Chaque module a été écrit en TDD (agents ECC `tdd-guide`), puis relu par troi
 
 ## Prochaines étapes
 
-1. Écrire `src/index.ts` (classe Plugin : icône de barre supérieure, commande, onglet central) + build Vite + script de packaging `package.zip`.
-2. **Diagnostic M0** : une commande du plugin qui exécute les vérifications du risque 2 dans un SiYuan en marche et affiche le résultat. Nécessite de **démarrer SiYuan** (le noyau ne tourne pas actuellement) et d'y avoir des PDF.
+1. **Exécuter le diagnostic M0** : installer `package.zip` dans un SiYuan en marche (le noyau ne tourne pas actuellement), avec des PDF importés, et lire le rapport. Restent à vérifier à la main : `openTab` à la page N, re-création du calque au zoom, expiration de session.
+2. Ajouter `icon.png`.
 3. Indexeur réel : worker + PDF.js de SiYuan + `buildDocumentIndex` + `encodeIndex` + `petalStore`, piloté par `queue`.
 4. Onglet de recherche : saisie, BM25, regroupement, vignettes paresseuses (rendu + cache IndexedDB), clic → `openPdfAtPage`.
 5. Réglages, thème, mesures sur le corpus de 47 PDF (voir `CAHIER_DES_CHARGES.md` §8).
