@@ -101,7 +101,8 @@ async function checkDiscovery(deps: M0Deps): Promise<{ outcome: Outcome; pdfs: P
   let smallest = first;
   for (const entry of manifest) {
     if (entry.size > biggest.size) biggest = entry;
-    if (entry.size < smallest.size) smallest = entry;
+    // Un PDF vide (0 octet) ne peut pas être ouvert : on teste PDF.js sur le plus petit PDF non vide.
+    if (entry.size > 0 && (smallest.size === 0 || entry.size < smallest.size)) smallest = entry;
   }
   const detail =
     `${manifest.length} PDF, ${result.complete ? "complet" : `incomplet (${result.issues.length} anomalie(s))`}, ` +
