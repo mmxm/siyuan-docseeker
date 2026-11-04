@@ -8,8 +8,9 @@
 - **Fait** : toute la logique sans interface (normalisation, BM25, codec `.dsx`, extraction, indexeur, client noyau, découverte, ouverture + calque de surlignage) et un plugin minimal chargé dans un vrai SiYuan (onglet avec « Diagnostic M0 » et « Réindexer »).
 - **Validé dans SiYuan 3.8.9** : diagnostic M0 6/6, indexation réelle de 4 PDF (dont 165 Mo).
 - **Mémoire de l'index traitée (2026-11-04)** : `Bm25Index` en segments par document, postings en `Uint32Array` (CSR), `wordOrdinals` non décodés pour la recherche. Mesure : ≈ 55 Ko/page → **2,89 Ko/page** (≈ 113 Mo pour 40 000 pages) via `COPIES=20 npm run measure:memory` (4 index réels recopiés ; à refaire sur les 47 PDF). 707 tests. Restes : termes dupliqués entre segments, coût de recherche O(D·log T).
-- **Pas encore fait** : onglet de recherche, vignettes, clic → PDF à la bonne page surlignée (jamais essayé en vrai), réglages, `icon.png`.
-- **GitHub** : dépôt `git@github.com:mmxm/siyuan-docseeker.git`, branche `main`. **Des commits locaux ne sont pas poussés** (GitHub était en panne le 2026-11-04) : faire `git push origin main` dès que possible (voir `git log origin/main..HEAD`).
+- **Onglet de recherche écrit (2026-11-04, commit 52d347b)** : saisie avec délai, BM25 groupé par document, vignettes paresseuses surlignées (PDF.js de SiYuan, cache IndexedDB), clic → `openPdfAtPage` + calque, états d'erreur visibles, accessibilité clavier/ARIA. 966 tests, `dist/index.js` 191 Ko. Relu par 5 agents (TS, erreurs avalées, a11y, perf, sécurité), corrections faites. **Jamais essayé dans un vrai SiYuan.**
+- **Pas encore fait** : validation manuelle dans SiYuan (rendu PDF.js `canvas`/`canvasContext`, ratio et surlignage des vignettes, ouverture à la bonne page, zoom), réglages, `icon.png`, mesures sur les 47 PDF.
+- **GitHub** : dépôt `git@github.com:mmxm/siyuan-docseeker.git`, branche `main`, à jour (le push avait échoué en début de session puis a fonctionné).
 
 ## Où on en est
 
@@ -59,7 +60,7 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 
 ## Risques ouverts
 
-1. **Mémoire de l'index de recherche** (confirmé, bloquant). Pistes, par ordre : (a) ne pas décoder `wordOrdinals` pour la recherche (inutiles au classement) ; (b) postings en tableaux typés (`Uint32Array`) au lieu d'objets ; (c) chargement des index à la demande / par document ; (d) interner/éliminer les termes rares. Mesurer avec `decodeIndexForSearch` sur les `.dsx` réels (outil : un test Vitest temporaire qui lit `~/SiYuan/data/storage/petal/siyuan-docseeker/idx/*.dsx`, forcer le GC pour une mesure fiable) avant et après.
+1. **Mémoire de l'index** : traitée (≈ 2,9 Ko/page). Restes : termes dupliqués entre segments. Perf reportées jusqu'aux mesures réelles : `decodePageMatches` relit dictionnaire + postings à chaque page (grouper par document/requête), `searchPages` en mode préfixe court (accumulateurs typés, plafond de préfixe), tri partiel du top 5. Sécurité (revue) : un blob de boîtes corrompu n'est détecté qu'à la lecture de la page (pages sans vignette possibles) ; mineurs : `makeSegment` partage `pageLengths` quand les termes sont réordonnés (bm25.ts ~232), données IndexedDB non validées (`size` NaN, `blob` non Blob), clé de vignette sans le recadrage.
 2. **Surlignage et ouverture à la bonne page** non éprouvés (voir « Non testé »). C'est le cœur du critère d'acceptation ; à valider dès qu'une première recherche existe.
 3. Écritures concurrentes sérialisées dans un seul onglet : deux onglets ou deux appareils restent exposés (le repli sur `.bak` atténue).
 4. La pause de l'indexeur n'interrompt pas les jobs déjà en cours (elle empêche d'en démarrer de nouveaux).
@@ -67,11 +68,10 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 
 ## Prochaines étapes
 
-1. **Réduire la mémoire de l'index** (risque 1), en TDD, mesures avant/après sur les `.dsx` réels. Objectif indicatif : < 300 Mo pour 40 000 pages.
-2. **Onglet de recherche** : saisie, BM25 + regroupement par document, vignettes paresseuses (rendu + cache IndexedDB), clic → `openPdfAtPage` (+ calque). Charger les index en filtrant sur `.dsx`.
-3. **Valider à la main dans SiYuan** : ouverture à la bonne page, surlignage, zoom, PDF déjà ouvert, plusieurs onglets PDF.
-4. Réglages, thème clair/sombre, `icon.png`, mesures sur les 47 PDF du corpus réel (`/Users/francois/Documents/DocFastExplorer/data/documents`, hors fichiers de test OffNote/RaceNote/RT_/ZipExport…). Voir `CAHIER_DES_CHARGES.md` §8.
-5. Pousser sur GitHub.
+1. **Valider à la main dans SiYuan** (avec l'accord de l'utilisateur pour copier `dist/index.js`) : chargement des index, première recherche, vignettes (rendu et surlignage), clic → bonne page surlignée, zoom, PDF déjà ouvert, plusieurs onglets PDF, thème clair/sombre.
+2. Corriger ce que la validation révèle ; puis les perf reportées (risque 1) selon les mesures réelles.
+3. Réglages, `icon.png`, mesures sur les 47 PDF du corpus réel (`/Users/francois/Documents/DocFastExplorer/data/documents`, hors fichiers de test OffNote/RaceNote/RT_/ZipExport…). Voir `CAHIER_DES_CHARGES.md` §8.
+4. Charger les index au démarrage du plugin (aujourd'hui à l'ouverture de l'onglet, résultats partiels pendant le chargement) ; chaque onglet recrée son `searchStore`.
 
 ## Commandes utiles
 
