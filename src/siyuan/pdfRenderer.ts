@@ -2,7 +2,9 @@ import type { CropBounds } from "../core/crop";
 
 const DEFAULT_MAX_OPEN_DOCUMENTS = 3;
 const DEFAULT_CONCURRENCY = 2;
-const DEFAULT_MIME_TYPE = "image/png";
+const DEFAULT_MIME_TYPE = "image/webp";
+const DEFAULT_QUALITY = 0.8;
+const FALLBACK_MIME_TYPE = "image/png";
 
 /** Minimal 2D canvas surface (HTMLCanvasElement or OffscreenCanvas wrapper). */
 export interface RenderCanvas {
@@ -63,7 +65,7 @@ export interface PdfRendererDeps {
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly maxOpenDocuments?: number | undefined;
   readonly concurrency?: number | undefined;
-  /** Output image type for toBlob (default image/png). */
+  /** Output image type for toBlob (default image/webp, PNG fallback). */
   readonly mimeType?: string | undefined;
   readonly quality?: number | undefined;
   readonly onWarn: (message: string, error?: unknown) => void;
@@ -161,6 +163,8 @@ interface DocEntry {
   refs: number;
   /** Removed from the cache: destroy as soon as nobody uses it. */
   dropped: boolean;
+  /** destroy() already requested: never call it twice. */
+  destroyed: boolean;
 }
 
 interface QueueItem {
@@ -171,13 +175,16 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
   const maxOpen = Math.max(1, deps.maxOpenDocuments ?? DEFAULT_MAX_OPEN_DOCUMENTS);
   const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_CONCURRENCY);
   const mimeType = deps.mimeType ?? DEFAULT_MIME_TYPE;
+  const quality = deps.quality ?? DEFAULT_QUALITY;
   const disposal = new AbortController();
   /** Map insertion order is the LRU order (oldest first). */
   const documents = new Map<string, DocEntry>();
   const pending: QueueItem[] = [];
   let active = 0;
 
-  function destroyDocument(doc: RenderableDocument, path: string): void {
+  function destroyDocument(entry: DocEntry, doc: RenderableDocument, path: string): void {
+    if (entry.destroyed) return;
+    entry.destroyed = true;
     try {
       Promise.resolve(doc.destroy()).catch((error: unknown) =>
         deps.onWarn(`Échec de destroy() du PDF ${path}`, error),
@@ -192,7 +199,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       if (documents.size <= maxOpen) return;
       if (entry.refs > 0 || !entry.doc) continue;
       documents.delete(path);
-      destroyDocument(entry.doc, path);
+      destroyDocument(entry, entry.doc, path);
     }
   }
 
@@ -202,6 +209,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       path,
       controller,
       dropped: false,
+      destroyed: false,
       refs: 0,
       promise: Promise.resolve().then(() => deps.loadDocument(path, controller.signal)),
     };
@@ -210,7 +218,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       (doc) => {
         entry.doc = doc;
         if (entry.dropped) {
-          destroyDocument(doc, path);
+          destroyDocument(entry, doc, path);
           throw abortError();
         }
         return doc;
@@ -228,7 +236,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
     entry.refs--;
     if (entry.refs > 0) return;
     if (entry.dropped) {
-      if (entry.doc) destroyDocument(entry.doc, entry.path);
+      if (entry.doc) destroyDocument(entry, entry.doc, entry.path);
       return;
     }
     if (!entry.doc) {
@@ -371,14 +379,21 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
     }
   }
 
-  function toBlob(canvas: RenderCanvas): Promise<Blob> {
-    return new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new PdfRenderError("toBlob a renvoyé null"))),
-        mimeType,
-        deps.quality,
-      );
+  function toBlobOnce(canvas: RenderCanvas, type: string): Promise<Blob | null> {
+    return new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), type, type === mimeType ? quality : undefined);
     });
+  }
+
+  /** Requested type first; PNG when the browser answers null (unsupported type or encoder failure). */
+  async function toBlob(canvas: RenderCanvas): Promise<Blob> {
+    const first = await toBlobOnce(canvas, mimeType);
+    if (first) return first;
+    if (mimeType !== FALLBACK_MIME_TYPE) {
+      const second = await toBlobOnce(canvas, FALLBACK_MIME_TYPE);
+      if (second) return second;
+    }
+    throw new PdfRenderError("toBlob a renvoyé null");
   }
 
   function guard(): void {
@@ -391,10 +406,13 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       const linked = linkSignals(signal);
       try {
         if (linked.signal.aborted) throw abortError();
-        return await withPage(path, page, linked.signal, async (pdfPage) => {
-          const { width, height } = pdfPage.getViewport({ scale: 1 });
-          return { width, height };
-        });
+        const { signal } = linked;
+        return await schedule(signal, () =>
+          withPage(path, page, signal, async (pdfPage) => {
+            const { width, height } = pdfPage.getViewport({ scale: 1 });
+            return { width, height };
+          }),
+        );
       } finally {
         linked.cleanup();
       }
@@ -425,7 +443,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       for (const [path, entry] of documents) {
         entry.dropped = true;
         if (entry.refs === 0) {
-          if (entry.doc) destroyDocument(entry.doc, path);
+          if (entry.doc) destroyDocument(entry, entry.doc, path);
           else entry.controller.abort();
         }
       }

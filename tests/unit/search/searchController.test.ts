@@ -44,6 +44,7 @@ class FakeSource implements SearchSource {
   docs: DocInfo[];
   progress: LoadProgress = { loaded: 0, total: 0, failed: [] };
   phase: LoadPhase = "ready";
+  lastError: string | undefined;
   private listeners = new Set<() => void>();
   constructor(pages: { docId: string; page: number; text: string }[], docs: DocInfo[]) {
     this.index = buildIndex(pages);
@@ -54,6 +55,7 @@ class FakeSource implements SearchSource {
   listDocs = () => this.docs;
   getProgress = () => this.progress;
   getPhase = () => this.phase;
+  getLastError = () => this.lastError;
   subscribe = (l: () => void) => {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
@@ -75,13 +77,15 @@ const PAGES = [
 function setup(source = new FakeSource(PAGES, [doc("a", "Alpha"), doc("b", "Beta")])) {
   const clock = new FakeClock();
   const seen: SearchViewModel[] = [];
+  const onWarn = vi.fn();
   const controller = createSearchController({
     source,
     schedule: clock.schedule,
     clear: clock.clear,
     onChange: (vm) => seen.push(vm),
+    onWarn,
   });
-  return { source, clock, seen, controller };
+  return { source, clock, seen, controller, onWarn };
 }
 
 describe("createSearchController", () => {
@@ -147,7 +151,7 @@ describe("createSearchController", () => {
     const { controller, clock } = setup();
     controller.setQuery("zzzz");
     clock.advance(200);
-    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzzz", partial: false });
+    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzzz", partial: false, failedCount: 0 });
   });
 
   it("returns empty-query for blank or non-searchable input, immediately and cancelling pending work", () => {
@@ -200,7 +204,7 @@ describe("createSearchController", () => {
     expect(vm.kind === "results" && vm.partial).toBe(true);
     controller.setQuery("zzz");
     clock.advance(200);
-    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzz", partial: true });
+    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzz", partial: true, failedCount: 0 });
   });
 
   it("re-runs the current query when the source notifies", () => {
@@ -295,5 +299,111 @@ describe("createSearchController", () => {
     source.emit();
     expect(seen).toHaveLength(0);
     expect(() => controller.dispose()).not.toThrow();
+  });
+
+  describe("phase error, failedCount, coalescing, onWarn", () => {
+    it("produces an error view when the source phase is error, with the last known cause", () => {
+      const source = new FakeSource([], []);
+      source.phase = "error";
+      source.lastError = "list failed";
+      const { controller, clock } = setup(source);
+      controller.setQuery("gradient");
+      clock.advance(200);
+      expect(controller.getViewModel()).toEqual({ kind: "error", message: "list failed" });
+    });
+
+    it("uses a generic message when the error cause is unknown", () => {
+      const source = new FakeSource([], []);
+      source.phase = "error";
+      const { controller, clock } = setup(source);
+      controller.setQuery("gradient");
+      clock.advance(200);
+      const vm = controller.getViewModel();
+      expect(vm.kind === "error" && vm.message.length > 0).toBe(true);
+    });
+
+    it("exposes failedCount in results and no-result", () => {
+      const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
+      source.progress = { loaded: 2, total: 4, failed: [{ name: "x.dsx", message: "m" }, { name: "y.dsx", message: "m" }] };
+      const { controller, clock } = setup(source);
+      controller.setQuery("gradient");
+      clock.advance(200);
+      const vm = controller.getViewModel();
+      expect(vm.kind === "results" && vm.failedCount).toBe(2);
+      controller.setQuery("zzz");
+      clock.advance(200);
+      const none = controller.getViewModel();
+      expect(none.kind === "no-result" && none.failedCount).toBe(2);
+    });
+
+    it("coalesces store notifications during loading into one search per window", () => {
+      const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
+      const { controller, clock, seen } = setup(source);
+      controller.setQuery("gradient");
+      clock.advance(200);
+      source.phase = "loading";
+      source.progress = { loaded: 1, total: 50, failed: [] };
+      const before = seen.length;
+      const spy = vi.spyOn(source, "getIndex");
+      for (let i = 0; i < 40; i++) source.emit();
+      expect(seen.length).toBe(before);
+      expect(spy).not.toHaveBeenCalled();
+      clock.advance(149);
+      expect(seen.length).toBe(before);
+      clock.advance(1);
+      expect(seen.length).toBe(before + 1);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs immediately when the store leaves loading, cancelling the coalescing timer", () => {
+      const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
+      const { controller, clock, seen } = setup(source);
+      controller.setQuery("gradient");
+      clock.advance(200);
+      source.phase = "loading";
+      source.emit();
+      const before = seen.length;
+      source.phase = "ready";
+      source.emit();
+      expect(seen.length).toBe(before + 1);
+      expect(clock.pending).toBe(0);
+      const vm = controller.getViewModel();
+      expect(vm.kind === "results" && vm.partial).toBe(false);
+    });
+
+    it("does not search on a notification while the debounce of a new query is pending", () => {
+      const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
+      const { controller, clock, seen } = setup(source);
+      controller.setQuery("gradient");
+      const spy = vi.spyOn(source, "getIndex");
+      source.emit();
+      expect(spy).not.toHaveBeenCalled();
+      clock.advance(200);
+      expect(seen).toHaveLength(1);
+    });
+
+    it("calls onWarn with the full error when run() fails", () => {
+      const { controller, clock, source, onWarn } = setup();
+      const boom = new Error("boom");
+      source.getIndex = () => {
+        throw boom;
+      };
+      controller.setQuery("gradient");
+      clock.advance(200);
+      expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("search"), boom);
+    });
+
+    it("dispose cancels the coalescing timer", () => {
+      const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
+      const { controller, clock, seen } = setup(source);
+      controller.setQuery("gradient");
+      clock.advance(200);
+      source.phase = "loading";
+      source.emit();
+      controller.dispose();
+      expect(clock.pending).toBe(0);
+      clock.advance(1000);
+      expect(seen).toHaveLength(1);
+    });
   });
 });

@@ -327,6 +327,16 @@ describe("entree compacte (decodeIndexForSearch)", () => {
     expect(searchPages(index, "chat").map((h) => [h.docId, h.page])).toEqual([["d", 1]]);
   });
 
+  it("withDocument { owned: true } ne copie pas les tableaux decodes ; sans l'option, il les copie", async () => {
+    const compact = await decodeIndexForSearch(await encodeIndex(makeDocumentIndex(["chat chat", "été"])));
+    const owned = withDocument(toBm25Index([]), "d", compact, { owned: true });
+    expect(owned.segments[0]?.pages).toBe(compact.postings.pages);
+    expect(owned.segments[0]?.pageLengths).toBe(compact.pageTermCounts);
+    const copied = withDocument(toBm25Index([]), "d", compact);
+    expect(copied.segments[0]?.pages).not.toBe(compact.postings.pages);
+    expect(searchPages(owned, "chat").map((h) => h.page)).toEqual([1]);
+  });
+
   it("remet en ordre d'unites de code UTF-16 un dictionnaire en ordre UTF-8 (caracteres astraux)", async () => {
     // UTF-8 : U+FF21 (EF BC A1) < U+10400 (F0 90 90 80) ; UTF-16 : U+10400 (D801 DC00) < U+FF21.
     const wide = "\uFF21";

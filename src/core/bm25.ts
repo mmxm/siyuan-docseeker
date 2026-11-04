@@ -261,6 +261,20 @@ export function makeSegment(
 }
 
 /**
+ * Comme `makeSegment`, mais l'appelant CÈDE ses Uint32Array (pageLengths, offsets, pages, termFrequencies) :
+ * ils sont conservés sans copie et ne doivent plus être modifiés ni réutilisés (ex. sortie fraîche d'un décodage).
+ * @throws InvalidSegmentError comme `makeSegment`.
+ */
+export function makeOwnedSegment(
+  docId: string,
+  pageLengths: Uint32Array,
+  postings: SegmentPostings,
+  pageCount: number = pageLengths.length,
+): DocumentSegment {
+  return assembleSegment(docId, pageLengths, postings, pageCount, true);
+}
+
+/**
  * Index regroupant des segments : N et avgdl en dérivent.
  * @throws DuplicateDocumentError si deux segments ont le même docId.
  */

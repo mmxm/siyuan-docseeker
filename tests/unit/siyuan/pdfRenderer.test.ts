@@ -130,7 +130,7 @@ describe("renderCrop", () => {
     const { renderer, fake, canvases } = setup();
     const blob = await renderer.renderCrop({ path: "a.pdf", page: 2, crop: CROP, scale: 1.5 });
     expect(blob).toBeInstanceOf(Blob);
-    expect(canvases[0]!.toBlobArgs?.[0]).toBe("image/png");
+    expect(canvases[0]!.toBlobArgs).toEqual(["image/webp", 0.8]);
     const params = fake.renders[0] as {
       viewport: { width: number };
       transform: number[];
@@ -457,5 +457,62 @@ describe("dispose", () => {
     await tick();
     expect(fake.cancels).toHaveLength(1);
     expect(fake.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("robustness (review fixes)", () => {
+  it("destroy() is called once when dispose() happens during acquire", async () => {
+    const load = deferred<RenderableDocument>();
+    const fake = makeDoc();
+    const renderer = createPdfRenderer({
+      loadDocument: () => load.promise,
+      createCanvas: makeCanvases().createCanvas,
+      onWarn: vi.fn(),
+    });
+    const p = renderer.getPageSize("a.pdf", 1).catch((e: unknown) => e);
+    await tick();
+    renderer.dispose();
+    load.resolve(fake.doc);
+    await p;
+    await tick();
+    expect(fake.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("getPageSize goes through the same concurrency queue as renderCrop", async () => {
+    const gate = deferred();
+    const { renderer } = setup({ gate: () => gate.promise, concurrency: 1 });
+    const render = renderer.renderCrop({ path: "a.pdf", page: 1, crop: CROP, scale: 1 });
+    await tick();
+    let sized = false;
+    const size = renderer.getPageSize("a.pdf", 2).then((s) => {
+      sized = true;
+      return s;
+    });
+    await tick();
+    expect(sized).toBe(false);
+    gate.resolve();
+    await render;
+    expect(await size).toEqual({ width: 600, height: 800 });
+  });
+
+  it("falls back to PNG when toBlob returns null for the default WebP", async () => {
+    const fake = makeDoc();
+    const calls: Array<string | undefined> = [];
+    const renderer = createPdfRenderer({
+      loadDocument: async () => fake.doc,
+      createCanvas: () => ({
+        width: 1,
+        height: 1,
+        getContext: () => ({}),
+        toBlob: (cb, type) => {
+          calls.push(type);
+          cb(type === "image/png" ? new Blob(["p"], { type: "image/png" }) : null);
+        },
+      }),
+      onWarn: vi.fn(),
+    });
+    const blob = await renderer.renderCrop({ path: "a.pdf", page: 1, crop: CROP, scale: 1 });
+    expect(blob.type).toBe("image/png");
+    expect(calls).toEqual(["image/webp", "image/png"]);
   });
 });

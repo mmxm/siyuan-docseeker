@@ -283,4 +283,128 @@ describe("createSearchStore", () => {
     expect(phases[0]).toBe("loading");
     expect(s.getPhase()).toBe("ready");
   });
+
+  describe("refresh(options)", () => {
+    it("keeps the phase ready (no visible loading) during a refresh of a loaded store", async () => {
+      const h = harness(["a"]);
+      const s = createSearchStore(h.deps);
+      await s.load();
+      const phases: string[] = [];
+      s.subscribe(() => phases.push(s.getPhase()));
+      h.names.value.push("b.dsx");
+      h.files.set("b.dsx", bytesOf("b"));
+      await s.refresh();
+      expect(phases.length).toBeGreaterThan(0);
+      expect(new Set(phases)).toEqual(new Set(["ready"]));
+      expect(s.getDoc("b")).toBeDefined();
+    });
+
+    it("still reports loading when refreshing a store that never finished loading", async () => {
+      const h = harness(["a"]);
+      const s = createSearchStore(h.deps);
+      const phases: string[] = [];
+      s.subscribe(() => phases.push(s.getPhase()));
+      await s.refresh();
+      expect(phases[0]).toBe("loading");
+      expect(s.getPhase()).toBe("ready");
+    });
+
+    it("reloadPaths forces the reload of the documents whose path matches, even with the same name", async () => {
+      const h = harness(["a", "b"]);
+      h.sources.set("a", { sourcePath: "assets/a.pdf", pdfSize: 1 });
+      h.sources.set("b", { sourcePath: "assets/b.pdf", pdfSize: 1 });
+      const s = createSearchStore(h.deps);
+      await s.load();
+      h.decoded.length = 0;
+      h.sources.set("a", { sourcePath: "assets/a.pdf", pdfSize: 2 });
+      await s.refresh({ reloadPaths: ["assets/a.pdf"] });
+      expect(h.decoded).toEqual(["a"]);
+      expect(s.getDoc("a")?.pdfSize).toBe(2);
+      expect(s.getDoc("b")?.pdfSize).toBe(1);
+      expect(s.getIndex().segments.map((x) => x.docId).sort()).toEqual(["a", "b"]);
+    });
+
+    it("without reloadPaths nothing is reloaded", async () => {
+      const h = harness(["a"]);
+      const s = createSearchStore(h.deps);
+      await s.load();
+      h.decoded.length = 0;
+      await s.refresh({ reloadPaths: [] });
+      expect(h.decoded).toEqual([]);
+    });
+
+    it("a failed reload keeps the previous version of the document and records the failure", async () => {
+      const h = harness(["a"]);
+      const s = createSearchStore(h.deps);
+      await s.load();
+      const path = s.getDoc("a")?.path as string;
+      h.files.set("a.dsx", bytesOf("bad-a"));
+      await s.refresh({ reloadPaths: [path] });
+      expect(s.getDoc("a")).toBeDefined();
+      expect(s.getProgress().failed.map((f) => f.name)).toEqual(["a.dsx"]);
+      expect(s.getPhase()).toBe("ready");
+    });
+
+    it("an aborted refresh publishes nothing and keeps the phase", async () => {
+      const h = harness(["a"]);
+      const s = createSearchStore(h.deps);
+      await s.load();
+      h.names.value.push("b.dsx");
+      h.files.set("b.dsx", bytesOf("b"));
+      const ctl = new AbortController();
+      ctl.abort();
+      await s.refresh({ signal: ctl.signal });
+      expect(s.getDoc("b")).toBeUndefined();
+      expect(s.getPhase()).toBe("ready");
+    });
+
+    it("a refresh whose list() fails rejects but keeps the loaded index usable (phase ready)", async () => {
+      const h = harness(["a"]);
+      let fail = false;
+      const deps = { ...h.deps, store: { ...h.deps.store, list: async () => { if (fail) throw new Error("boom"); return [...h.names.value]; } } };
+      const s = createSearchStore(deps);
+      await s.load();
+      fail = true;
+      await expect(s.refresh()).rejects.toThrow("boom");
+      expect(s.getPhase()).toBe("ready");
+      expect(s.getLastError()).toBe("boom");
+      expect(s.getDoc("a")).toBeDefined();
+    });
+  });
+
+  describe("getLastError", () => {
+    it("is undefined at first and after a successful load", async () => {
+      const s = createSearchStore(harness(["a"]).deps);
+      expect(s.getLastError()).toBeUndefined();
+      await s.load();
+      expect(s.getLastError()).toBeUndefined();
+    });
+
+    it("keeps the list() error message", async () => {
+      const h = harness();
+      const s = createSearchStore({ ...h.deps, store: { ...h.deps.store, list: async () => { throw new Error("boom"); } } });
+      await expect(s.load()).rejects.toThrow("boom");
+      expect(s.getLastError()).toBe("boom");
+    });
+
+    it("keeps the last failure message when every file fails, and clears it on recovery", async () => {
+      const h = harness(["bad1", "bad2"]);
+      const s = createSearchStore(h.deps);
+      await s.load();
+      expect(s.getPhase()).toBe("error");
+      expect(s.getLastError()).toContain("corrupt bad");
+      h.files.set("bad1.dsx", bytesOf("ok"));
+      await s.load();
+      expect(s.getPhase()).toBe("ready");
+      expect(s.getLastError()).toBeUndefined();
+    });
+  });
+
+  it("hands the decoded typed arrays to the index without copying them", async () => {
+    const h = harness(["a"]);
+    const decoded = data();
+    const s = createSearchStore({ ...h.deps, decode: async () => decoded });
+    await s.load();
+    expect(s.getIndex().segments[0]?.pages).toBe(decoded.postings.pages);
+  });
 });

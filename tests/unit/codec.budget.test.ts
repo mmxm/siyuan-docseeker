@@ -5,10 +5,12 @@ import {
   decodeIndex,
   decodeIndexForSearch,
   decodePageBoxes,
+  decodePageMatches,
 } from "../../src/core/codec/decode";
 import {
   BudgetExceededError,
   CorruptDataError,
+  CorruptOffsetError,
   DsxFormatError,
   MAX_BOXES_PER_PAGE,
   MAX_PAGES,
@@ -66,6 +68,8 @@ interface RawDsx {
   readonly dict?: Uint8Array;
   readonly postings?: Uint8Array;
   readonly blobs?: readonly Uint8Array[];
+  /** Longueurs annoncées dans la table (par défaut : les vraies) : sert à fabriquer une table incohérente. */
+  readonly tableLengths?: readonly number[];
 }
 
 /** Assemble un fichier à partir de sections brutes (non compressées) et de blobs déjà compressés. */
@@ -73,7 +77,7 @@ async function buildDsx(raw: RawDsx): Promise<Uint8Array> {
   const blobs = raw.blobs ?? [];
   const table = new Uint8Array(blobs.length * 4);
   const tableView = new DataView(table.buffer);
-  blobs.forEach((b, i) => tableView.setUint32(i * 4, b.length, true));
+  blobs.forEach((b, i) => tableView.setUint32(i * 4, raw.tableLengths?.[i] ?? b.length, true));
   const sections = [
     await deflate(raw.lengths ?? new Uint8Array(0)),
     await deflate(raw.dict ?? encodeVarint(0)),
@@ -141,6 +145,21 @@ describe.each(decoders)("%s : bornes structurelles", (_name, decode) => {
     await expect(decode(bytes)).rejects.toThrow(BudgetExceededError);
   });
 
+  it("accepte une page de MAX_BOXES_PER_PAGE boîtes plausibles", async () => {
+    const blob = await deflate(blobOf(MAX_BOXES_PER_PAGE, 7));
+    const bytes = await buildDsx({ pageCount: 1, lengths: encodeVarint(0), blobs: [blob] });
+    await expect(decode(bytes)).resolves.toBeDefined();
+  });
+});
+
+const boxReaders: readonly (readonly [string, (bytes: Uint8Array) => Promise<unknown>])[] = [
+  ["decodeIndex", decodeIndex],
+  ["decodePageBoxes", (bytes) => decodePageBoxes(bytes, 1)],
+  ["decodePageMatches", (bytes) => decodePageMatches(bytes, 1, () => true)],
+];
+
+// decodeIndexForSearch n'inflate pas les blobs de boîtes : ces bornes s'appliquent à la lecture d'une page.
+describe.each(boxReaders)("%s : bornes des blobs de boîtes", (_name, decode) => {
   it("refuse une page annonçant plus de MAX_BOXES_PER_PAGE boîtes", async () => {
     const blob = await deflate(encodeVarint(MAX_BOXES_PER_PAGE + 1));
     const bytes = await buildDsx({ pageCount: 1, lengths: encodeVarint(0), blobs: [blob] });
@@ -156,12 +175,6 @@ describe.each(decoders)("%s : bornes structurelles", (_name, decode) => {
     },
     TEST_TIMEOUT_MS,
   );
-
-  it("accepte une page de MAX_BOXES_PER_PAGE boîtes plausibles", async () => {
-    const blob = await deflate(blobOf(MAX_BOXES_PER_PAGE, 7));
-    const bytes = await buildDsx({ pageCount: 1, lengths: encodeVarint(0), blobs: [blob] });
-    await expect(decode(bytes)).resolves.toBeDefined();
-  });
 });
 
 describe.each(decoders.slice(0, 2))("%s : sections 0 à 2", (_name, decode) => {
@@ -202,14 +215,14 @@ describe.each(decoders.slice(0, 2))("%s : sections 0 à 2", (_name, decode) => {
 
 describe("budget global de boîtes", () => {
   it(
-    "refuse un fichier dont la somme des boîtes dépasse MAX_TOTAL_BOXES",
+    "refuse un fichier dont la somme des boîtes dépasse MAX_TOTAL_BOXES (decodeIndex ; decodeIndexForSearch ne lit plus les boîtes)",
     async () => {
       const pages = Math.floor(MAX_TOTAL_BOXES / MAX_BOXES_PER_PAGE) + 1;
       const blobs = await Promise.all(
         Array.from({ length: pages }, (_, i) => deflate(blobOf(MAX_BOXES_PER_PAGE, i + 1))),
       );
       const bytes = await buildDsx({ pageCount: pages, lengths: new Uint8Array(pages), blobs });
-      await expect(decodeIndexForSearch(bytes)).rejects.toThrow(BudgetExceededError);
+      await expect(decodeIndex(bytes)).rejects.toThrow(BudgetExceededError);
     },
     TEST_TIMEOUT_MS,
   );
@@ -324,9 +337,38 @@ describe("decodeIndexForSearch", () => {
     TEST_TIMEOUT_MS,
   );
 
-  it("valide la structure des blobs de boîtes (blob corrompu rejeté)", async () => {
+  it("n'inflate aucun blob de boîtes : un contenu corrompu n'est détecté qu'à la lecture de la page", async () => {
+    // Choix de performance : 40 000 DecompressionStream au chargement sont trop coûteux. Seule la table
+    // d'offsets/longueurs des blobs est validée (voir le test suivant) ; le contenu d'un blob est validé
+    // par decodePageMatches / decodeIndex au moment où la page est réellement lue.
     const bad = await deflate(cat(encodeVarint(2), new Uint8Array(8))); // 2 boîtes annoncées, 1 fournie
     const bytes = await buildDsx({ pageCount: 1, lengths: encodeVarint(0), blobs: [bad] });
-    await expect(decodeIndexForSearch(bytes)).rejects.toThrow(CorruptDataError);
+    await expect(decodeIndexForSearch(bytes)).resolves.toBeDefined();
+    await expect(decodePageMatches(bytes, 1, () => true)).rejects.toThrow(CorruptDataError);
+    await expect(decodeIndex(bytes)).rejects.toThrow(CorruptDataError);
+  });
+
+  it("ne crée aucun DecompressionStream pour les blobs de boîtes", async () => {
+    const bytes = await encodeIndex(syntheticIndex(20, 5));
+    const Original = globalThis.DecompressionStream;
+    let created = 0;
+    globalThis.DecompressionStream = class extends Original {
+      constructor(format: CompressionFormat) {
+        super(format);
+        created++;
+      }
+    } as typeof DecompressionStream;
+    try {
+      await decodeIndexForSearch(bytes);
+    } finally {
+      globalThis.DecompressionStream = Original;
+    }
+    expect(created).toBeLessThanOrEqual(3); // pageLengths, dictionnaire, postings
+  });
+
+  it("rejette une table de blobs incohérente (somme != taille de section)", async () => {
+    const blob = await deflate(encodeVarint(0));
+    const bytes = await buildDsx({ pageCount: 1, lengths: encodeVarint(0), blobs: [blob], tableLengths: [blob.length - 1] });
+    await expect(decodeIndexForSearch(bytes)).rejects.toThrow(CorruptOffsetError);
   });
 });

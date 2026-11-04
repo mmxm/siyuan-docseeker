@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { MemoryThumbnailCache } from "../../../src/search/thumbnailCache";
+import { MemoryThumbnailCache, type ThumbnailCache } from "../../../src/search/thumbnailCache";
 import { createThumbnailLoader, type ThumbnailRenderer } from "../../../src/ui/thumbnailLoader";
 
 type Entry = { target: Element; isIntersecting: boolean };
 
-function setup(overrides: { renderer?: Partial<ThumbnailRenderer>; getPageMatches?: ReturnType<typeof vi.fn> } = {}) {
+function setup(
+  overrides: {
+    renderer?: Partial<ThumbnailRenderer>;
+    getPageMatches?: ReturnType<typeof vi.fn>;
+    delay?: number;
+    cache?: ThumbnailCache;
+  } = {},
+) {
   let cb: (e: Entry[]) => void = () => {};
   const observer = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
   const renderer: ThumbnailRenderer = {
@@ -16,7 +23,7 @@ function setup(overrides: { renderer?: Partial<ThumbnailRenderer>; getPageMatche
   const getPageMatches =
     overrides.getPageMatches ??
     vi.fn(async () => ({ boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }], ordinals: [0] }));
-  const cache = new MemoryThumbnailCache({ maxEntries: 10, maxBytes: 1e6 });
+  const cache = overrides.cache ?? new MemoryThumbnailCache({ maxEntries: 10, maxBytes: 1e6 });
   let n = 0;
   const createObjectUrl = vi.fn(() => `blob:${++n}`);
   const revokeObjectUrl = vi.fn();
@@ -32,6 +39,7 @@ function setup(overrides: { renderer?: Partial<ThumbnailRenderer>; getPageMatche
     createObjectUrl,
     revokeObjectUrl,
     docVersion: 1,
+    loadDelayMs: overrides.delay ?? 0,
     onWarn,
   });
   const show = (el: Element, v = true) => cb([{ target: el, isIntersecting: v }]);
@@ -136,7 +144,7 @@ describe("thumbnailLoader", () => {
     s.show(el);
     await flush();
     expect(el.dataset.state).toBe("error");
-    expect(el.getAttribute("aria-label")).toBeTruthy();
+    expect(el.textContent).toContain("Aperçu indisponible");
     expect(s.onWarn).toHaveBeenCalled();
   });
 
@@ -208,5 +216,113 @@ describe("thumbnailLoader", () => {
     await flush();
     expect(el.dataset.state).toBe("ready");
     expect(el.querySelectorAll("[data-docseeker-highlight]").length).toBe(0);
+  });
+});
+
+describe("thumbnailLoader (review fixes)", () => {
+  const readyEl = async (s: ReturnType<typeof setup>, r = req) => {
+    const el = document.createElement("div");
+    s.loader.attach(el, r);
+    s.show(el);
+    await flush();
+    return el;
+  };
+
+  it("marks highlights with a class, aria-hidden and fills the image to match percentages", async () => {
+    const s = setup();
+    const el = await readyEl(s);
+    const hl = el.querySelector<HTMLElement>("[data-docseeker-highlight]")!;
+    expect(hl.className).toBe("docseeker-highlight");
+    expect(hl.getAttribute("aria-hidden")).toBe("true");
+    expect(el.querySelector("img")!.style.objectFit).toBe("fill");
+  });
+
+  it("sets the frame aspect ratio from the crop as soon as the plan is known", async () => {
+    const s = setup();
+    const el = await readyEl(s);
+    const ratio = el.style.getPropertyValue("aspect-ratio") || el.dataset["aspectRatio"] || "";
+    const [w, h] = ratio.split("/").map((x) => Number(x));
+    expect(w! / h!).toBeGreaterThan(0);
+    expect(Number.isFinite(w! / h!)).toBe(true);
+    expect(el.dataset["aspectRatio"]).toBeTruthy();
+  });
+
+  it("still shows the image when cache.get and cache.put throw, and warns", async () => {
+    const cache: ThumbnailCache = {
+      get: async () => {
+        throw new Error("idb get");
+      },
+      put: async () => {
+        throw new Error("idb put");
+      },
+      clear: async () => undefined,
+    };
+    const s = setup({ cache });
+    const el = await readyEl(s);
+    expect(el.dataset.state).toBe("ready");
+    expect(el.querySelector("img")).not.toBeNull();
+    expect(s.onWarn).toHaveBeenCalled();
+  });
+
+  it("creates nodes with the element's own document", async () => {
+    const s = setup();
+    const other = document.implementation.createHTMLDocument("x");
+    const el = other.createElement("div");
+    const spy = vi.spyOn(document, "createElement");
+    s.loader.attach(el, req);
+    s.show(el);
+    await flush();
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+    expect(el.querySelector("img")!.ownerDocument).toBe(other);
+  });
+
+  it("shows visible fallback text and warns with docId, page and path on failure", async () => {
+    const s = setup({ renderer: { renderCrop: vi.fn(async () => Promise.reject(new Error("boom"))) } });
+    const el = await readyEl(s);
+    expect(el.dataset.state).toBe("error");
+    expect(el.textContent).toContain("Aperçu indisponible");
+    const message = String(s.onWarn.mock.calls[0]![0]);
+    expect(message).toContain("d");
+    expect(message).toContain("2");
+    expect(message).toContain("a.pdf");
+  });
+
+  describe("load delay", () => {
+    it("waits before loading and cancels when the element leaves first", async () => {
+      vi.useFakeTimers();
+      try {
+        const s = setup({ delay: 100 });
+        const el = document.createElement("div");
+        s.loader.attach(el, req);
+        s.show(el);
+        await vi.advanceTimersByTimeAsync(50);
+        s.show(el, false);
+        await vi.advanceTimersByTimeAsync(200);
+        await flush();
+        expect(s.getPageMatches).not.toHaveBeenCalled();
+        s.show(el);
+        await vi.advanceTimersByTimeAsync(100);
+        await flush();
+        expect(s.getPageMatches).toHaveBeenCalledTimes(1);
+        expect(el.dataset.state).toBe("ready");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not leave a timer behind after detach", () => {
+      vi.useFakeTimers();
+      try {
+        const s = setup({ delay: 100 });
+        const el = document.createElement("div");
+        const detach = s.loader.attach(el, req);
+        s.show(el);
+        detach();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

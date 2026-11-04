@@ -636,8 +636,10 @@ export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
 
 /**
  * Décodage pour la recherche, en mémoire compacte : longueurs de page et postings en tableaux typés
- * (page + tf ; les ordinaux de mots sont validés et budgétés mais jamais matérialisés). Les blobs de boîtes
- * sont inflatés et leur structure validée page par page, sans jamais créer de WordBox.
+ * (page + tf ; les ordinaux de mots sont validés et budgétés mais jamais matérialisés).
+ * Les blobs de boîtes ne sont PAS inflatés (des dizaines de milliers de DecompressionStream coûtent trop cher) :
+ * seule la table d'offsets/longueurs est validée (somme == taille de section). Le contenu d'un blob corrompu
+ * n'est détecté qu'à la lecture de la page (decodePageMatches / decodeIndex lèvent une erreur typée).
  */
 export async function decodeIndexForSearch(bytes: Uint8Array): Promise<SearchIndexData> {
   const budget = new DecodeBudget();
@@ -647,9 +649,6 @@ export async function decodeIndexForSearch(bytes: Uint8Array): Promise<SearchInd
     compactSink(),
     toUint32PageLengths,
   );
-  await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) => {
-    parseBoxBlob(await inflatePageBlob(boxesSection, offsets, i, budget), budget);
-  });
   return {
     normalizerVersion: header.normalizerVersion,
     extractorVersion: header.extractorVersion,

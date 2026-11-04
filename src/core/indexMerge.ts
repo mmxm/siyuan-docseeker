@@ -18,6 +18,7 @@
 import {
   DuplicateDocumentError,
   indexOfSegments,
+  makeOwnedSegment,
   makeSegment,
   type Bm25Index,
   type DocumentSegment,
@@ -65,11 +66,11 @@ function compactPostings(docId: string, index: Pick<DocumentIndex, "terms">): Pi
   };
 }
 
-function toSegment(docId: string, index: SearchableDocumentIndex): DocumentSegment {
+function toSegment(docId: string, index: SearchableDocumentIndex, owned = false): DocumentSegment {
   const postings = "postings" in index ? index.postings : compactPostings(docId, index);
   const counts = index.pageTermCounts;
   const pageLengths = counts instanceof Uint32Array ? counts : toUint32Lengths(counts, `${docId} : pageTermCounts`);
-  return makeSegment(docId, pageLengths, postings);
+  return (owned ? makeOwnedSegment : makeSegment)(docId, pageLengths, postings);
 }
 
 /** @throws DuplicateDocumentError si un docId apparait deux fois. */
@@ -77,10 +78,18 @@ export function toBm25Index(documents: readonly NamedDocumentIndex[]): Bm25Index
   return indexOfSegments(documents.map(({ docId, index }) => toSegment(docId, index)));
 }
 
-/** Ajoute `docId`, ou le remplace s'il existe deja. Retourne un nouvel index ; `index` est inchange. */
-export function withDocument(index: Bm25Index, docId: string, documentIndex: SearchableDocumentIndex): Bm25Index {
+/**
+ * Ajoute `docId`, ou le remplace s'il existe deja. Retourne un nouvel index ; `index` est inchange.
+ * `owned: true` : l'appelant cède les tableaux typés de `documentIndex` (forme compacte), conservés sans copie.
+ */
+export function withDocument(
+  index: Bm25Index,
+  docId: string,
+  documentIndex: SearchableDocumentIndex,
+  options?: { readonly owned?: boolean },
+): Bm25Index {
   const segments = index.segments.filter((segment) => segment.docId !== docId);
-  segments.push(toSegment(docId, documentIndex));
+  segments.push(toSegment(docId, documentIndex, options?.owned === true));
   return indexOfSegments(segments);
 }
 
