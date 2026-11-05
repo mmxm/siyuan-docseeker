@@ -62,6 +62,14 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 
 **Non testé** : expiration de session ; `openTab` à la page N (numérotation) ; `openTab` sur un PDF déjà ouvert ; calque de surlignage au zoom / re-rendu ; détection de l'onglet visible ; durée de l'indexation complète des 47 PDF.
 
+## Mesures sur 47 PDF réels (2026-11-05, `npm run measure:corpus`, Node, disque local)
+
+- Indexation : 44 PDF en ~191 s (le plus long : Santé Publique 5E, 225 Mo, 17 s). 1 échec légitime : « Hématologie - 5E 2024.pdf » fait 0 octet dans le corpus.
+- Chargement à froid de 46 index : 18 323 pages, 7,3 M mots, 56,8 Mo de `.dsx` → **1,13 s**, tas 47,8 Mo (~0,84× les `.dsx`, 2,7 Ko/page). Dans SiYuan (lecture via HTTP) ce sera plus long : à mesurer.
+- Requêtes : « sévérité bpco » 0,2 ms, « diabète » 1,5 ms, « traitement » 6,5 ms, termes très fréquents (14 000 pages) ~25 ms médiane ; pire cas observé 535 ms isolé (GC probable).
+- Plafond 200 pages/document : mémoire retenue ~0,4 Mo pour la requête la plus large (5 446 pages renvoyées sur 14 130) : négligeable.
+- À faire : confirmer que `doc.destroy()` (indexer.ts:346) est inopérant avec PDF.js 6.4.299 (c'est `loadingTask.destroy()` qui libère) et corriger dans `loadPdf.ts`.
+
 ## Risques ouverts
 
 1. **Mémoire de l'index** : traitée (≈ 2,9 Ko/page). Restes : termes dupliqués entre segments. Perf reportées jusqu'aux mesures réelles : `decodePageMatches` relit dictionnaire + postings à chaque page (grouper par document/requête), `searchPages` en mode préfixe court (accumulateurs typés, plafond de préfixe), tri partiel du top 5. Sécurité (revue) : un blob de boîtes corrompu n'est détecté qu'à la lecture de la page (pages sans vignette possibles) ; mineurs : `makeSegment` partage `pageLengths` quand les termes sont réordonnés (bm25.ts ~232), données IndexedDB non validées (`size` NaN, `blob` non Blob), clé de vignette sans le recadrage.
