@@ -18,7 +18,7 @@
 
 ## Où on en est
 
-**Tests : 1099, typage strict propre, couverture ~99 % des lignes de `src`.**
+**Tests : 1326, typage strict propre, couverture ~99 % des lignes de `src`.**
 
 | Module | Rôle |
 |---|---|
@@ -86,6 +86,8 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 4. ~~Charger les index au démarrage du plugin~~ : fait (index partagé, voir ci-dessus).
 5. ~~**Voir toutes les vignettes d'un document**~~ — fait : « et N autres pages » est un bouton (`aria-expanded`) qui déplie par lots de 10 (plafond 200 pages par document, note « n pages non affichées » au-delà), bouton « Replier », état conservé aux re-rendus. Validé dans SiYuan : boutons Plus/Replier OK, plusieurs onglets de recherche OK (`openNewTab: true`). À corriger plus tard : la navigation aux flèches entre cartes ne fonctionne pas dans SiYuan (OK en jsdom, probablement capturée par SiYuan).
 6. **Classement plus proche de DocSeeker** (écart relevé dans `search-core` : `processing.rs`, `constants.rs`, `matching.rs`). Aujourd'hui : BM25 de page + score de document (titre, meilleur BM25, nombre de pages) identiques ; manquent le bonus multi-mots (+5000 tous les mots dans une occurrence, jusqu'à +2000 partiel), le tri des occurrences (mots distincts, puis taille de police, puis BM25, puis page) et le bonus de taille de police (plafond 400, seuil 10 pt). Temps 1, sans changer l'index : bonus multi-mots et tri par mots distincts, avec jeu de référence généré depuis le moteur Rust. Temps 2, selon l'écart mesuré : taille de police dans le `.dsx` (nouvelle version de format, réindexation).
+   - **Phase 1 faite (à valider dans SiYuan)** : re-classement asynchrone par proximité pour les requêtes à ≥2 mots (`src/search/proximity.ts`, `proximityRanker.ts`) : occurrences géométriques (même ligne, écart < 25 pt, page A4 supposée 595 pt), bonus +5000 / partiel ×2000, tri des 5 premières pages par mots distincts, fenêtres de 15 documents (jusqu'à 60), grâce de 300 ms puis réordonnancement unique, statut « classement affiné ». Fixture de parité générée par le vrai moteur Rust (`npm run gen:ranking-fixture`, 17 scénarios, `tests/fixtures/docseeker-ranking.json`).
+   - **Lacunes connues (appariement)** : pas de sous-chaîne (≥4 car.), mot d'un caractère compté différemment, expressions entre guillemets non gérées ; pas de bonus de taille de police ni de tri des occurrences par police (phase 2). Latence réelle de lecture des `.dsx` dans SiYuan non mesurée.
 
 ## Commandes utiles
 

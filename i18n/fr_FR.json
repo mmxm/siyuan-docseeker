@@ -36,6 +36,7 @@
   "failedMany": "{n} index illisibles : réindexer",
   "cardLabel": "{title}, p. {page}",
   "cardPage": "p. {page}",
+  "rankingRefined": "Classement affiné par proximité des mots",
   "indexFailed": "Indexation en échec",
   "warnLog": "Journal des avertissements"
 }

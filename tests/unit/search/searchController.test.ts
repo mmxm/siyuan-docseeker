@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildIndex, MAX_EXPANDED_PAGES, type Bm25Index } from "../../../src/core/bm25";
 import {
+  RERANK_GRACE_MS,
   createSearchController,
+  type RerankPort,
   type DocInfo,
   type LoadPhase,
   type LoadProgress,
@@ -427,5 +429,448 @@ describe("createSearchController", () => {
       clock.advance(1000);
       expect(seen).toHaveLength(1);
     });
+  });
+});
+
+// ---- Re-classement par proximité (jalon 6, phase 1) ----
+
+const RR_PAGES = [
+  { docId: "a", page: 1, text: "alpha beta gamma" },
+  { docId: "a", page: 2, text: "alpha beta" },
+  { docId: "a", page: 3, text: "alpha" },
+  { docId: "b", page: 1, text: "alpha beta" },
+  { docId: "c", page: 1, text: "alpha beta" },
+];
+const RR_DOCS = [doc("a", "Alpha"), doc("b", "Beta"), doc("c", "Gamma")];
+const flushMicro = async (): Promise<void> => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+
+type RankResult = Awaited<ReturnType<RerankPort["rank"]>>;
+interface Call {
+  query: string;
+  docs: readonly { docId: string }[];
+  signal: AbortSignal | undefined;
+  onWindow: ((r: unknown) => void) | undefined;
+  resolve: (r: RankResult) => void;
+  reject: (e: unknown) => void;
+}
+
+function rerankSetup(opts: { phase?: LoadPhase } = {}) {
+  const source = new FakeSource(RR_PAGES, RR_DOCS);
+  if (opts.phase) source.phase = opts.phase;
+  const calls: Call[] = [];
+  const rerank: RerankPort = {
+    rank: ((query: string, docs: readonly { docId: string }[], o: { signal?: AbortSignal; onWindow?: (r: unknown) => void }) =>
+      new Promise((resolve, reject) => {
+        calls.push({ query, docs, signal: o.signal, onWindow: o.onWindow, resolve: resolve as Call["resolve"], reject });
+      })) as unknown as RerankPort["rank"],
+  };
+  const clock = new FakeClock();
+  const seen: SearchViewModel[] = [];
+  const onWarn = vi.fn();
+  const controller = createSearchController({
+    source, schedule: clock.schedule, clear: clock.clear, onChange: (vm) => seen.push(vm), onWarn, rerank,
+  });
+  return { source, clock, seen, controller, onWarn, calls };
+}
+
+/** Ordre BM25 de référence (sans re-classement). */
+function bm25Order(query: string): string[] {
+  const { controller, clock } = setup(new FakeSource(RR_PAGES, RR_DOCS));
+  controller.setQuery(query);
+  clock.advance(200);
+  const vm = controller.getViewModel();
+  if (vm.kind !== "results") throw new Error("expected results");
+  return vm.docs.map((d) => d.docId);
+}
+
+const resultOf = (vm: SearchViewModel) => {
+  if (vm.kind !== "results") throw new Error(`expected results, got ${vm.kind}`);
+  return vm;
+};
+
+/** Résultat de ranker factice : documents inversés ; pages du premier document inversées. */
+function reversed(docs: readonly { docId: string; pages: readonly { page: number }[] }[]): RankResult {
+  const out = [...docs].reverse();
+  const first = docs[0]!;
+  return {
+    docs: out,
+    pagesOrderByDoc: new Map([[first.docId, first.pages.map((p) => p.page).slice(0, 5).reverse()]]),
+    bonusByDoc: new Map(docs.map((d) => [d.docId, 0])),
+    failedDocIds: new Set<string>(),
+    done: Promise.resolve(),
+  } as unknown as RankResult;
+}
+
+describe("searchController : re-classement par proximité", () => {
+  it("expose la constante de grâce nommée (300 ms)", () => {
+    expect(RERANK_GRACE_MS).toBe(300);
+  });
+
+  it("requête à un mot : chemin inchangé, aucun appel, ranking bm25 publié tout de suite", () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha");
+    clock.advance(200);
+    expect(calls).toHaveLength(0);
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).ranking).toBe("bm25");
+  });
+
+  it("requête à deux mots : un appel avec signal et onWindow, rien publié avant la fenêtre 1 ou la grâce", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    await flushMicro();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.query).toBe("alpha beta");
+    expect(calls[0]!.signal).toBeInstanceOf(AbortSignal);
+    expect(typeof calls[0]!.onWindow).toBe("function");
+    expect(seen).toHaveLength(0);
+  });
+
+  it("fenêtre 1 prête dans le délai de grâce : publie directement l'ordre re-classé (docs et 5 premières pages)", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    const base = bm25Order("alpha beta");
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    clock.advance(RERANK_GRACE_MS - 1);
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    calls[0]!.resolve(reversed(docs));
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    const vm = resultOf(seen[0]!);
+    expect(vm.ranking).toBe("proximity");
+    expect(vm.docs.map((d) => d.docId)).toEqual([...base].reverse());
+    const first = vm.docs.find((d) => d.docId === docs[0]!.docId)!;
+    expect(first.pages.map((p) => p.page)).toEqual(docs[0]!.pages.map((p) => p.page).reverse());
+    // La minuterie de grâce a été annulée : rien d'autre ne sera publié.
+    clock.advance(1000);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("grâce dépassée : publie BM25 puis applique l'ordre de la fenêtre 1 une seule fois", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    const base = bm25Order("alpha beta");
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    clock.advance(RERANK_GRACE_MS);
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).ranking).toBe("bm25");
+    expect(resultOf(seen[0]!).docs.map((d) => d.docId)).toEqual(base);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen).toHaveLength(2);
+    expect(resultOf(seen[1]!).ranking).toBe("proximity");
+    expect(resultOf(seen[1]!).docs.map((d) => d.docId)).toEqual([...base].reverse());
+    clock.advance(5000);
+    await flushMicro();
+    expect(seen).toHaveLength(2);
+  });
+
+  it("fenêtres suivantes (onWindow) appliquées au fur et à mesure, après la fenêtre 1", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    calls[0]!.resolve(reversed(docs));
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    const next = { ...reversed(docs), docs: [...docs].reverse() };
+    calls[0]!.onWindow!(next as never);
+    expect(seen).toHaveLength(2);
+    expect(resultOf(seen[1]!).docs.map((d) => d.docId)).toEqual([...docs].reverse().map((d) => d.docId));
+    expect(resultOf(seen[1]!).ranking).toBe("proximity");
+  });
+
+  it("onWindow arrivé avant la prise en compte de la fenêtre 1 : le plus récent l'emporte, sans double publication", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    const later = reversed(docs);
+    calls[0]!.onWindow!(later as never);
+    expect(seen).toHaveLength(0);
+    calls[0]!.resolve({ ...later, docs: [...docs], pagesOrderByDoc: new Map() } as unknown as RankResult); // fenêtre 1 plus ancienne
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).docs.map((d) => d.docId)).toEqual([...docs].reverse().map((d) => d.docId));
+  });
+
+  it("les pages au-delà de l'ordre fourni restent en ordre BM25", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    const a = docs.find((d) => d.docId === "a")!;
+    const original = a.pages.map((p) => p.page);
+    calls[0]!.resolve({
+      docs, pagesOrderByDoc: new Map([["a", [original[1]!]]]), bonusByDoc: new Map([["a", 0]]),
+      failedDocIds: new Set<string>(), done: Promise.resolve(),
+    } as unknown as RankResult);
+    await flushMicro();
+    const got = resultOf(seen[0]!).docs.find((d) => d.docId === "a")!.pages.map((p) => p.page);
+    expect(got).toEqual([original[1], ...original.filter((p) => p !== original[1])]);
+  });
+
+  it("nouvelle requête : l'exécution précédente est annulée et sa résolution tardive ignorée", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const first = calls[0]!;
+    controller.setQuery("alpha");
+    expect(first.signal!.aborted).toBe(true);
+    clock.advance(200); // requête à un mot : publiée tout de suite
+    const published = seen.length;
+    first.resolve(reversed(first.docs as Parameters<typeof reversed>[0]));
+    first.onWindow?.({ docs: [], pagesOrderByDoc: new Map(), bonusByDoc: new Map(), failedDocIds: new Set() });
+    clock.advance(RERANK_GRACE_MS * 3);
+    await flushMicro();
+    expect(seen).toHaveLength(published);
+    expect(resultOf(controller.getViewModel()).ranking).toBe("bm25");
+  });
+
+  it("une nouvelle exécution (même requête) annule la précédente", async () => {
+    const { controller, clock, calls, source } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    source.emit();
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.signal!.aborted).toBe(true);
+    expect(calls[1]!.signal!.aborted).toBe(false);
+  });
+
+  it("dispose annule le re-classement et rien n'est publié ensuite", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    controller.dispose();
+    expect(calls[0]!.signal!.aborted).toBe(true);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    clock.advance(RERANK_GRACE_MS * 2);
+    await flushMicro();
+    expect(seen).toHaveLength(0);
+    expect(clock.pending).toBe(0);
+  });
+
+  it("échec du ranker avant la grâce : ordre BM25 publié aussitôt, avertissement journalisé", async () => {
+    const { controller, clock, calls, seen, onWarn } = rerankSetup();
+    const base = bm25Order("alpha beta");
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const boom = new Error("boom");
+    calls[0]!.reject(boom);
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).ranking).toBe("bm25");
+    expect(resultOf(seen[0]!).docs.map((d) => d.docId)).toEqual(base);
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("proximity"), boom);
+    clock.advance(1000);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("échec du ranker après la grâce : BM25 conservé, avertissement, pas de seconde publication", async () => {
+    const { controller, clock, calls, seen, onWarn } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    clock.advance(RERANK_GRACE_MS);
+    calls[0]!.reject(new Error("late boom"));
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("un rejet d'annulation (signal annulé) n'est pas journalisé", async () => {
+    const { controller, clock, calls, onWarn } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    controller.setQuery("");
+    calls[0]!.reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+    await flushMicro();
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it("sans option rerank, deux mots : publié tout de suite avec ranking bm25", () => {
+    const { controller, clock, seen } = setup(new FakeSource(RR_PAGES, RR_DOCS));
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).ranking).toBe("bm25");
+  });
+
+  it("pendant le chargement partiel : pas de re-classement avant la fenêtre de regroupement", async () => {
+    const { controller, clock, calls, source } = rerankSetup({ phase: "ready" });
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    expect(calls).toHaveLength(1);
+    source.phase = "loading";
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    source.emit();
+    source.emit();
+    source.emit();
+    expect(calls).toHaveLength(1); // coalescé : pas de nouveau run immédiat
+    clock.advance(150);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.signal!.aborted).toBe(true);
+  });
+
+  it("invalidate() relance proprement le re-classement de la requête courante", async () => {
+    const { controller, clock, calls } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    controller.invalidate();
+    expect(calls[0]!.signal!.aborted).toBe(true); // le snapshot périmé ne sera jamais publié
+    expect(calls).toHaveLength(1); // relance coalescée
+    clock.advance(150);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.signal!.aborted).toBe(false);
+  });
+
+  it("invalidate() sans requête active ou après dispose : sans effet", () => {
+    const { controller, calls } = rerankSetup();
+    controller.invalidate();
+    controller.dispose();
+    controller.invalidate();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("M1 : runs rapprochés (150 ms) avec un ranker lent : l'ordre BM25 finit par être publié", async () => {
+    const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    for (let i = 0; i < 6; i++) {
+      source.emit();
+      clock.advance(150);
+    }
+    expect(calls.length).toBeGreaterThan(2); // le ranker a bien été relancé à chaque fenêtre
+    expect(seen.length).toBeGreaterThan(0);
+    expect(resultOf(seen[0]!).ranking).toBe("bm25");
+  });
+
+  it("grâce mesurée depuis la première demande, publiée avec le BM25 du dernier run", () => {
+    const { controller, clock, calls, seen, source } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    clock.advance(200);
+    source.emit(); // run 2 à t = 400 : la grâce de t = 200 court toujours
+    expect(seen).toHaveLength(0);
+    clock.advance(100); // t = 500 = 200 + 300
+    expect(seen).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("une liste déjà affichée pour la même requête n'est pas remplacée par du BM25 pendant une relance lente", async () => {
+    const { controller, clock, calls, seen, source } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    source.emit();
+    clock.advance(RERANK_GRACE_MS * 2);
+    expect(seen).toHaveLength(1); // pas de retour à BM25 (scintillement)
+    calls[1]!.resolve(reversed(calls[1]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen).toHaveLength(2);
+    expect(resultOf(seen[1]!).ranking).toBe("proximity");
+  });
+
+  it("M2 : un onChange qui lève à la publication du re-classement est journalisé, pas perdu", async () => {
+    const source = new FakeSource(RR_PAGES, RR_DOCS);
+    const calls: Call[] = [];
+    const rerank = {
+      rank: (q: string, docs: readonly { docId: string }[]) =>
+        new Promise((resolve, reject) => calls.push({ query: q, docs, signal: undefined, onWindow: undefined, resolve: resolve as Call["resolve"], reject })),
+    } as unknown as RerankPort;
+    const clock = new FakeClock();
+    const onWarn = vi.fn();
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const controller = createSearchController({
+      source, schedule: clock.schedule, clear: clock.clear, rerank, onWarn,
+      onChange: () => {
+        throw new Error("render exploded");
+      },
+    });
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("publication"), expect.objectContaining({ message: "render exploded" }));
+    // minuteur de grâce : onChange qui lève
+    controller.setQuery("alpha beta ");
+    clock.advance(200);
+    clock.advance(RERANK_GRACE_MS);
+    expect(onWarn).toHaveBeenCalledTimes(2);
+    await new Promise((r) => setTimeout(r, 0));
+    process.off("unhandledRejection", unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it("F1 : toutes les mesures en échec : ranking reste bm25 ; une seule mesure réussie suffit pour proximity", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    const allFailed = { ...reversed(docs), failedDocIds: new Set(docs.map((d) => d.docId)) };
+    calls[0]!.resolve(allFailed as RankResult);
+    await flushMicro();
+    expect(resultOf(seen.at(-1)!).ranking).toBe("bm25");
+    calls[0]!.onWindow!({ ...reversed(docs), failedDocIds: new Set([docs[0]!.docId]) } as never);
+    expect(resultOf(seen.at(-1)!).ranking).toBe("proximity");
+  });
+
+  it("5 : pas de ranking proximity si l'ordre n'a pas changé ; oui si seules les 5 premières pages changent", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    const same = { docs, pagesOrderByDoc: new Map(), bonusByDoc: new Map(docs.map((d) => [d.docId, 0])), failedDocIds: new Set<string>(), done: Promise.resolve() };
+    calls[0]!.resolve(same as unknown as RankResult);
+    await flushMicro();
+    expect(resultOf(seen.at(-1)!).ranking).toBe("bm25");
+    const a = docs.find((d) => d.docId === "a")!;
+    const pagesOnly = { ...same, pagesOrderByDoc: new Map([["a", a.pages.map((p) => p.page).reverse()]]) };
+    calls[0]!.onWindow!(pagesOnly as never);
+    expect(resultOf(seen.at(-1)!).ranking).toBe("proximity");
+  });
+
+  it("5 : après une relance identique, le view-model proximity republié garde le même contenu (statut inchangé)", async () => {
+    const { controller, clock, calls, seen, source } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    source.emit();
+    calls[1]!.resolve(reversed(calls[1]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    const [x, y] = [resultOf(seen[0]!), resultOf(seen[1]!)];
+    expect(y.ranking).toBe(x.ranking);
+    expect(y.docs.map((d) => d.docId)).toEqual(x.docs.map((d) => d.docId));
+  });
+
+  it("6 : invalidate pendant la coalescence du chargement annule le re-classement en vol", async () => {
+    const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    source.emit(); // coalescence armée
+    controller.invalidate();
+    expect(calls[0]!.signal!.aborted).toBe(true);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen.filter((v) => v.kind === "results" && v.ranking === "proximity")).toHaveLength(0);
+  });
+
+  it("6 : invalidate suivi d'une notification du store ne donne qu'un seul run", () => {
+    const { controller, clock, calls, source } = rerankSetup();
+    controller.setQuery("alpha beta");
+    clock.advance(200);
+    controller.invalidate();
+    source.emit(); // run immédiat : annule la relance coalescée devenue inutile
+    expect(calls).toHaveLength(2);
+    clock.advance(1000);
+    expect(calls).toHaveLength(2);
   });
 });

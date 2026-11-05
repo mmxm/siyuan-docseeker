@@ -44,8 +44,22 @@ function fakeService(options: FakeOptions = {}) {
     if (options.noIndexes?.has(docId)) return { boxes: ADJACENT.boxes, ordinals: ADJACENT.ordinals };
     return options.adjacent?.has(docId) ? ADJACENT : FAR;
   });
-  return { getPageMatches, calls, maxOpen: () => maxOpen };
+  const getPagesMatches = vi.fn(async (docId: string, pages: readonly number[], query: string, signal?: AbortSignal) => {
+    const out = new Map<number, PageMatch>();
+    for (const page of pages) out.set(page, await getPageMatches(docId, page, query, signal));
+    return out;
+  });
+  return { getPageMatches, getPagesMatches, calls, maxOpen: () => maxOpen };
 }
+
+/** Adapte un décodeur page par page à la dépendance `getPagesMatches`. */
+const perPage =
+  (fn: (docId: string, page: number) => Promise<PageMatch>) =>
+  async (docId: string, pages: readonly number[]): Promise<Map<number, PageMatch>> => {
+    const out = new Map<number, PageMatch>();
+    for (const page of pages) out.set(page, await fn(docId, page));
+    return out;
+  };
 
 const ids = (docs: readonly RankableDoc[]): string[] => docs.map((d) => d.docId);
 
@@ -58,7 +72,7 @@ describe("createProximityRanker", () => {
 
   it("does nothing for a single-word query", async () => {
     const svc = fakeService();
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const docs = [doc(1), doc(2)];
     const out = await ranker.rank("contrat", docs, {});
     await out.done;
@@ -70,7 +84,7 @@ describe("createProximityRanker", () => {
 
   it("does nothing for an empty list or an unsearchable query", async () => {
     const svc = fakeService();
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     expect((await ranker.rank("contrat travail", [], {})).docs).toEqual([]);
     expect((await ranker.rank("  ", [doc(1)], {})).docs).toHaveLength(1);
     expect(svc.calls).toEqual([]);
@@ -78,17 +92,17 @@ describe("createProximityRanker", () => {
 
   it("moves an adjacent-words document ahead of a better BM25 one and reports its bonus", async () => {
     const svc = fakeService({ adjacent: new Set(["d2"]) });
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const out = await ranker.rank("contrat travail", [doc(1, 1000), doc(2, 900)], {});
     expect(ids(out.docs)).toEqual(["d2", "d1"]);
     expect(out.bonusByDoc.get("d2")).toBe(5000);
     expect(out.bonusByDoc.get("d1")).toBe(0);
-    expect(svc.getPageMatches).toHaveBeenCalledWith("d2", 1, "contrat travail", undefined);
+    expect(svc.getPagesMatches).toHaveBeenCalledWith("d2", [1, 2], "contrat travail", undefined);
   });
 
   it("orders pages by distinct words, then score, then page", async () => {
     const getPageMatches = vi.fn(async (_d: string, page: number) => (page === 3 ? ADJACENT : FAR));
-    const ranker = createProximityRanker({ getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: perPage(getPageMatches) });
     const d: RankableDoc = { docId: "x", title: "X", relevance: 1, pages: [{ page: 1, score: 9 }, { page: 2, score: 8 }, { page: 3, score: 1 }] };
     const out = await ranker.rank("contrat travail", [d], {});
     expect(out.pagesOrderByDoc.get("x")).toEqual([3, 1, 2]);
@@ -96,21 +110,21 @@ describe("createProximityRanker", () => {
 
   it("only measures the first PROXIMITY_PAGES pages of each document", async () => {
     const svc = fakeService();
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     await ranker.rank("contrat travail", [doc(1, 10, [1, 2, 3, 4, 5, 6, 7])], {});
     expect(svc.calls.map((c) => c.page)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("never decodes more than 2 documents at once", async () => {
     const svc = fakeService({ delayMs: 3 });
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     await ranker.rank("contrat travail", Array.from({ length: 10 }, (_, i) => doc(i)), {});
     expect(svc.maxOpen()).toBe(2);
   });
 
   it("returns after window 1 and processes the following windows in the background, up to RERANK_MAX_DOCS", async () => {
     const svc = fakeService({ adjacent: new Set(["d20", "d70"]) });
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const seen: ProximityResult<RankableDoc>[] = [];
     const all = Array.from({ length: 100 }, (_, i) => doc(i, 1000 - i));
     const first = await ranker.rank("contrat travail", all, { onWindow: (r) => void seen.push(r) });
@@ -130,7 +144,7 @@ describe("createProximityRanker", () => {
 
   it("rejects at once when already aborted, without any work", async () => {
     const svc = fakeService();
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const controller = new AbortController();
     controller.abort();
     await expect(ranker.rank("contrat travail", [doc(1)], { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
@@ -139,7 +153,7 @@ describe("createProximityRanker", () => {
 
   it("rejects when aborted during window 1 and starts no further document", async () => {
     const svc = fakeService({ delayMs: 5 });
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const controller = new AbortController();
     const promise = ranker.rank("contrat travail", Array.from({ length: 10 }, (_, i) => doc(i)), { signal: controller.signal });
     await new Promise((r) => setTimeout(r, 2));
@@ -152,7 +166,7 @@ describe("createProximityRanker", () => {
 
   it("stops the background windows on abort: no further call, no onWindow", async () => {
     const svc = fakeService({ delayMs: 2 });
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const controller = new AbortController();
     const onWindow = vi.fn();
     const out = await ranker.rank("contrat travail", Array.from({ length: 60 }, (_, i) => doc(i)), { signal: controller.signal, onWindow });
@@ -167,7 +181,7 @@ describe("createProximityRanker", () => {
   it("gives bonus 0, keeps BM25 order and warns when a document fails to decode", async () => {
     const svc = fakeService({ fail: new Set(["d1"]), adjacent: new Set(["d1", "d2"]) });
     const onWarn = vi.fn();
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches, onWarn });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches, onWarn });
     const out = await ranker.rank("contrat travail", [doc(1, 1000), doc(2, 900), doc(3, 800)], {});
     expect(out.bonusByDoc.get("d1")).toBe(0);
     expect(out.bonusByDoc.get("d2")).toBe(5000);
@@ -181,7 +195,7 @@ describe("createProximityRanker", () => {
   it("warns instead of guessing when the match carries no term indexes", async () => {
     const svc = fakeService({ noIndexes: new Set(["d1"]) });
     const onWarn = vi.fn();
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches, onWarn });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches, onWarn });
     const out = await ranker.rank("contrat travail", [doc(1)], {});
     expect(out.bonusByDoc.get("d1")).toBe(0);
     expect(onWarn).toHaveBeenCalledTimes(1);
@@ -193,7 +207,7 @@ describe("createProximityRanker", () => {
       if (failing) throw new Error("x");
       return ADJACENT;
     });
-    const ranker = createProximityRanker({ getPageMatches, onWarn: () => undefined });
+    const ranker = createProximityRanker({ getPagesMatches: perPage(getPageMatches), onWarn: () => undefined });
     expect((await ranker.rank("contrat travail", [doc(1)], {})).bonusByDoc.get("d1")).toBe(0);
     failing = false;
     expect((await ranker.rank("contrat travail", [doc(1)], {})).bonusByDoc.get("d1")).toBe(5000);
@@ -201,7 +215,7 @@ describe("createProximityRanker", () => {
 
   it("caches per query on docId + top pages", async () => {
     const svc = fakeService({ adjacent: new Set(["d1"]) });
-    const ranker = createProximityRanker({ getPageMatches: svc.getPageMatches });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
     const docs = [doc(1), doc(2)];
     await ranker.rank("contrat travail", docs, {});
     const n = svc.calls.length;
@@ -215,5 +229,83 @@ describe("createProximityRanker", () => {
     // Autre requête => cache vidé.
     await ranker.rank("travail contrat", docs, {});
     expect(svc.calls.length).toBe(n + 2 + 4);
+  });
+  it("invalidate(docId) drops that document from the cache so it is measured again", async () => {
+    const svc = fakeService({ adjacent: new Set(["d1"]) });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
+    const docs = [doc(1), doc(2)];
+    await ranker.rank("contrat travail", docs, {});
+    const n = svc.calls.length;
+    ranker.invalidate("d1");
+    await ranker.rank("contrat travail", docs, {});
+    expect(svc.calls.slice(n).map((c) => c.docId)).toEqual(["d1", "d1"]);
+  });
+
+  it("invalidate during a measurement does not cache the stale result", async () => {
+    const svc = fakeService({ adjacent: new Set(["d1"]), delayMs: 5 });
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
+    const docs = [doc(1)];
+    const first = ranker.rank("contrat travail", docs, {});
+    ranker.invalidate("d1");
+    await first;
+    const n = svc.calls.length;
+    await ranker.rank("contrat travail", docs, {});
+    expect(svc.calls.length).toBeGreaterThan(n);
+  });
+  it("decodes each document once: one getPagesMatches call carrying its top pages", async () => {
+    const svc = fakeService();
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
+    await ranker.rank("contrat travail", [doc(1, 10, [1, 2, 3, 4, 5, 6, 7]), doc(2)], {});
+    expect(svc.getPagesMatches).toHaveBeenCalledTimes(2);
+    expect(svc.getPagesMatches.mock.calls[0]?.[1]).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("reports failedDocIds and aggregates failures into a single warning (count + first detail)", async () => {
+    const svc = fakeService({ fail: new Set(["d1", "d2"]) });
+    const onWarn = vi.fn();
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches, onWarn });
+    const out = await ranker.rank("contrat travail", [doc(1), doc(2), doc(3)], {});
+    expect([...out.failedDocIds].sort()).toEqual(["d1", "d2"]);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(onWarn.mock.calls[0]?.[0]).toContain("2 document");
+    expect(onWarn.mock.calls[0]?.[0]).toContain("d1");
+    expect(onWarn.mock.calls[0]?.[1]).toBeInstanceOf(Error);
+  });
+
+  it("reports no failure when everything is measured", async () => {
+    const svc = fakeService();
+    const onWarn = vi.fn();
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches, onWarn });
+    const out = await ranker.rank("contrat travail", [doc(1)], {});
+    expect(out.failedDocIds.size).toBe(0);
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it("a throwing onWindow callback is reported separately and does not stop the next windows", async () => {
+    const svc = fakeService();
+    const onWarn = vi.fn();
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches, onWarn });
+    const docs = Array.from({ length: RERANK_WINDOW * 3 }, (_, i) => doc(i + 1));
+    const onWindow = vi.fn(() => {
+      throw new Error("render exploded");
+    });
+    const out = await ranker.rank("contrat travail", docs, { onWindow });
+    await out.done;
+    expect(onWindow).toHaveBeenCalledTimes(2);
+    const messages = onWarn.mock.calls.map((c) => String(c[0]));
+    expect(messages.filter((m) => m.includes("onWindow"))).toHaveLength(2);
+    expect(messages.some((m) => m.includes("background reranking failed"))).toBe(false);
+  });
+
+  it("keeps caching normally for a new query after invalidations on the previous one", async () => {
+    const svc = fakeService();
+    const ranker = createProximityRanker({ getPagesMatches: svc.getPagesMatches });
+    const docs = [doc(1)];
+    await ranker.rank("contrat travail", docs, {});
+    ranker.invalidate("d1");
+    await ranker.rank("travail contrat", docs, {});
+    const n = svc.getPagesMatches.mock.calls.length;
+    await ranker.rank("travail contrat", docs, {});
+    expect(svc.getPagesMatches.mock.calls.length).toBe(n);
   });
 });

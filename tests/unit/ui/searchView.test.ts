@@ -14,8 +14,13 @@ function doc(id: string, pages: number[], title = `Titre ${id}`) {
     pages: pages.map((page) => ({ page, score: 1 })),
   };
 }
-function results(docs: ReturnType<typeof doc>[], partial = false, failedCount = 0): SearchViewModel {
-  return { kind: "results", query: "chat", docs, partial, total: docs.length, failedCount };
+function results(
+  docs: ReturnType<typeof doc>[],
+  partial = false,
+  failedCount = 0,
+  ranking: "bm25" | "proximity" = "bm25",
+): SearchViewModel {
+  return { kind: "results", query: "chat", docs, partial, total: docs.length, failedCount, ranking };
 }
 
 let host: HTMLElement;
@@ -684,6 +689,87 @@ describe("mountSearchView", () => {
       update(results([doc("a", range(6))]));
       more()!.click();
       expect(less()!.textContent).toBe("Collapse");
+    });
+  });
+  describe("classement affiné (proximité)", () => {
+    const more = () => host.querySelector<HTMLButtonElement>("button.docseeker-more");
+    const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i + 1);
+    const REFINED = "Classement affiné par proximité des mots";
+
+    it("n'annonce rien en classement bm25 et annonce une seule fois le passage à proximity", () => {
+      mount();
+      update(results([doc("a", [1]), doc("b", [1])]));
+      expect(status()).not.toContain(REFINED);
+      const region = host.querySelector(".docseeker-status")!;
+      const texts: string[] = [];
+      new MutationObserver(() => texts.push(region.textContent ?? "")).observe(region, {
+        childList: true, characterData: true, subtree: true,
+      });
+      update(results([doc("b", [1]), doc("a", [1])], false, 0, "proximity"));
+      expect(status()).toContain(REFINED);
+      update(results([doc("a", [1]), doc("b", [1])], false, 0, "proximity")); // fenêtre suivante
+      expect(status().match(/affiné/g)).toHaveLength(1);
+      return Promise.resolve().then(() => {
+        expect(texts.filter((t) => t.includes(REFINED))).toHaveLength(1);
+      });
+    });
+
+    it("utilise la clé i18n rankingRefined", () => {
+      mount({ t: (k) => (k === "rankingRefined" ? "Refined" : k) });
+      update(results([doc("a", [1])], false, 0, "proximity"));
+      expect(status()).toContain("Refined");
+    });
+
+    it("réordonne les documents sans reconstruire leurs cartes", () => {
+      mount();
+      update(results([doc("a", [1, 2]), doc("b", [1, 2])]));
+      const before = attach.mock.calls.length;
+      const li = host.querySelector('[data-doc-id="a"]')!.closest("li")!;
+      update(results([doc("b", [1, 2]), doc("a", [1, 2])], false, 0, "proximity"));
+      expect(attach.mock.calls.length).toBe(before);
+      expect(detach).not.toHaveBeenCalled();
+      expect(Array.from(host.querySelectorAll("li.docseeker-doc")).map((e) => e.querySelector("button")!.dataset["docId"])).toEqual(["b", "a"]);
+      expect(host.querySelector('[data-doc-id="a"]')!.closest("li")).toBe(li);
+    });
+
+    it("garde l'état déplié et le focus au ré-ordonnancement des documents", () => {
+      mount();
+      update(results([doc("a", range(8)), doc("b", range(2))]));
+      more()!.click();
+      expect(cards().filter((c) => c.dataset["docId"] === "a")).toHaveLength(8);
+      const target = cards().find((c) => c.dataset["docId"] === "a" && c.dataset["page"] === "7")!;
+      target.focus();
+      update(results([doc("b", range(2)), doc("a", range(8))], false, 0, "proximity"));
+      expect(cards().filter((c) => c.dataset["docId"] === "a")).toHaveLength(8);
+      expect(document.activeElement).toBe(target);
+    });
+
+    it("garde l'état déplié quand l'ordre des 5 premières pages change (reconstruction), et le focus par docId|page", () => {
+      mount();
+      update(results([doc("a", range(8))]));
+      more()!.click();
+      cards().find((c) => c.dataset["page"] === "7")!.focus();
+      update(results([doc("a", [3, 1, 2, 4, 5, 6, 7, 8])], false, 0, "proximity"));
+      const pages = cards().map((c) => c.dataset["page"]);
+      expect(pages).toEqual(["3", "1", "2", "4", "5", "6", "7", "8"]);
+      expect((document.activeElement as HTMLElement).dataset["page"]).toBe("7");
+    });
+
+    it("ne reconstruit pas un document dont les 5 premières pages gardent leur ordre", () => {
+      mount();
+      update(results([doc("a", range(8))]));
+      const before = attach.mock.calls.length;
+      update(results([doc("a", range(8))], false, 0, "proximity"));
+      expect(attach.mock.calls.length).toBe(before);
+    });
+
+    it("reconstruit seulement le document dont l'ordre des 5 premières pages a changé", () => {
+      mount();
+      update(results([doc("a", [1, 2, 3]), doc("b", [1, 2, 3])]));
+      const before = attach.mock.calls.length;
+      update(results([doc("a", [1, 2, 3]), doc("b", [2, 1, 3])], false, 0, "proximity"));
+      expect(attach.mock.calls.length).toBe(before + 3);
+      expect(detach).toHaveBeenCalledTimes(3);
     });
   });
 });

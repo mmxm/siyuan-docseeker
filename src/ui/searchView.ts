@@ -72,6 +72,7 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   failedMany: "{n} index illisibles : réindexer",
   cardLabel: "{title}, p. {page}",
   cardPage: "p. {page}",
+  rankingRefined: "Classement affiné par proximité des mots",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -396,9 +397,10 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       case "results": {
         const pages = vm.docs.reduce((n, d) => n + d.matchingPages, 0);
         const base = `${count(vm.total, "docOne", "docMany")}, ${count(pages, "pageOne", "pageMany")}`;
-        setStatus(withFailed(vm.partial ? `${base}${tr("partialSuffix")}` : base, vm.failedCount), {
-          reindex: vm.failedCount > 0,
-        });
+        const counted = vm.partial ? `${base}${tr("partialSuffix")}` : base;
+        // Texte identique tant que le classement reste affiné : la région live ne le ré-annonce pas.
+        const refined = vm.ranking === "proximity" ? `${counted}. ${tr("rankingRefined")}` : counted;
+        setStatus(withFailed(refined, vm.failedCount), { reindex: vm.failedCount > 0 });
         renderResults(vm.docs, vm.query);
         break;
       }

@@ -3,9 +3,10 @@
  * rendu des vignettes, vue) et le clic vers l'ouverture du PDF surlignée. Tout est injecté : aucun accès
  * direct à `window`, au noyau ou à SiYuan (voir `index.ts` pour le câblage réel).
  */
-import { decodePageMatches as realDecodePageMatches } from "./core/codec/decode";
+import { decodePageMatches as realDecodePageMatches, decodePagesMatches as realDecodePagesMatches } from "./core/codec/decode";
 import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
+import { createProximityRanker } from "./search/proximityRanker";
 import { createSearchController } from "./search/searchController";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
@@ -37,6 +38,8 @@ export interface SearchTabDeps {
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly onWarn: (message: string, error?: unknown) => void;
   readonly decodePageMatches?: typeof realDecodePageMatches;
+  /** Décodeur multi-pages du re-classement ; absent avec un `decodePageMatches` injecté : repli page par page. */
+  readonly decodePagesMatches?: typeof realDecodePagesMatches;
   readonly openPdfAtPage?: typeof realOpenPdfAtPage;
   readonly observerFactory?: (
     cb: (entries: { target: Element; isIntersecting: boolean }[]) => void,
@@ -126,14 +129,6 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
 
   const searchStore = deps.sharedIndex.store;
   const controllerListeners = new Set<() => void>();
-  const controller = createSearchController({
-    source: searchStore,
-    schedule,
-    clear,
-    onChange: () => {
-      for (const listener of [...controllerListeners]) listener();
-    },
-  });
   const pageMatches = createPageMatchService({
     readDsx: async (docId) => {
       const bytes = await deps.store.read(`${docId}${DSX_SUFFIX}`);
@@ -141,6 +136,23 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       return bytes;
     },
     decode: deps.decodePageMatches ?? realDecodePageMatches,
+    ...((deps.decodePagesMatches ?? (deps.decodePageMatches ? undefined : realDecodePagesMatches))
+      ? { decodePages: (deps.decodePagesMatches ?? realDecodePagesMatches) }
+      : {}),
+  });
+  const ranker = createProximityRanker({
+    getPagesMatches: (docId, pages, query, signal) => pageMatches.getPagesMatches(docId, pages, query, signal),
+    onWarn,
+  });
+  const controller = createSearchController({
+    source: searchStore,
+    schedule,
+    clear,
+    onChange: () => {
+      for (const listener of [...controllerListeners]) listener();
+    },
+    onWarn,
+    rerank: ranker,
   });
   const renderer = createPdfRenderer({
     loadDocument: deps.loadDocument,
@@ -325,7 +337,11 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   };
   const unsubscribeInvalidate = deps.sharedIndex.onInvalidate((docIds) => {
     if (disposed) return;
-    for (const docId of docIds) pageMatches.invalidate(docId);
+    for (const docId of docIds) {
+      pageMatches.invalidate(docId);
+      ranker.invalidate(docId);
+    }
+    controller.invalidate(); // relance le re-classement avec des mesures fraîches
   });
   const unsubscribeStatus = deps.sharedIndex.onStatus(syncSharedError);
   syncSharedError();

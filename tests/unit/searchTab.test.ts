@@ -18,10 +18,10 @@ function data(sourcePath: string, over: Partial<SearchIndexData> = {}): SearchIn
     pdfModifiedMs: 456,
     pageTermCounts: new Uint32Array([1, 2, 3]),
     postings: {
-      terms: ["chat"],
-      offsets: new Uint32Array([0, 2]),
-      pages: new Uint32Array([2, 3]),
-      termFrequencies: new Uint32Array([1, 1]),
+      terms: ["chat", "chien"],
+      offsets: new Uint32Array([0, 2, 4]),
+      pages: new Uint32Array([2, 3, 2, 3]),
+      termFrequencies: new Uint32Array([1, 1, 1, 1]),
     },
     ...over,
   };
@@ -134,6 +134,74 @@ afterEach(() => {
 });
 
 describe("mountSearchTab", () => {
+  describe("re-classement par proximité", () => {
+    const TWO_TERMS = {
+      boxes: [
+        { x: 0.1, y: 0.2, width: 0.05, height: 0.02 },
+        { x: 0.16, y: 0.2, width: 0.05, height: 0.02 },
+      ],
+      ordinals: [0, 1],
+      termIndexes: [0, 1],
+    };
+
+    const FAR_TERMS = {
+      ...TWO_TERMS,
+      boxes: [
+        { x: 0.1, y: 0.2, width: 0.05, height: 0.02 },
+        { x: 0.7, y: 0.2, width: 0.05, height: 0.02 },
+      ],
+    };
+
+    it("branche le ranker sur le service de correspondances et annonce le classement affiné", async () => {
+      const h = harness();
+      // Page 3 : mots côte à côte ; page 2 : mots éloignés => l'ordre des pages change (3 avant 2).
+      h.decodePageMatches.mockImplementation(async (_b: Uint8Array, page: number) => (page === 3 ? TWO_TERMS : FAR_TERMS));
+      const tab = mountSearchTab(h.host, h.deps);
+      await flush();
+      await type(h.host, "chat chien");
+      expect(h.decodePageMatches).toHaveBeenCalled();
+      expect(h.host.querySelector(".docseeker-status")!.textContent).toContain("Classement affiné par proximité des mots");
+      expect(cards(h.host).map((c) => c.dataset["page"])).toEqual(["3", "2"]);
+      tab.dispose();
+    });
+
+    it("décode chaque document en une seule passe quand un décodeur multi-pages est fourni", async () => {
+      const h = harness();
+      const decodePages = vi.fn(async (_b: Uint8Array, pages: readonly number[]) => new Map(pages.map((p) => [p, TWO_TERMS])));
+      h.deps = { ...h.deps, decodePagesMatches: decodePages as never };
+      const tab = mountSearchTab(h.host, h.deps);
+      await flush();
+      await type(h.host, "chat chien");
+      expect(decodePages).toHaveBeenCalledTimes(1);
+      expect(decodePages.mock.calls[0]?.[1]).toEqual([2, 3]);
+      tab.dispose();
+    });
+
+    it("journalise l'échec de mesure via onWarn et garde l'ordre BM25", async () => {
+      const h = harness(); // le décodeur par défaut ne fournit pas termIndexes
+      const tab = mountSearchTab(h.host, h.deps);
+      await flush();
+      await type(h.host, "chat chien");
+      expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Proximity measure failed"), expect.anything());
+      expect(cards(h.host).map((c) => c.dataset["page"])).toEqual(["2", "3"]);
+      tab.dispose();
+    });
+
+    it("un document réindexé est mesuré de nouveau (cache du ranker invalidé, re-classement relancé)", async () => {
+      const h = harness();
+      h.decodePageMatches.mockImplementation(async () => TWO_TERMS);
+      const tab = mountSearchTab(h.host, h.deps);
+      await flush();
+      await type(h.host, "chat chien");
+      const before = h.decodePageMatches.mock.calls.length;
+      h.emit({ type: "indexed", path: PDF_A, pages: 3 });
+      await vi.advanceTimersByTimeAsync(5000);
+      await flush();
+      expect(h.decodePageMatches.mock.calls.length).toBeGreaterThan(before);
+      tab.dispose();
+    });
+  });
+
   it("affiche les résultats de l'index partagé sans le charger lui-même (manifest.json ignoré)", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);

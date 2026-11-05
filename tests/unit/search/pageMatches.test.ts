@@ -194,4 +194,95 @@ describe("createPageMatchService", () => {
     const { service } = setup();
     await expect(service.getPageMatches("d", 1, "  ")).resolves.toBeDefined();
   });
+  describe("getPagesMatches", () => {
+    function setupPages() {
+      const readDsx = vi.fn(async () => new Uint8Array(10));
+      const decode = vi.fn(async (_b: Uint8Array, page: number): Promise<PageMatch> => ({ boxes: [], ordinals: [page] }) as unknown as PageMatch);
+      const decodePages = vi.fn(async (_b: Uint8Array, pages: readonly number[]) =>
+        new Map(pages.map((p) => [p, { boxes: [], ordinals: [p] } as unknown as PageMatch])),
+      );
+      const service = createPageMatchService({ readDsx, decode: decode as never, decodePages: decodePages as never });
+      return { readDsx, decode, decodePages, service };
+    }
+
+    it("lit le fichier et decode une seule fois pour plusieurs pages, resultats identiques a l'appel page par page", async () => {
+      const { service, readDsx, decodePages, decode } = setupPages();
+      const many = await service.getPagesMatches("d", [1, 2, 3], "plan");
+      expect(readDsx).toHaveBeenCalledTimes(1);
+      expect(decodePages).toHaveBeenCalledTimes(1);
+      expect(decodePages.mock.calls[0]?.[1]).toEqual([1, 2, 3]);
+      for (const page of [1, 2, 3]) expect(many.get(page)).toEqual(await service.getPageMatches("d", page, "plan"));
+      expect(decode).not.toHaveBeenCalled(); // servi par le cache rempli page par page
+    });
+
+    it("ne decode que les pages absentes du cache", async () => {
+      const { service, decodePages } = setupPages();
+      await service.getPagesMatches("d", [1, 2], "plan");
+      await service.getPagesMatches("d", [2, 3], "plan");
+      expect(decodePages).toHaveBeenCalledTimes(2);
+      expect(decodePages.mock.calls[1]?.[1]).toEqual([3]);
+      await service.getPagesMatches("d", [1, 2, 3], "plan");
+      expect(decodePages).toHaveBeenCalledTimes(2);
+    });
+
+    it("mutualise un appel en vol et fusionne les doublons", async () => {
+      const { service, decodePages } = setupPages();
+      const [a, b] = await Promise.all([
+        service.getPagesMatches("d", [1, 1, 2], "plan"),
+        service.getPagesMatches("d", [1, 2], "plan"),
+      ]);
+      expect(decodePages).toHaveBeenCalledTimes(1);
+      expect([...a.keys()]).toEqual([1, 2]);
+      expect([...b.keys()]).toEqual([1, 2]);
+    });
+
+    it("liste vide : table vide sans lecture", async () => {
+      const { service, readDsx } = setupPages();
+      expect((await service.getPagesMatches("d", [], "plan")).size).toBe(0);
+      expect(readDsx).not.toHaveBeenCalled();
+    });
+
+    it("signal deja annule : rejette sans travail ; annule en cours : rejette sans interrompre le partage", async () => {
+      const { service, readDsx } = setupPages();
+      const ac = new AbortController();
+      ac.abort();
+      await expect(service.getPagesMatches("d", [1], "plan", ac.signal)).rejects.toMatchObject({ name: "AbortError" });
+      expect(readDsx).not.toHaveBeenCalled();
+      const gate = deferred<Uint8Array<ArrayBuffer>>();
+      readDsx.mockImplementationOnce(() => gate.promise);
+      const live = new AbortController();
+      const pending = service.getPagesMatches("d", [1], "plan", live.signal);
+      live.abort();
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      gate.resolve(new Uint8Array(2));
+      await service.getPagesMatches("d", [1], "plan"); // le travail partagé a abouti : résultat en cache
+      expect(readDsx).toHaveBeenCalledTimes(1);
+    });
+
+    it("invalidate pendant l'appel : aucun resultat perime en cache", async () => {
+      const { service, readDsx, decodePages } = setupPages();
+      const gate = deferred<Uint8Array<ArrayBuffer>>();
+      readDsx.mockImplementationOnce(() => gate.promise);
+      const stale = service.getPagesMatches("d", [1, 2], "plan");
+      service.invalidate("d");
+      gate.resolve(new Uint8Array(2));
+      await stale;
+      await service.getPagesMatches("d", [1, 2], "plan");
+      expect(decodePages).toHaveBeenCalledTimes(2);
+    });
+
+    it("propage une erreur de decodage sans mettre en cache", async () => {
+      const { service, decodePages } = setupPages();
+      decodePages.mockRejectedValueOnce(new Error("corrupt"));
+      await expect(service.getPagesMatches("d", [1, 2], "plan")).rejects.toThrow("corrupt");
+      await expect(service.getPagesMatches("d", [1, 2], "plan")).resolves.toBeDefined();
+    });
+
+    it("sans decodeur multi-pages injecte avec un decode personnalise : repli page par page", async () => {
+      const { service, decode } = setup();
+      const out = await service.getPagesMatches("d", [1, 2], "plan");
+      expect(decode).toHaveBeenCalledTimes(2);
+      expect([...out.keys()]).toEqual([1, 2]);
+    });
+  });
 });
