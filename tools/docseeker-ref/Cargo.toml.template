@@ -1,0 +1,12 @@
+# Modele : scripts/gen-docseeker-ranking-fixture.mjs substitue le marqueur de chemin ci-dessous par
+# $DOCSEEKER_RUST_DIR/crates/search-core et ecrit le Cargo.toml dans un dossier de build temporaire
+# (Cargo n'accepte pas de variable d'environnement dans un chemin de dependance).
+[package]
+name = "docseeker-ref"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+search-core = { path = "__SEARCH_CORE_PATH__" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

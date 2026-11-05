@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "gen:ranking-fixture": "node scripts/gen-docseeker-ranking-fixture.mjs",
     "measure:memory": "vitest run -c vitest.perf.config.ts memory",
     "measure:multiword": "vitest run -c vitest.perf.config.ts multiword",
     "measure:corpus": "vitest run -c vitest.perf.config.ts corpus.measure"

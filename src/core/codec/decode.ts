@@ -467,42 +467,52 @@ function compactSink(): PostingSink<CompactPostings> {
   };
 }
 
-/** Ne retient que les ordinaux de la page demandée pour les termes voulus : aucun objet par posting. */
-function pageMatchSink(
-  pageNumber: number,
+interface PageOrdinals {
+  readonly ordinals: number[];
+  readonly termIndexes: number[] | undefined;
+}
+
+/** Ne retient que les ordinaux des pages demandées pour les termes voulus : aucun objet par posting. */
+function pagesMatchSink(
+  pageNumbers: ReadonlySet<number>,
   wanted: (term: string) => boolean,
   termIndexOf?: (term: string) => number,
-): PostingSink<{ ordinals: number[]; termIndexes: number[] | undefined }> {
-  const ordinals: number[] = [];
-  const termIndexes: number[] | undefined = termIndexOf ? [] : undefined;
+): PostingSink<ReadonlyMap<number, PageOrdinals>> {
+  const byPage = new Map<number, { ordinals: number[]; termIndexes: number[] | undefined }>();
+  for (const page of pageNumbers) byPage.set(page, { ordinals: [], termIndexes: termIndexOf ? [] : undefined });
   let termWanted = false;
   let termIndex = -1;
   return {
-    keepOrdinals: (page) => termWanted && page === pageNumber,
+    keepOrdinals: (page) => termWanted && pageNumbers.has(page),
     begin: () => undefined,
     beginTerm(term) {
       termWanted = wanted(term);
       termIndex = termWanted && termIndexOf ? termIndexOf(term) : -1;
     },
     posting(page, _termFrequency, wordOrdinals) {
-      if (!wordOrdinals || page !== pageNumber) return;
+      const target = byPage.get(page);
+      if (!wordOrdinals || !target) return;
       for (const o of wordOrdinals) {
-        ordinals.push(o);
-        termIndexes?.push(termIndex);
+        target.ordinals.push(o);
+        target.termIndexes?.push(termIndex);
       }
     },
     endTerm: () => undefined,
     finish: () => {
-      // Tri par ordinal (puis index de terme) ; un ordinal partagé ne garde que son premier index.
-      const order = ordinals.map((_, i) => i).sort((a, b) => ordinals[a]! - ordinals[b]! || (termIndexes ? termIndexes[a]! - termIndexes[b]! : 0));
-      const outOrdinals: number[] = [];
-      const outTerms: number[] = [];
-      for (const i of order) {
-        if (outOrdinals[outOrdinals.length - 1] === ordinals[i]) continue;
-        outOrdinals.push(ordinals[i]!);
-        if (termIndexes) outTerms.push(termIndexes[i]!);
+      const result = new Map<number, PageOrdinals>();
+      for (const [page, { ordinals, termIndexes }] of byPage) {
+        // Tri par ordinal (puis index de terme) ; un ordinal partagé ne garde que son premier index.
+        const order = ordinals.map((_, i) => i).sort((x, y) => ordinals[x]! - ordinals[y]! || (termIndexes ? termIndexes[x]! - termIndexes[y]! : 0));
+        const outOrdinals: number[] = [];
+        const outTerms: number[] = [];
+        for (const i of order) {
+          if (outOrdinals[outOrdinals.length - 1] === ordinals[i]) continue;
+          outOrdinals.push(ordinals[i]!);
+          if (termIndexes) outTerms.push(termIndexes[i]!);
+        }
+        result.set(page, { ordinals: outOrdinals, termIndexes: termIndexes ? outTerms : undefined });
       }
-      return { ordinals: outOrdinals, termIndexes: termIndexes ? outTerms : undefined };
+      return result;
     },
   };
 }
@@ -691,6 +701,47 @@ export interface PageMatch {
   readonly termIndexes?: readonly number[];
 }
 
+function assertPageInRange(pageNumber: number, pageCount: number): void {
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pageCount) {
+    throw new RangeError(`Page ${pageNumber} out of range 1..${pageCount}`);
+  }
+}
+
+/**
+ * Pour plusieurs pages (base 1), en une seule passe sur le dictionnaire et les postings : résultat identique
+ * à un appel de decodePageMatches par page (doublons fusionnés, liste vide -> table vide).
+ * Un seul budget couvre toute l'opération (les boîtes de toutes les pages s'additionnent).
+ */
+export async function decodePagesMatches(
+  bytes: Uint8Array,
+  pages: readonly number[],
+  wanted: (term: string) => boolean,
+  limits?: BudgetLimits,
+  termIndexOf?: (term: string) => number,
+): Promise<ReadonlyMap<number, PageMatch>> {
+  const { pageCount } = parseHeader(bytes);
+  for (const page of pages) assertPageInRange(page, pageCount);
+  const unique = [...new Set(pages)];
+  const budget = new DecodeBudget(limits);
+  const { postings: matched, boxesSection, offsets } = await decodeCore(
+    bytes,
+    budget,
+    pagesMatchSink(new Set(unique), wanted, termIndexOf),
+    () => undefined,
+  );
+  const result = new Map<number, PageMatch>();
+  for (const page of unique) {
+    const boxes = decodeBoxes(await inflatePageBlob(boxesSection, offsets, page - 1, budget), budget);
+    const { ordinals, termIndexes } = matched.get(page) as PageOrdinals;
+    const last = ordinals[ordinals.length - 1];
+    if (last !== undefined && last >= boxes.length) {
+      throw new CorruptDataError(`word ordinal ${last} beyond the ${boxes.length} boxes of page ${page}`);
+    }
+    result.set(page, termIndexes ? { boxes, ordinals, termIndexes } : { boxes, ordinals });
+  }
+  return result;
+}
+
 /**
  * Pour une page (base 1) : ordinaux des mots des termes `wanted` et boîtes de cette seule page.
  * Mêmes validations et budgets que decodeIndexForSearch ; mémoire transitoire (seuls les ordinaux retenus survivent).
@@ -703,22 +754,6 @@ export async function decodePageMatches(
   limits?: BudgetLimits,
   termIndexOf?: (term: string) => number,
 ): Promise<PageMatch> {
-  const { pageCount } = parseHeader(bytes);
-  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pageCount) {
-    throw new RangeError(`Page ${pageNumber} out of range 1..${pageCount}`);
-  }
-  const budget = new DecodeBudget(limits);
-  const { postings: matched, boxesSection, offsets } = await decodeCore(
-    bytes,
-    budget,
-    pageMatchSink(pageNumber, wanted, termIndexOf),
-    () => undefined,
-  );
-  const boxes = decodeBoxes(await inflatePageBlob(boxesSection, offsets, pageNumber - 1, budget), budget);
-  const { ordinals, termIndexes } = matched;
-  const last = ordinals[ordinals.length - 1];
-  if (last !== undefined && last >= boxes.length) {
-    throw new CorruptDataError(`word ordinal ${last} beyond the ${boxes.length} boxes of page ${pageNumber}`);
-  }
-  return termIndexes ? { boxes, ordinals, termIndexes } : { boxes, ordinals };
+  const matches = await decodePagesMatches(bytes, [pageNumber], wanted, limits, termIndexOf);
+  return matches.get(pageNumber) as PageMatch;
 }
