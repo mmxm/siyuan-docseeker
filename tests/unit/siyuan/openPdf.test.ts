@@ -120,6 +120,39 @@ describe("openPdfAtPage", () => {
     delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   });
 
+  it("scrolls to the rectangle at focusIndex, mapped past dropped rectangles", async () => {
+    const calls: number[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      calls.push(Array.from(this.parentElement!.children).indexOf(this));
+    };
+    addPage(root, 2);
+    const good = { left: 10, top: 10, width: 5, height: 5 };
+    const rects = [good, { left: 0, top: 0, width: 0, height: 0 }, good, { ...good, top: 50 }];
+    const handle = await openPdfAtPage(
+      base(vi.fn<OpenTabFn>().mockResolvedValue(undefined), { rects, focusIndex: 3 }),
+    );
+    await handle.ready;
+    expect(calls).toEqual([2]); // the invalid rect at index 1 is not drawn
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it("falls back to the first rectangle when the focused rectangle was dropped or out of range", async () => {
+    const calls: number[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      calls.push(Array.from(this.parentElement!.children).indexOf(this));
+    };
+    addPage(root, 2);
+    const good = { left: 10, top: 10, width: 5, height: 5 };
+    for (const focusIndex of [1, 9]) {
+      const handle = await openPdfAtPage(
+        base(vi.fn<OpenTabFn>().mockResolvedValue(undefined), { rects: [good, { left: 0, top: 0, width: 0, height: 0 }], focusIndex }),
+      );
+      await handle.ready;
+    }
+    expect(calls).toEqual([0, 0]);
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
   it("reports 'timeout' (and warns) when the page never appears", async () => {
     const onWarn = vi.fn();
     const handle = await openPdfAtPage(

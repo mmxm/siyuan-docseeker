@@ -30,7 +30,7 @@ function data(sourcePath: string, over: Partial<SearchIndexData> = {}): SearchIn
 const ATTACHED = { status: "attached", pageNumber: 2, keptRects: 1, droppedRects: 0 };
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 const flush = async (): Promise<void> => {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 80; i++) await Promise.resolve();
 };
 
 interface Harness {
@@ -209,6 +209,109 @@ describe("mountSearchTab", () => {
     expect(arg.rects[0]!.height).toBeCloseTo(5);
     expect(h.decodePageMatches).toHaveBeenCalledTimes(1);
     tab.dispose();
+  });
+
+  it("transmet l'indice du rectangle de la zone choisie par la vignette (groupe dense, pas le premier mot)", async () => {
+    const h = harness();
+    h.decodePageMatches.mockResolvedValue({
+      boxes: [
+        { x: 0.1, y: 0.05, width: 0.1, height: 0.02 },
+        { x: 0.4, y: 0.7, width: 0.1, height: 0.02 },
+        { x: 0.5, y: 0.7, width: 0.1, height: 0.02 },
+      ],
+      ordinals: [0, 1, 2],
+      termIndexes: [0, 0, 1],
+    });
+    const doc = {
+      numPages: 10,
+      getPage: async () => ({ getViewport: () => ({ width: 600, height: 800 }), render: () => ({ promise: Promise.resolve() }) }),
+      destroy: () => undefined,
+    };
+    h.deps = { ...h.deps, loadDocument: async () => doc as never };
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    cards(h.host)[1]!.click();
+    await flush();
+    const arg = h.openPdfAtPage.mock.calls[0]![0] as { rects: unknown[]; focusIndex?: number };
+    expect(arg.rects).toHaveLength(3);
+    expect(arg.focusIndex).toBe(1);
+    tab.dispose();
+  });
+
+  it("garde l'indice 0 et avertit si la taille de page est indisponible (repli sans erreur)", async () => {
+    const h = harness();
+    const loadDocument = vi.fn(async () => {
+      throw new Error("pas de PDF");
+    });
+    h.deps = { ...h.deps, loadDocument };
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    cards(h.host)[1]!.click();
+    await flush();
+    const arg = h.openPdfAtPage.mock.calls[0]![0] as { rects: unknown[]; focusIndex?: number };
+    expect(loadDocument).toHaveBeenCalled();
+    expect(arg.rects).toHaveLength(1);
+    expect(arg.focusIndex).toBe(0);
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Zone du surlignage non déterminée"), expect.anything());
+    tab.dispose();
+  });
+
+  describe("page size wait is bounded", () => {
+    const neverDoc = { numPages: 10, getPage: () => new Promise(() => undefined), destroy: () => undefined };
+    const setupSlow = () => {
+      const h = harness();
+      const timers: { fn: () => void; ms: number; cleared: boolean }[] = [];
+      h.deps = {
+        ...h.deps,
+        loadDocument: async () => neverDoc as never,
+        schedule: (fn, ms) => {
+          if (ms !== 400) return setTimeout(fn, ms);
+          const t = { fn, ms, cleared: false };
+          timers.push(t);
+          return t;
+        },
+        clear: (t) => {
+          if (t && typeof t === "object" && "cleared" in t) (t as { cleared: boolean }).cleared = true;
+          else clearTimeout(t as ReturnType<typeof setTimeout>);
+        },
+      };
+      return { h, timers };
+    };
+    const fireOpenTimer = (timers: { fn: () => void; ms: number; cleared: boolean }[]) =>
+      timers.filter((t) => !t.cleared).forEach((t) => t.fn());
+
+    it("opens with focusIndex 0 after the delay when getPageSize never resolves", async () => {
+      const { h, timers } = setupSlow();
+      const tab = mountSearchTab(h.host, h.deps);
+      await flush();
+      await type(h.host, "chat");
+      cards(h.host)[1]!.click();
+      await flush();
+      expect(h.openPdfAtPage).not.toHaveBeenCalled();
+      fireOpenTimer(timers);
+      await flush();
+      expect(h.openPdfAtPage).toHaveBeenCalledTimes(1);
+      expect(h.openPdfAtPage.mock.calls[0]![0]).toMatchObject({ focusIndex: 0 });
+      tab.dispose();
+    });
+
+    it("a second open during the wait means no openPdf for the first", async () => {
+      const { h, timers } = setupSlow();
+      const tab = mountSearchTab(h.host, h.deps);
+      await flush();
+      await type(h.host, "chat");
+      cards(h.host)[1]!.click();
+      await flush();
+      cards(h.host)[0]!.click();
+      await flush();
+      fireOpenTimer(timers);
+      await flush();
+      expect(h.openPdfAtPage).toHaveBeenCalledTimes(1);
+      expect(h.openPdfAtPage.mock.calls[0]![0]).toMatchObject({ page: 2 });
+      tab.dispose();
+    });
   });
 
   it("si le calque échoue, ouvre quand même la page sans rectangles et avertit", async () => {

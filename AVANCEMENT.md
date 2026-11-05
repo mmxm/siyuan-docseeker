@@ -18,7 +18,7 @@
 
 ## Où on en est
 
-**Tests : 1046, typage strict propre, couverture ~99 % des lignes de `src`.**
+**Tests : 1059, typage strict propre, couverture ~99 % des lignes de `src`.**
 
 | Module | Rôle |
 |---|---|
@@ -76,6 +76,8 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 2. Corriger ce que la validation révèle ; puis les perf reportées (risque 1) selon les mesures réelles.
 3. Réglages, `icon.png`, mesures sur les 47 PDF du corpus réel (`/Users/francois/Documents/DocFastExplorer/data/documents`, hors fichiers de test OffNote/RaceNote/RT_/ZipExport…). Voir `CAHIER_DES_CHARGES.md` §8.
 4. ~~Charger les index au démarrage du plugin~~ : fait (index partagé, voir ci-dessus).
+5. **Voir toutes les vignettes d'un document** (demande utilisateur) : « et N autres pages » devient un contrôle cliquable/clavier (`aria-expanded`) qui déplie les pages restantes, par lots (ex. 10 par « Afficher plus »), vignettes chargées paresseusement (IntersectionObserver déjà en place), repli possible. Rester sur l'ordre de pertinence BM25. À faire en TDD dans `src/ui/searchView.ts`.
+6. **Classement plus proche de DocSeeker** (écart relevé dans `search-core` : `processing.rs`, `constants.rs`, `matching.rs`). Aujourd'hui : BM25 de page + score de document (titre, meilleur BM25, nombre de pages) identiques ; manquent le bonus multi-mots (+5000 tous les mots dans une occurrence, jusqu'à +2000 partiel), le tri des occurrences (mots distincts, puis taille de police, puis BM25, puis page) et le bonus de taille de police (plafond 400, seuil 10 pt). Temps 1, sans changer l'index : bonus multi-mots et tri par mots distincts, avec jeu de référence généré depuis le moteur Rust. Temps 2, selon l'écart mesuré : taille de police dans le `.dsx` (nouvelle version de format, réindexation).
 
 ## Commandes utiles
 

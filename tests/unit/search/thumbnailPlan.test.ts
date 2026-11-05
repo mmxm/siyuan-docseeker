@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CROP_RENDER_SCALE, DEFAULT_CROP_HEIGHT, DEFAULT_CROP_WIDTH } from "../../../src/core/constants";
 import type { FractionBox } from "../../../src/core/crop";
-import { planThumbnail } from "../../../src/search/thumbnailPlan";
+import { planFocusOrdinal, planThumbnail } from "../../../src/search/thumbnailPlan";
 
 const PAGE = { width: 600, height: 800 };
 const box = (x: number, y: number, width = 0.1, height = 0.02): FractionBox => ({ x, y, width, height });
@@ -232,5 +232,36 @@ describe("planThumbnail", () => {
       expect(plan.crop.y0 + plan.crop.height).toBeGreaterThanOrEqual(715);
       expect(plan.crop.y0).toBeLessThanOrEqual(700);
     });
+  });
+});
+
+describe("planFocusOrdinal", () => {
+  it("picks a word of the dense distinct-term group rather than the first word", () => {
+    // ordinal 0: term 0 alone at the top (like a table caption); ordinals 1 and 2: both terms together lower.
+    const boxes = [box(0.1, 0.05), box(0.4, 0.7), box(0.5, 0.7)];
+    const opts = { termIndexes: [0, 0, 1] };
+    expect(planFocusOrdinal(boxes, [0, 1, 2], PAGE, opts)).toBe(1);
+  });
+
+  it("is the sole word when there is one", () => {
+    expect(planFocusOrdinal([box(0.5, 0.5)], [0], PAGE)).toBe(0);
+  });
+
+  it("returns undefined without usable ordinals", () => {
+    expect(planFocusOrdinal([box(0.5, 0.5)], [], PAGE)).toBeUndefined();
+    expect(planFocusOrdinal([box(0.5, 0.5)], [7, -1], PAGE)).toBeUndefined();
+  });
+
+  it("works without term info (first close group)", () => {
+    expect(planFocusOrdinal([box(0.1, 0.1), box(0.5, 0.5)], [1], PAGE)).toBe(1);
+  });
+
+  it("only considers words of the group the thumbnail highlights, even if an isolated word is closer to the crop center", () => {
+    const boxes = Array.from({ length: 21 }, () => box(0.9, 0.9));
+    boxes[0] = box(0.1, 0.5);
+    boxes[1] = box(0.3, 0.5);
+    boxes[20] = box(0.2, 0.5); // exactly between the group words, far in ordinal order
+    const focus = planFocusOrdinal(boxes, [0, 1, 20], PAGE);
+    expect([0, 1]).toContain(focus);
   });
 });

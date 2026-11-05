@@ -307,17 +307,23 @@ export function attachHighlights(options: AttachHighlightsOptions): Disposer {
   return { dispose: session.dispose, ready: session.ready };
 }
 
-export type ScrollTarget = PageLookup;
+export interface ScrollTarget extends PageLookup {
+  /** 0-based index among the DRAWN rectangles; invalid or out of bounds falls back to 0. */
+  readonly index?: number;
+}
 
 /**
- * Scrolls so that the first highlight rectangle of the page is centered.
- * Returns false if the page, the rectangle or scrollIntoView is unavailable.
+ * Scrolls so that a highlight rectangle of the page is centered: the one at `index`
+ * (default: the first). Returns false if the page, the rectangle or scrollIntoView is unavailable.
  */
 export function scrollToFirstHighlight(target: ScrollTarget): boolean {
-  const page = findPage(target);
+  const { index, ...lookup } = target;
+  const page = findPage(lookup);
   const overlay = page && Array.from(page.children).find((c) => c.hasAttribute(OVERLAY_ATTRIBUTE));
-  const first = overlay?.firstElementChild as HTMLElement | null | undefined;
-  if (!first || typeof first.scrollIntoView !== "function") return false;
-  first.scrollIntoView({ block: "center", inline: "center" });
+  const chosen =
+    index !== undefined && Number.isInteger(index) && index >= 0 ? overlay?.children[index] : undefined;
+  const el = (chosen ?? overlay?.firstElementChild) as HTMLElement | null | undefined;
+  if (!el || typeof el.scrollIntoView !== "function") return false;
+  el.scrollIntoView({ block: "center", inline: "center" });
   return true;
 }

@@ -4,10 +4,11 @@
  * direct à `window`, au noyau ou à SiYuan (voir `index.ts` pour le câblage réel).
  */
 import { decodePageMatches as realDecodePageMatches } from "./core/codec/decode";
-import { rectToPercentStyle, wordBoxesToPageRects, type PercentStyle } from "./core/crop";
+import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
 import { createSearchController } from "./search/searchController";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
+import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
 import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
 import type { PetalStore } from "./siyuan/petalStore";
@@ -55,6 +56,7 @@ export interface SearchTab {
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const HIGHLIGHT_UNAVAILABLE = "Surlignage indisponible";
 const OBSERVER_ROOT_MARGIN = "200px 0px";
+const PAGE_SIZE_WAIT_MS = 400;
 export const WARN_LOG_MAX = 50;
 
 /** Message discret expliquant l'absence de surlignage, ou undefined (succès, ou ouverture remplacée). */
@@ -181,6 +183,52 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   let openController: AbortController | null = null;
   let lastOpened: { dispose(): void } | null = null;
 
+  // Attente bornée : getPageSize passe par la file partagée du renderer (peut charger tout le PDF).
+  const boundedPageSize = (path: string, page: number, signal: AbortSignal): Promise<{ width: number; height: number }> =>
+    new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = schedule(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`taille de page non reçue en ${PAGE_SIZE_WAIT_MS} ms`));
+      }, PAGE_SIZE_WAIT_MS);
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clear(timer);
+        fn();
+      };
+      signal.addEventListener("abort", () => finish(() => reject(new Error("annulé"))), { once: true });
+      // La promesse perdante est toujours consommée : jamais de rejet non géré.
+      renderer.getPageSize(path, page, signal).then(
+        (size) => finish(() => resolve(size)),
+        (error: unknown) => finish(() => reject(error)),
+      );
+    });
+
+  // Même zone que la vignette (planThumbnail, même taille de page) ; repli sur le premier rectangle.
+  const findFocusIndex = async (
+    path: string,
+    page: number,
+    match: { boxes: readonly FractionBox[]; ordinals: readonly number[]; termIndexes?: readonly number[] },
+    kept: readonly number[],
+    signal: AbortSignal,
+  ): Promise<number> => {
+    try {
+      const size = await boundedPageSize(path, page, signal);
+      const ordinal = planFocusOrdinal(
+        match.boxes,
+        match.ordinals,
+        size,
+        match.termIndexes ? { termIndexes: match.termIndexes } : {},
+      );
+      return Math.max(0, ordinal === undefined ? 0 : kept.indexOf(ordinal));
+    } catch (error) {
+      if (!signal.aborted) onWarn("Zone du surlignage non déterminée : défilement sur le premier mot", error);
+      return 0;
+    }
+  };
+
   const open = async (docId: string, page: number, query: string): Promise<void> => {
     openController?.abort();
     const mine = new AbortController();
@@ -193,13 +241,13 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       return;
     }
     let rects: PercentStyle[] = [];
+    let focusIndex = 0;
     let issue: string | undefined;
     try {
       const match = await pageMatches.getPageMatches(docId, page, query, mine.signal);
-      const boxes = match.ordinals.flatMap((ordinal) => {
-        const box = match.boxes[ordinal];
-        return box ? [box] : [];
-      });
+      const kept = match.ordinals.filter((ordinal) => match.boxes[ordinal] !== undefined);
+      const boxes = kept.map((ordinal) => match.boxes[ordinal] as FractionBox);
+      focusIndex = await findFocusIndex(doc.path, page, match, kept, mine.signal);
       // Les boîtes sont déjà des fractions de page : une page de 1 x 1 donne directement des pourcentages.
       rects = wordBoxesToPageRects(boxes, 1, 1).map((rect) => rectToPercentStyle(rect, 1, 1));
     } catch (error) {
@@ -216,6 +264,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
         path: doc.path,
         page,
         rects,
+        focusIndex,
         onWarn: (message) => onWarn(message),
       });
     } catch (error) {

@@ -52,6 +52,8 @@ export interface ThumbnailPlan {
   /** Highlight rectangles in crop pixels (crop origin subtracted, times scale). */
   readonly highlights: readonly PixelRect[];
   readonly scale: number;
+  /** Ordinals of the words the crop was centered on (the selected group); empty without usable ordinals. */
+  readonly focusOrdinals: readonly number[];
 }
 
 function validOrdinals(ordinals: readonly number[], boxCount: number): number[] {
@@ -235,7 +237,7 @@ function planByTerms(
   const visible = words
     .map(({ rect }) => clipToCrop(rect, crop))
     .filter((rect): rect is PageRect => rect !== undefined);
-  return { crop, highlights: highlightRectsInCrop(visible, crop, scale), scale };
+  return { crop, highlights: highlightRectsInCrop(visible, crop, scale), scale, focusOrdinals: members.map((m) => m.ordinal) };
 }
 
 /**
@@ -260,17 +262,46 @@ export function planThumbnail(
     const words = termWords(boxes, ordinals, termIndexes, pageSize);
     if (words.length > 0) return planByTerms(words, pageSize, targetW, targetH, scale);
     const crop = calculateCropBounds(0, 0, width, 0, width, height, targetW, targetH);
-    return { crop, highlights: [], scale };
+    return { crop, highlights: [], scale, focusOrdinals: [] };
   }
 
   const group = firstGroup(validOrdinals(ordinals, boxes.length), maxGap);
   if (group.length === 0) {
     const crop = calculateCropBounds(0, 0, width, 0, width, height, targetW, targetH);
-    return { crop, highlights: [], scale };
+    return { crop, highlights: [], scale, focusOrdinals: [] };
   }
   const selected = group.map((o) => boxes[o] as FractionBox);
   const rects = wordBoxesToPageRects(selected, width, height);
   const [x0, y0, x1, y1] = unionRect(rects);
   const crop = calculateCropBounds(x0, y0, x1, y1, width, height, targetW, targetH);
-  return { crop, highlights: highlightRectsInCrop(rects, crop, scale), scale };
+  return { crop, highlights: highlightRectsInCrop(rects, crop, scale), scale, focusOrdinals: group };
+}
+
+/**
+ * Ordinal of the matched word to center on when opening the page: the word closest to the
+ * center of the crop `planThumbnail` picks (same options), among the words of its selected group, so the opened PDF shows the same
+ * area as the thumbnail. Undefined when no ordinal is usable.
+ */
+export function planFocusOrdinal(
+  boxes: readonly FractionBox[],
+  ordinals: readonly number[],
+  pageSize: PageSize,
+  opts: ThumbnailPlanOptions = {},
+): number | undefined {
+  const { crop, focusOrdinals } = planThumbnail(boxes, ordinals, pageSize, opts);
+  const usable = focusOrdinals;
+  if (usable.length === 0) return undefined;
+  const cx = crop.x0 + crop.width / 2;
+  const cy = crop.y0 + crop.height / 2;
+  let best: number | undefined;
+  let bestDistance = Infinity;
+  for (const ordinal of usable) {
+    const [x0, y0, x1, y1] = wordBoxesToPageRects([boxes[ordinal] as FractionBox], pageSize.width, pageSize.height)[0] as PageRect;
+    const distance = Math.hypot((x0 + x1) / 2 - cx, (y0 + y1) / 2 - cy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = ordinal;
+    }
+  }
+  return best;
 }

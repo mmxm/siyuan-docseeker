@@ -440,3 +440,30 @@ describe("scrollToFirstHighlight", () => {
     expect(scrollToFirstHighlight({ root, pageNumber: 1 })).toBe(false);
   });
 });
+
+describe("scrollToFirstHighlight with an index", () => {
+  async function setup(): Promise<HTMLElement[]> {
+    const page = addPage(root, 1);
+    const handle = await attachHighlights({ root, pageNumber: 1, rects: [RECT, { ...RECT, top: 40 }, { ...RECT, top: 60 }] });
+    await handle.ready;
+    const boxes = Array.from(page.querySelectorAll(`${OVERLAY_SELECTOR} > *`)) as HTMLElement[];
+    boxes.forEach((b) => (b.scrollIntoView = vi.fn()));
+    return boxes;
+  }
+
+  it("centers the rectangle at the given index", async () => {
+    const boxes = await setup();
+    expect(scrollToFirstHighlight({ root, pageNumber: 1, index: 2 })).toBe(true);
+    expect(boxes[2]!.scrollIntoView).toHaveBeenCalledWith({ block: "center", inline: "center" });
+    expect(boxes[0]!.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the first rectangle when the index is out of bounds or invalid", async () => {
+    const boxes = await setup();
+    for (const index of [3, -1, 1.5, Number.NaN]) {
+      expect(scrollToFirstHighlight({ root, pageNumber: 1, index })).toBe(true);
+    }
+    expect(boxes[0]!.scrollIntoView).toHaveBeenCalledTimes(4);
+    expect(boxes[1]!.scrollIntoView).not.toHaveBeenCalled();
+  });
+});

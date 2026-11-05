@@ -19,6 +19,7 @@
  */
 import {
   attachHighlights,
+  sanitizeRect,
   scrollToFirstHighlight,
   type AttachHighlightsOptions,
   type AttachReport,
@@ -51,6 +52,8 @@ export interface OpenPdfOptions
   /** 1-based. */
   readonly page: number;
   readonly rects: readonly PercentStyle[];
+  /** Index in `rects` of the rectangle to center on (default 0 = the first one). */
+  readonly focusIndex?: number;
   readonly root?: Document | Element;
 }
 
@@ -113,7 +116,7 @@ async function finish(
  * release explicitly (idempotent); it also self-releases when the page is gone for good.
  */
 export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<OpenPdfReport>> {
-  const { openTab, app, path, page, rects, root = document, ...rest } = options;
+  const { openTab, app, path, page, rects, focusIndex = 0, root = document, ...rest } = options;
   assertValidPdfPath(path);
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError(`page must be an integer >= 1, got ${page}`);
@@ -125,11 +128,17 @@ export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<O
   await openTab({ app, pdf: { path, page } });
   if (mine !== generation) return supersededHandle(page);
   const handle = attachHighlights({ root, pageNumber: page, rects, ...rest });
+  // The overlay only draws sanitized rects: map the index in `rects` to the index among drawn ones.
+  const focused = Number.isInteger(focusIndex) ? rects[focusIndex] : undefined;
+  const drawnIndex =
+    focused && sanitizeRect(focused)
+      ? rects.slice(0, focusIndex).filter((r) => sanitizeRect(r) !== null).length
+      : 0;
   const lookup = { root, pageNumber: page, ...(rest.resolvePageRoot && { resolvePageRoot: rest.resolvePageRoot }) };
   const ready = finish(
     handle,
     () => mine === generation,
-    () => scrollToFirstHighlight(lookup),
+    () => scrollToFirstHighlight({ ...lookup, index: drawnIndex }),
     rest.onWarn ?? (() => undefined),
   );
   const result: Disposer<OpenPdfReport> = {
