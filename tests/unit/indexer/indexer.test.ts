@@ -296,6 +296,46 @@ describe("createIndexer - failures", () => {
     expect((await indexer.start()).indexed).toBe(1);
   });
 
+  it("reports a destroy() failure through onDestroyError without changing the result", async () => {
+    const a = entry("assets/a.pdf");
+    const pdf = new FakePdf();
+    const failure = new Error("destroy boom");
+    pdf.destroy = async () => {
+      throw failure;
+    };
+    const errors: unknown[] = [];
+    const { deps } = setup([a], { pdfs: { [a.path]: pdf } });
+    const indexer = createIndexer({ ...deps, onDestroyError: (e) => errors.push(e) });
+    expect((await indexer.start()).indexed).toBe(1);
+    expect(errors).toEqual([failure]);
+  });
+
+  it("survives an onDestroyError callback that throws", async () => {
+    const a = entry("assets/a.pdf");
+    const pdf = new FakePdf();
+    pdf.destroy = async () => {
+      throw new Error("destroy boom");
+    };
+    const { deps } = setup([a], { pdfs: { [a.path]: pdf } });
+    const indexer = createIndexer({
+      ...deps,
+      onDestroyError: () => {
+        throw new Error("handler boom");
+      },
+    });
+    expect((await indexer.start()).indexed).toBe(1);
+  });
+
+  it("calls destroy() exactly once and reports no destroy error on success", async () => {
+    const a = entry("assets/a.pdf");
+    const pdf = new FakePdf();
+    const errors: unknown[] = [];
+    const { deps } = setup([a], { pdfs: { [a.path]: pdf } });
+    await createIndexer({ ...deps, onDestroyError: (e) => errors.push(e) }).start();
+    expect(pdf.destroyed).toBe(1);
+    expect(errors).toEqual([]);
+  });
+
   it("reports a discovery failure as a failed event then idle", async () => {
     const store = new FakeStore();
     const indexer = createIndexer({

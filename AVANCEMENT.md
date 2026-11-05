@@ -68,7 +68,7 @@ Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.
 - Chargement à froid de 46 index : 18 323 pages, 7,3 M mots, 56,8 Mo de `.dsx` → **1,13 s**, tas 47,8 Mo (~0,84× les `.dsx`, 2,7 Ko/page). Dans SiYuan (lecture via HTTP) ce sera plus long : à mesurer.
 - Requêtes : « sévérité bpco » 0,2 ms, « diabète » 1,5 ms, « traitement » 6,5 ms, termes très fréquents (14 000 pages) ~25 ms médiane ; pire cas observé 535 ms isolé (GC probable).
 - Plafond 200 pages/document : mémoire retenue ~0,4 Mo pour la requête la plus large (5 446 pages renvoyées sur 14 130) : négligeable.
-- À faire : confirmer que `doc.destroy()` (indexer.ts:346) est inopérant avec PDF.js 6.4.299 (c'est `loadingTask.destroy()` qui libère) et corriger dans `loadPdf.ts`.
+- Corrigé : avec PDF.js 6.4.299 le `PDFDocumentProxy` n'a pas de `destroy()` (c'est `loadingTask.destroy()` qui libère) ; `createLoadPdf` ajoute désormais un `destroy()` idempotent au document, et l'échec de libération est journalisé (`onDestroyError`). Effet réel sur la mémoire dans SiYuan non mesuré.
 
 ## Risques ouverts
 

@@ -56,6 +56,8 @@ export interface IndexerDeps {
   readonly now: () => number;
   readonly concurrency?: number;
   readonly onListenerError?: (error: unknown) => void;
+  /** Appelé si la libération d'un document échoue ; le résultat de l'indexation n'est pas modifié. */
+  readonly onDestroyError?: (error: unknown) => void;
 }
 
 export interface IndexSummary {
@@ -344,8 +346,13 @@ export function createIndexer(deps: IndexerDeps): Indexer {
         if (doc !== undefined) {
           try {
             await doc.destroy();
-          } catch {
+          } catch (error) {
             // la libération est au mieux ; elle ne doit pas masquer le résultat du traitement
+            try {
+              deps.onDestroyError?.(error);
+            } catch {
+              // un gestionnaire d'erreurs défaillant ne doit rien casser
+            }
           }
         }
       }

@@ -74,9 +74,7 @@ async function makePdfjs(): Promise<PdfjsLoader> {
     getDocument({ url }) {
       const file = join(CORPUS_DIR, decodeURIComponent(url.slice(1)));
       const task = lib.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0, isEvalSupported: false });
-      // PDFDocumentProxy 6.4.299 n'a pas de destroy() : c'est la tâche de chargement qui libère le document.
-      const promise = task.promise.then((doc) => Object.assign(doc, { destroy: () => task.destroy() }));
-      return { promise, destroy: () => task.destroy() };
+      return task;
     },
   };
 }

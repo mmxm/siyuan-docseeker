@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   sharedStart: vi.fn(),
   sharedDispose: vi.fn(),
   sharedCreated: 0,
+  indexerDeps: undefined as { onDestroyError?: (e: unknown) => void } | undefined,
   mounts: [] as { dispose: ReturnType<typeof vi.fn>; onWarn: (m: string, e?: unknown) => void }[],
 }));
 
@@ -38,7 +39,8 @@ vi.mock("../../src/siyuan/petalStore", () => ({ createPetalStore: () => ({}) }))
 vi.mock("../../src/siyuan/discovery", () => ({ discoverPdfs: vi.fn() }));
 vi.mock("../../src/indexer/loadPdf", () => ({ createLoadPdf: () => vi.fn() }));
 vi.mock("../../src/indexer/indexer", () => ({
-  createIndexer: () => ({
+  createIndexer: (deps: { onDestroyError?: (e: unknown) => void }) => ({
+    ...((h.indexerDeps = deps), {}),
     start: h.start,
     cancel: h.cancel,
     onEvent: (l: (e: unknown) => void) => {
@@ -111,6 +113,20 @@ describe("DocSeekerPlugin", () => {
     expect(h.unsubscribe).toHaveBeenCalledTimes(1);
     s.destroy(a);
     expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("journalise un échec de libération de PDF via le journal d'avertissements", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.indexerDeps = undefined;
+    const s = setup();
+    s.render();
+    s.plugin.onLayoutReady();
+    const error = new Error("destroy KO");
+    const deps = h.indexerDeps as { onDestroyError?: (e: unknown) => void } | undefined;
+    expect(deps?.onDestroyError).toBeTypeOf("function");
+    deps?.onDestroyError?.(error);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Libération du PDF en échec"), error);
+    warn.mockRestore();
   });
 
   it("onunload libère les onglets restants", () => {

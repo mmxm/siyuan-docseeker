@@ -285,6 +285,7 @@ export default class DocSeekerPlugin extends Plugin {
       loadPdf: createLoadPdf(() => window.pdfjsLib as PdfjsLoader | undefined),
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
+      onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),
     });
     return this.indexer;
   }
