@@ -138,6 +138,7 @@ export default class DocSeekerPlugin extends Plugin {
         icon: ICON_NAME,
         title: this.t("tabTitle"),
       },
+      openNewTab: true, // sans cela SiYuan refocalise l'onglet de recherche déjà ouvert (id fixe)
     });
   }
 

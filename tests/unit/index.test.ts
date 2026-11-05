@@ -23,7 +23,10 @@ vi.mock("siyuan", () => ({
     addTab(o: NonNullable<typeof this.tab>) {
       this.tab = o;
     }
-    addTopBar() {}
+    topBar: { callback: () => void } | undefined;
+    addTopBar(o: { callback: () => void }) {
+      this.topBar = o;
+    }
     addCommand() {}
     removeTopBar() {}
   },
@@ -71,6 +74,7 @@ function setup() {
     onunload(): void;
     onLayoutReady(): void;
     tab: { init: (this: TabModel, c: TabModel) => void; destroy: (this: TabModel) => void };
+    topBar: { callback: () => void };
   };
   plugin.onload();
   const render = (): TabModel => {
@@ -198,5 +202,22 @@ describe("DocSeekerPlugin", () => {
     expect(log.textContent).toContain("avert 59");
     expect(log.textContent).not.toContain("avert 5\n");
     expect(log.textContent!.trim().split("\n")).toHaveLength(50);
+  });
+});
+
+describe("ouverture de plusieurs onglets de recherche", () => {
+  it("demande un nouvel onglet à chaque clic sur le bouton de la barre du haut", async () => {
+    const { openTab } = await import("siyuan");
+    const mocked = vi.mocked(openTab);
+    mocked.mockClear();
+    const plugin = new (DocSeekerPlugin as unknown as new () => {
+      onload(): void;
+      topBar: { callback: () => void };
+    })();
+    plugin.onload();
+    plugin.topBar.callback();
+    plugin.topBar.callback();
+    expect(mocked).toHaveBeenCalledTimes(2);
+    for (const [options] of mocked.mock.calls) expect(options.openNewTab).toBe(true);
   });
 });
