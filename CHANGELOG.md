@@ -22,7 +22,7 @@ Première version utilisable de DocSeeker. Depuis la 0.1.0 (diagnostic technique
 
 - Un fichier d'index `.dsx` par PDF, stocké dans `data/storage/petal/siyuan-docseeker/idx/`.
 - Indexation incrémentale : les PDF modifiés ou ajoutés sont réindexés, les PDF supprimés sont retirés, reprise après interruption.
-- Bouton « Réindexer » et pause/reprise dans la section « Avancé ».
+- Bouton « Réindexer » dans la section « Avancé ». (Pause/reprise : le code existe mais n'a pas d'interface ; annoncé à tort dans la première version de cette note.)
 - PDF sans texte (scannés) ignorés et signalés.
 - Libération effective des documents PDF.js après extraction (`loadingTask.destroy`), pour limiter la mémoire.
 
