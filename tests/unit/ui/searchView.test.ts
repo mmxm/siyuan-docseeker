@@ -50,6 +50,10 @@ const cards = () => Array.from(host.querySelectorAll<HTMLButtonElement>("li butt
 const key = (el: Element, k: string) =>
   el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
 
+function focusFirst(): void {
+  cards()[0]!.focus();
+}
+
 beforeEach(() => {
   document.head.innerHTML = "";
   document.body.innerHTML = "";
@@ -325,6 +329,361 @@ describe("mountSearchView", () => {
       mount({ t: (k) => (k === "noResults" ? "No results" : k) });
       update({ kind: "no-result", query: "x", partial: false, failedCount: 0 });
       expect(status()).toBe("No results");
+    });
+  });
+
+  describe("dépliage des pages restantes", () => {
+    const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+    const more = () => host.querySelector<HTMLButtonElement>("button.docseeker-more");
+    const less = () => host.querySelector<HTMLButtonElement>("button.docseeker-less");
+    const visible = (b: HTMLButtonElement | null) => b !== null && !b.hidden;
+
+    it("n'affiche aucun bouton quand il y a 5 pages ou moins", () => {
+      mount();
+      update(results([doc("a", range(5))]));
+      expect(more()).toBeNull();
+      expect(less()).toBeNull();
+    });
+
+    it("rend un vrai bouton replié avec le libellé du reste", () => {
+      mount();
+      update(results([doc("a", range(8))]));
+      const b = more()!;
+      expect(b.tagName).toBe("BUTTON");
+      expect(b.type).toBe("button");
+      expect(b.className).toBe("docseeker-more b3-button b3-button--outline");
+      expect(b.getAttribute("aria-expanded")).toBe("false");
+      expect(b.textContent).toBe("et 3 autres pages");
+      expect(visible(less())).toBe(false);
+    });
+
+    it("déplie par lots de 10 et met à jour libellé et aria-expanded", () => {
+      mount();
+      update(results([doc("a", range(27))]));
+      expect(more()!.textContent).toBe("et 22 autres pages");
+      more()!.click();
+      expect(cards()).toHaveLength(15);
+      expect(more()!.textContent).toBe("et 12 autres pages");
+      expect(more()!.getAttribute("aria-expanded")).toBe("true");
+      more()!.click();
+      expect(cards()).toHaveLength(25);
+      expect(more()!.textContent).toBe("et 2 autres pages");
+      more()!.click();
+      expect(cards()).toHaveLength(27);
+      expect(visible(more())).toBe(false);
+      expect(cards().map((c) => c.dataset["page"])).toEqual(range(27).map(String));
+    });
+
+    it("utilise le singulier pour un seul reste", () => {
+      mount();
+      update(results([doc("a", range(6))]));
+      expect(more()!.textContent).toBe("et 1 autre page");
+    });
+
+    it("garde le focus sur le bouton après dépliage et le passe à Replier quand tout est affiché", () => {
+      mount();
+      update(results([doc("a", range(12))]));
+      more()!.focus();
+      more()!.click();
+      expect(cards()).toHaveLength(12);
+      expect(visible(more())).toBe(false);
+      expect(document.activeElement).toBe(less());
+      expect(less()!.textContent).toBe("Replier");
+    });
+
+    it("garde le focus sur le bouton quand il reste des pages", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.focus();
+      more()!.click();
+      expect(document.activeElement).toBe(more());
+    });
+
+    it("replie vers les 5 premières cartes, détache les vignettes ajoutées et rend le focus à Plus", () => {
+      mount();
+      update(results([doc("a", range(12))]));
+      more()!.click();
+      expect(attach).toHaveBeenCalledTimes(12);
+      less()!.focus();
+      less()!.click();
+      expect(cards()).toHaveLength(5);
+      expect(detach).toHaveBeenCalledTimes(7);
+      expect(visible(less())).toBe(false);
+      expect(more()!.getAttribute("aria-expanded")).toBe("false");
+      expect(more()!.textContent).toBe("et 7 autres pages");
+      expect(document.activeElement).toBe(more());
+      expect(cards().filter((c) => c.tabIndex === 0)).toHaveLength(1);
+    });
+
+    it("annonce le vrai reste tant que des pages sont dépliables, puis une note non interactive", () => {
+      mount();
+      const d = { ...doc("a", range(200)), matchingPages: 250 };
+      update(results([d]));
+      expect(more()!.textContent).toBe("et 245 autres pages");
+      expect(host.querySelector<HTMLElement>(".docseeker-truncated")!.hidden).toBe(true);
+      for (let i = 0; i < 20 && visible(more()); i++) more()!.click();
+      expect(cards()).toHaveLength(200);
+      expect(visible(more())).toBe(false);
+      expect(visible(less())).toBe(true);
+      expect(document.activeElement === document.body || document.activeElement === less()).toBe(true);
+      const note = host.querySelector<HTMLElement>(".docseeker-truncated")!;
+      expect(note.hidden).toBe(false);
+      expect(note.tagName).not.toBe("BUTTON");
+      expect(note.textContent).toBe("50 pages non affichées");
+      expect(host.querySelector(".docseeker-doc-count")!.textContent).toContain("250");
+    });
+
+    it("plafond de bout en bout : 200 pages, Plus masqué, Replier focalisé, 200 cartes", () => {
+      mount();
+      update(results([doc("a", range(200))]));
+      more()!.focus();
+      for (let i = 0; i < 30 && visible(more()); i++) more()!.click();
+      expect(cards()).toHaveLength(200);
+      expect(visible(more())).toBe(false);
+      expect(visible(less())).toBe(true);
+      expect(document.activeElement).toBe(less());
+      expect(host.querySelector<HTMLElement>(".docseeker-truncated")!.hidden).toBe(true);
+    });
+
+    it("oublie l'expansion d'un document qui rétrécit à 5 pages ou moins", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      update(results([doc("a", range(4))]));
+      expect(more()).toBeNull();
+      update(results([doc("a", range(30))]));
+      expect(cards()).toHaveLength(5);
+      expect(more()!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("reste replié après déplier, replier puis re-rendu", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      less()!.click();
+      update(results([doc("a", range(30))]));
+      expect(cards()).toHaveLength(5);
+    });
+
+    it("donne aux boutons un nom contenant le titre, aria-controls et aria-expanded cohérents", () => {
+      mount();
+      update(results([doc("a", range(12), "Mon doc")]));
+      const m = more()!;
+      expect(m.getAttribute("aria-label")).toBe("et 7 autres pages, Mon doc");
+      const controlled = host.querySelector(`#${m.getAttribute("aria-controls")}`)!;
+      expect(controlled.className).toBe("docseeker-cards");
+      m.click();
+      expect(less()!.getAttribute("aria-label")).toBe("Replier, Mon doc");
+      expect(less()!.getAttribute("aria-controls")).toBe(m.getAttribute("aria-controls"));
+      expect(less()!.getAttribute("aria-expanded")).toBe("true");
+      expect(m.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("utilise des identifiants aria-controls uniques par document", () => {
+      mount();
+      update(results([doc("a", range(8)), doc("b", range(8))]));
+      const ids = Array.from(host.querySelectorAll("button.docseeker-more")).map((b) => b.getAttribute("aria-controls"));
+      expect(new Set(ids).size).toBe(2);
+    });
+
+    it("annonce le changement dans la région de statut", () => {
+      mount();
+      update(results([doc("a", range(12), "Mon doc")]));
+      more()!.click();
+      expect(status()).toBe("12 pages affichées pour Mon doc");
+      less()!.click();
+      expect(status()).toBe("5 pages affichées pour Mon doc");
+    });
+
+    it("rend le focus à Plus quand la carte focalisée est retirée au repli", () => {
+      mount();
+      update(results([doc("a", range(12))]));
+      more()!.click();
+      cards()[9]!.focus();
+      less()!.click();
+      expect(document.activeElement).toBe(more());
+    });
+
+    it("garde un seul arrêt tabulation réel : ArrowRight jusqu'à la carte 10 puis Replier", () => {
+      mount();
+      update(results([doc("a", range(12))]));
+      more()!.click();
+      cards()[0]!.focus();
+      for (let i = 0; i < 9; i++) key(document.activeElement!, "ArrowRight");
+      expect(document.activeElement).toBe(cards()[9]);
+      less()!.click();
+      expect(cards().map((c) => c.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    });
+
+    it("conserve le focus de Plus à travers un re-rendu à signature modifiée", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.focus();
+      update(results([doc("a", [...range(30), 31])]));
+      expect(document.activeElement).toBe(more());
+    });
+
+    it("conserve le focus de Replier à travers un re-rendu à signature modifiée", () => {
+      mount();
+      update(results([doc("a", range(12))]));
+      more()!.click();
+      expect(document.activeElement === less() || document.activeElement === document.body).toBe(true);
+      less()!.focus();
+      update(results([doc("a", [...range(12), 13])]));
+      expect(document.activeElement).toBe(less());
+    });
+
+    it("bascule le focus sur Replier quand le Plus focalisé devient masqué par un re-rendu", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      more()!.focus();
+      update(results([doc("a", range(15))]));
+      expect(visible(more())).toBe(false);
+      expect(document.activeElement).toBe(less());
+    });
+
+    it("détache exactement 12 fois au total après repli puis dispose", () => {
+      const view = mount();
+      update(results([doc("a", range(12))]));
+      more()!.click();
+      less()!.click();
+      view.dispose();
+      expect(detach).toHaveBeenCalledTimes(12);
+    });
+
+    it("détache exactement 12 fois au total après repli puis disparition du document", () => {
+      mount();
+      update(results([doc("a", range(12))]));
+      more()!.click();
+      less()!.click();
+      update(results([doc("b", [1])]));
+      expect(detach).toHaveBeenCalledTimes(12);
+    });
+
+    it("détecte un changement d'ordre ou de contenu au-delà des premières pages", () => {
+      mount();
+      const base = range(100);
+      update(results([doc("a", base)]));
+      attach.mockClear();
+      const swapped = [...base];
+      [swapped[80], swapped[81]] = [swapped[81]!, swapped[80]!];
+      update(results([doc("a", swapped)]));
+      expect(attach).toHaveBeenCalledTimes(5);
+      attach.mockClear();
+      update(results([doc("a", swapped)]));
+      expect(attach).not.toHaveBeenCalled();
+    });
+
+    it("l'état déplié est abandonné quand la vue passe par un état transitoire (loading)", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      update({ kind: "loading", progress: { loaded: 1, total: 2, failed: [] } });
+      update(results([doc("a", range(30))]));
+      expect(cards()).toHaveLength(5);
+    });
+
+    it("conserve l'état déplié lors d'un re-rendu à requête identique", () => {
+      mount();
+      update(results([doc("a", range(30)), doc("b", range(7))]));
+      more()!.click();
+      attach.mockClear();
+      detach.mockClear();
+      update(results([doc("a", range(30)), doc("b", range(7))]));
+      expect(more()!.textContent).toBe("et 15 autres pages");
+      expect(more()!.getAttribute("aria-expanded")).toBe("true");
+      expect(cards().filter((c) => c.dataset["docId"] === "a")).toHaveLength(15);
+      expect(attach).not.toHaveBeenCalled();
+      expect(detach).not.toHaveBeenCalled();
+    });
+
+    it("conserve l'état déplié quand le contenu du document change (tri, indexation à chaud)", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      update(results([doc("a", [...range(30), 31, 32])]));
+      expect(cards().slice(0, 15).map((c) => c.dataset["page"])).toEqual(range(15).map(String));
+      expect(cards()).toHaveLength(15);
+      expect(more()!.textContent).toBe("et 17 autres pages");
+      update(results([doc("a", range(30).reverse())]));
+      expect(cards()[0]!.dataset["page"]).toBe("30");
+      expect(cards()).toHaveLength(15);
+    });
+
+    it("réinitialise l'état à une nouvelle requête", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      update({ ...(results([doc("a", range(30))]) as Extract<SearchViewModel, { kind: "results" }>), query: "chien" });
+      expect(cards()).toHaveLength(5);
+      expect(more()!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("réinitialise l'état quand les résultats disparaissent", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      update({ kind: "empty-query" });
+      update(results([doc("a", range(30))]));
+      expect(cards()).toHaveLength(5);
+    });
+
+    it("ne fuit pas de détacheurs : tout est détaché au dispose", () => {
+      const view = mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      more()!.click();
+      expect(attach).toHaveBeenCalledTimes(25);
+      view.dispose();
+      expect(detach).toHaveBeenCalledTimes(25);
+    });
+
+    it("détache les cartes dépliées quand le document disparaît", () => {
+      mount();
+      update(results([doc("a", range(30))]));
+      more()!.click();
+      update(results([doc("b", [1])]));
+      expect(detach).toHaveBeenCalledTimes(15);
+    });
+
+    it("attache les vignettes des cartes ajoutées avec la bonne requête", () => {
+      mount();
+      update(results([doc("a", range(8))]));
+      more()!.click();
+      expect(attach).toHaveBeenCalledTimes(8);
+      expect(attach.mock.calls[7]![1]).toMatchObject({ docId: "a", page: 8, query: "chat", pdfSize: 10 });
+    });
+
+    it("inclut les cartes dépliées dans la navigation clavier", () => {
+      mount();
+      update(results([doc("a", range(8)), doc("b", [1])]));
+      more()!.click();
+      focusFirst();
+      key(document.activeElement!, "End");
+      expect(document.activeElement).toBe(cards()[cards().length - 1]);
+      expect(cards()[cards().length - 1]!.dataset["docId"]).toBe("b");
+      key(document.activeElement!, "ArrowLeft");
+      expect(document.activeElement).toBe(cards()[7]);
+      expect(cards()[7]!.dataset["page"]).toBe("8");
+      key(document.activeElement!, "Home");
+      expect(document.activeElement).toBe(cards()[0]);
+      expect(cards().filter((c) => c.tabIndex === 0)).toHaveLength(1);
+    });
+
+    it("ouvre le PDF à la bonne page depuis une carte dépliée", () => {
+      mount();
+      update(results([doc("a", range(8))]));
+      more()!.click();
+      cards()[7]!.click();
+      expect(onOpen).toHaveBeenCalledWith("a", 8, "chat");
+    });
+
+    it("utilise la clé i18n showLess et un libellé par défaut", () => {
+      mount({ t: (k) => (k === "showLess" ? "Collapse" : k) });
+      update(results([doc("a", range(6))]));
+      more()!.click();
+      expect(less()!.textContent).toBe("Collapse");
     });
   });
 });

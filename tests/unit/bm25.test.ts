@@ -6,6 +6,7 @@ import {
   postingsOf,
   groupByDocument,
   idf,
+  MAX_EXPANDED_PAGES,
   searchPages,
   termScore,
   toFtsBm25,
@@ -213,7 +214,7 @@ describe("groupByDocument", () => {
     expect(groups[0]?.relevance).toBeCloseTo((IDF_DF2_OF_6 * 2.2) / 1.9 * 100 + 5 + 1500, 8);
   });
 
-  it("limite a 5 pages par document, triees par score decroissant, et plafonne le bonus de pages", () => {
+  it("conserve toutes les pages correspondantes (jusqu'au plafond), triees par score decroissant, et plafonne le bonus de pages", () => {
     const many: PageInput[] = Array.from({ length: 80 }, (_, i) => ({
       docId: "D",
       page: i + 1,
@@ -222,9 +223,32 @@ describe("groupByDocument", () => {
     const groups = groupByDocument(searchPages(buildIndex(many), "alpha"));
     expect(groups).toHaveLength(1);
     expect(groups[0]?.matchingPages).toBe(10);
-    expect(groups[0]?.pages).toHaveLength(5);
+    expect(groups[0]?.pages).toHaveLength(10);
     const bonus = (groups[0]?.relevance ?? 0) - (groups[0]?.bestScore ?? 0) * 100;
     expect(bonus).toBeCloseTo(50, 8); // 10 pages * 5
+  });
+
+  it("plafonne la liste de pages a MAX_EXPANDED_PAGES sans changer l'ordre ni matchingPages", () => {
+    const total = MAX_EXPANDED_PAGES + 50;
+    const many: PageInput[] = Array.from({ length: total }, (_, i) => ({
+      docId: "D",
+      page: i + 1,
+      text: `alpha ${"mot ".repeat(i % 7)}`,
+    }));
+    const hits = searchPages(buildIndex(many), "alpha");
+    const groups = groupByDocument(hits);
+    expect(groups[0]?.matchingPages).toBe(total);
+    expect(groups[0]?.pages).toHaveLength(MAX_EXPANDED_PAGES);
+    expect(groups[0]?.pages.map((p) => p.page)).toEqual(hits.slice(0, MAX_EXPANDED_PAGES).map((h) => h.page));
+  });
+
+  it("frontiere du plafond : 200 pages gardees telles quelles, 201 tronquees a 200", () => {
+    for (const [n, kept] of [[MAX_EXPANDED_PAGES, MAX_EXPANDED_PAGES], [MAX_EXPANDED_PAGES + 1, MAX_EXPANDED_PAGES]] as const) {
+      const many: PageInput[] = Array.from({ length: n }, (_, i) => ({ docId: "D", page: i + 1, text: "alpha" }));
+      const g = groupByDocument(searchPages(buildIndex(many), "alpha"));
+      expect(g[0]?.matchingPages).toBe(n);
+      expect(g[0]?.pages).toHaveLength(kept);
+    }
   });
 
   it("plafonne le bonus de nombre de pages a 300", () => {

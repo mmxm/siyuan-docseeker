@@ -21,7 +21,12 @@ export const SEARCH_CSS = `
 .docseeker-doc-title { font-weight: bold; overflow-wrap: anywhere; }
 .docseeker-doc-count { margin-left: 2px; font-size: 12px; color: var(--b3-theme-on-surface); }
 .docseeker-doc-path { font-size: 12px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
-.docseeker-more { margin: 4px 0 0; font-size: 12px; color: var(--b3-theme-on-surface); }
+.docseeker-more-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.docseeker-more, .docseeker-less { min-height: 32px; font-size: 12px; }
+.docseeker-more[hidden], .docseeker-less[hidden] { display: none; }
+.docseeker-truncated { align-self: center; font-size: 12px; }
+.docseeker-truncated[hidden] { display: none; }
+.docseeker-more:focus-visible, .docseeker-less:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-cards { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .docseeker-card { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; min-height: 32px; min-width: 32px; cursor: pointer; background: transparent; color: inherit; border: 1px solid transparent; border-radius: var(--b3-border-radius, 4px); }
 .docseeker-card:hover { border-color: var(--b3-theme-primary); }

@@ -15,8 +15,9 @@ export const MIN_IDF = 1e-6;
 /** idf FTS5 : ln((N - df + 0.5) / (df + 0.5)). */
 const IDF_SMOOTHING = 0.5;
 
+/** Plafond de pages conservées par document (la vue en affiche 5, puis déplie par lots) : borne mémoire et DOM. */
+export const MAX_EXPANDED_PAGES = 200;
 /** sql.rs:213-218 et constants.rs:17-21. */
-export const MAX_PAGES_PER_DOCUMENT = 5;
 export const BEST_PAGE_WEIGHT = 100;
 export const PAGE_COUNT_WEIGHT = 5;
 export const PAGE_COUNT_BONUS_CAP = 300;
@@ -466,7 +467,7 @@ function toDocumentHit(docId: string, pageHits: readonly PageHit[], titleBonus: 
     bestScore,
     matchingPages: sorted.length,
     relevance: titleBonus + Math.abs(bestScore) * BEST_PAGE_WEIGHT + pageBonus,
-    pages: sorted.slice(0, MAX_PAGES_PER_DOCUMENT),
+    pages: sorted.slice(0, MAX_EXPANDED_PAGES),
   };
 }
 

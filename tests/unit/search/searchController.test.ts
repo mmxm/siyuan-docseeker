@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildIndex, type Bm25Index } from "../../../src/core/bm25";
+import { buildIndex, MAX_EXPANDED_PAGES, type Bm25Index } from "../../../src/core/bm25";
 import {
   createSearchController,
   type DocInfo,
@@ -130,6 +130,28 @@ describe("createSearchController", () => {
     expect(a?.pages.map((p) => p.page).sort()).toEqual([1, 2]);
     expect(a?.relevance).toBeGreaterThan(0);
     expect(vm.partial).toBe(false);
+  });
+
+  it("transmits the full page list (capped) so the view can expand it", () => {
+    const pages = Array.from({ length: 12 }, (_, i) => ({ docId: "a", page: i + 1, text: "gradient" }));
+    const { controller, clock } = setup(new FakeSource(pages, [doc("a", "Alpha")]));
+    controller.setQuery("gradient");
+    clock.advance(200);
+    const vm = controller.getViewModel();
+    if (vm.kind !== "results") throw new Error("expected results");
+    expect(vm.docs[0]?.matchingPages).toBe(12);
+    expect(vm.docs[0]?.pages).toHaveLength(12);
+  });
+
+  it("caps the transmitted page list at MAX_EXPANDED_PAGES while keeping the real matchingPages", () => {
+    const pages = Array.from({ length: MAX_EXPANDED_PAGES + 30 }, (_, i) => ({ docId: "a", page: i + 1, text: "gradient" }));
+    const { controller, clock } = setup(new FakeSource(pages, [doc("a", "Alpha")]));
+    controller.setQuery("gradient");
+    clock.advance(200);
+    const vm = controller.getViewModel();
+    if (vm.kind !== "results") throw new Error("expected results");
+    expect(vm.docs[0]?.matchingPages).toBe(MAX_EXPANDED_PAGES + 30);
+    expect(vm.docs[0]?.pages).toHaveLength(MAX_EXPANDED_PAGES);
   });
 
   it("applies title bonuses", () => {

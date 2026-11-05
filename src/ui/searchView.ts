@@ -34,10 +34,13 @@ export interface SearchView {
 }
 
 export const MAX_CARDS_PER_DOC = 5;
+/** Nombre de cartes ajoutées à chaque clic sur « et N autres pages ». */
+export const EXPAND_BATCH = 10;
 
 interface DocEntry {
   li: HTMLLIElement;
   signature: string;
+  /** Un détacheur par carte affichée, dans l'ordre des cartes. */
   detachers: (() => void)[];
 }
 
@@ -62,6 +65,9 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   matchMany: "{n} pages correspondantes",
   moreOne: "et {n} autre page",
   moreMany: "et {n} autres pages",
+  showLess: "Replier",
+  truncated: "{n} pages non affichées",
+  shownStatus: "{n} pages affichées pour {title}",
   failedOne: "{n} index illisible : réindexer",
   failedMany: "{n} index illisibles : réindexer",
   cardLabel: "{title}, p. {page}",
@@ -125,6 +131,10 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
 
   const entries = new Map<string, DocEntry>();
   let disposed = false;
+  // Nombre de cartes affichées par document déplié ; valable pour une seule requête.
+  const expanded = new Map<string, number>();
+  let expandedQuery: string | undefined;
+  let cardsSeq = 0;
 
   const allCards = (): HTMLButtonElement[] =>
     Array.from(list.querySelectorAll<HTMLButtonElement>("button.docseeker-card"));
@@ -132,6 +142,13 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   const focusCard = (card: HTMLButtonElement): void => {
     for (const c of allCards()) c.tabIndex = c === card ? 0 : -1;
     card.focus();
+  };
+
+  /** Garantit une seule carte tabbable (roving tabindex) après ajout ou retrait de cartes. */
+  const ensureTabStop = (): void => {
+    const cards = allCards();
+    if (cards.length === 0 || cards.some((c) => c.tabIndex === 0)) return;
+    cards[0]!.tabIndex = 0;
   };
 
   const setText = (el: HTMLElement, text: string): void => {
@@ -181,10 +198,12 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     path.textContent = result.path;
     const cardsEl = doc.createElement("div");
     cardsEl.className = "docseeker-cards";
+    cardsEl.id = `docseeker-cards-${++cardsSeq}`;
     const entry: DocEntry = { li, signature, detachers: [] };
     const meta = deps.getDocMeta(result.docId);
-    const shown = result.pages.slice(0, MAX_CARDS_PER_DOC);
-    for (const { page } of shown) {
+    const total = result.pages.length;
+
+    const addCard = (page: number): void => {
       const card = doc.createElement("button");
       card.type = "button";
       card.className = "docseeker-card";
@@ -209,27 +228,101 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
           pdfModifiedMs: meta?.pdfModifiedMs ?? 0,
         }),
       );
-    }
+    };
+
+    const wanted = Math.min(Math.max(expanded.get(result.docId) ?? MAX_CARDS_PER_DOC, MAX_CARDS_PER_DOC), total);
+    for (const { page } of result.pages.slice(0, wanted)) addCard(page);
     li.append(title, path, cardsEl);
-    const hidden = result.matchingPages - shown.length;
-    if (hidden > 0) {
-      const more = doc.createElement("p");
-      more.className = "docseeker-more";
-      more.textContent = count(hidden, "moreOne", "moreMany");
-      li.appendChild(more);
+    if (total <= MAX_CARDS_PER_DOC) {
+      expanded.delete(result.docId); // état périmé d'un document qui avait été déplié puis a rétréci
+      return entry;
     }
+
+    const more = doc.createElement("button");
+    more.type = "button";
+    more.className = "docseeker-more b3-button b3-button--outline";
+    more.dataset["docId"] = result.docId;
+    more.dataset["action"] = "more";
+    const lessBtn = doc.createElement("button");
+    lessBtn.type = "button";
+    lessBtn.className = "docseeker-less b3-button b3-button--outline";
+    lessBtn.dataset["docId"] = result.docId;
+    lessBtn.dataset["action"] = "less";
+    lessBtn.textContent = tr("showLess");
+    for (const b of [more, lessBtn]) b.setAttribute("aria-controls", cardsEl.id);
+    const note = doc.createElement("span");
+    note.className = "docseeker-truncated";
+    const actionsEl = doc.createElement("div");
+    actionsEl.className = "docseeker-more-actions";
+    actionsEl.append(more, lessBtn, note);
+    li.appendChild(actionsEl);
+
+    const announce = (): void =>
+      setText(statusEl, tr("shownStatus", { n: shownCount(), title: result.title }));
+    const shownCount = (): number => entry.detachers.length;
+    // Le bouton qui a le focus ne doit jamais être masqué sans rendre le focus à son vis-à-vis.
+    const sync = (): void => {
+      const shown = shownCount();
+      const remaining = total - shown;
+      const moveFocus = (from: HTMLButtonElement, to: HTMLButtonElement): void => {
+        if (doc.activeElement === from) to.focus();
+      };
+      // Vrai reste (matchingPages) tant que des pages sont dépliables ; au-delà du plafond, note non interactive.
+      const realRemaining = Math.max(result.matchingPages - shown, remaining);
+      more.textContent = count(realRemaining, "moreOne", "moreMany");
+      more.setAttribute("aria-label", `${more.textContent}, ${result.title}`);
+      lessBtn.setAttribute("aria-label", `${tr("showLess")}, ${result.title}`);
+      const isExpanded = String(shown > MAX_CARDS_PER_DOC);
+      more.setAttribute("aria-expanded", isExpanded);
+      lessBtn.setAttribute("aria-expanded", isExpanded);
+      const notShown = result.matchingPages - total;
+      note.hidden = remaining > 0 || notShown <= 0;
+      note.textContent = notShown > 0 ? tr("truncated", { n: notShown }) : "";
+      lessBtn.hidden = shown <= MAX_CARDS_PER_DOC;
+      more.hidden = remaining <= 0;
+      if (more.hidden) moveFocus(more, lessBtn);
+      if (lessBtn.hidden) moveFocus(lessBtn, more);
+      if (shown > MAX_CARDS_PER_DOC) expanded.set(result.docId, shown);
+      else expanded.delete(result.docId);
+      ensureTabStop();
+    };
+    more.addEventListener("click", () => {
+      const from = shownCount();
+      for (const { page } of result.pages.slice(from, from + EXPAND_BATCH)) addCard(page);
+      sync();
+      announce();
+    });
+    lessBtn.addEventListener("click", () => {
+      const focusWasInCards = cardsEl.contains(doc.activeElement);
+      while (entry.detachers.length > MAX_CARDS_PER_DOC) {
+        entry.detachers.pop()?.();
+        cardsEl.lastElementChild?.remove();
+      }
+      sync();
+      if (focusWasInCards) (more.hidden ? lessBtn : more).focus();
+      announce();
+    });
+    sync();
     return entry;
   };
 
   const renderResults = (docs: readonly ResultDoc[], query: string): void => {
     const active = doc.activeElement as HTMLElement | null;
-    const focusedKey =
-      active && list.contains(active) ? `${active.dataset["docId"]}|${active.dataset["page"]}` : undefined;
+    const keyOf = (el: HTMLElement): string =>
+      `${el.dataset["docId"]}|${el.dataset["page"] ?? el.dataset["action"]}`;
+    const focusedKey = active && list.contains(active) ? keyOf(active) : undefined;
+    if (query !== expandedQuery) {
+      expanded.clear();
+      expandedQuery = query;
+    }
     const seen = new Set<string>();
     let previous: Element | null = null;
     for (const result of docs) {
       seen.add(result.docId);
-      const pages = result.pages.slice(0, MAX_CARDS_PER_DOC).map((p) => p.page);
+      // Signature compacte : longueur, 5 premières pages et empreinte de toute la liste ordonnée.
+      let hash = 2166136261;
+      for (const p of result.pages) hash = Math.imul(hash ^ p.page, 16777619) >>> 0;
+      const pages = [result.pages.length, result.pages.slice(0, MAX_CARDS_PER_DOC).map((p) => p.page), hash];
       const meta = deps.getDocMeta(result.docId);
       const signature = JSON.stringify([
         result.title, result.path, result.matchingPages, pages, query, meta?.pdfSize, meta?.pdfModifiedMs,
@@ -251,11 +344,19 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       if (!seen.has(id)) {
         dropEntry(entry);
         entries.delete(id);
+        expanded.delete(id);
       }
     }
     const cards = allCards();
-    const keep = cards.find((c) => `${c.dataset["docId"]}|${c.dataset["page"]}` === focusedKey);
-    const tabbable = keep ?? cards[0];
+    const focusable = Array.from(list.querySelectorAll<HTMLButtonElement>("button[data-doc-id]")).filter(
+      (b) => !b.hidden,
+    );
+    const keep =
+      focusable.find((b) => keyOf(b) === focusedKey) ??
+      // « Plus » masqué par le re-rendu : le focus passe à « Replier » du même document.
+      (focusedKey?.endsWith("|more") ? focusable.find((b) => keyOf(b) === focusedKey.replace(/\|more$/, "|less")) : undefined);
+    const keptCard = keep && keep.classList.contains("docseeker-card") ? keep : undefined;
+    const tabbable = keptCard ?? cards[0];
     for (const c of cards) c.tabIndex = c === tabbable ? 0 : -1;
     if (keep) keep.focus();
   };
@@ -267,7 +368,12 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (disposed) return;
     const vm = deps.controller.getViewModel();
     const hadFocus = list.contains(doc.activeElement);
-    if (vm.kind !== "results") clearList();
+    if (vm.kind !== "results") {
+      // Un état transitoire (loading, erreur...) vide la liste : l'expansion est volontairement abandonnée.
+      clearList();
+      expanded.clear();
+      expandedQuery = undefined;
+    }
     switch (vm.kind) {
       case "empty-query":
         setStatus(tr("emptyQuery"));

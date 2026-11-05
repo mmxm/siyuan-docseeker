@@ -15,6 +15,8 @@ describe("SEARCH_CSS", () => {
     ".docseeker-search input[type=\"search\"]:focus-visible",
     ".docseeker-reindex:focus-visible",
     ".docseeker-summary:focus-visible",
+    ".docseeker-more:focus-visible",
+    ".docseeker-less:focus-visible",
   ])("donne un focus visible fort à %s", (selector) => {
     expect(rulesFor(selector).join(" ")).toContain(FOCUS);
   });
@@ -28,6 +30,12 @@ describe("SEARCH_CSS", () => {
   it("garantit des cibles d'au moins 32px pour les boutons", () => {
     expect(rulesFor(".docseeker-reindex").join(" ")).toMatch(/min-height:\s*32px/);
     expect(rulesFor(".docseeker-card").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-more").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-less").join(" ")).toMatch(/min-height:\s*32px/);
+  });
+
+  it("masque réellement les boutons de dépliage hidden", () => {
+    expect(SEARCH_CSS).toContain(".docseeker-more[hidden], .docseeker-less[hidden] { display: none; }");
   });
 
   it("gère les couleurs forcées pour les surlignages", () => {
