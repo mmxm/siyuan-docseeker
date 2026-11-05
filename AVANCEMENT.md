@@ -18,7 +18,7 @@
 
 ## Où on en est
 
-**Tests : 1326, typage strict propre, couverture ~99 % des lignes de `src`.**
+**Tests : 1337, typage strict propre, couverture ~99 % des lignes de `src`.**
 
 | Module | Rôle |
 |---|---|
@@ -39,7 +39,7 @@
 | `src/diagnostic/m0.ts` | 7 contrôles techniques (discovery, head, range, roundtrip, pdfjs, worker, auth), le plus petit PDF **non vide** sert au test PDF.js |
 | `src/index.ts` | Plugin : icône de barre supérieure, commande, onglet (Réindexer + état, Diagnostic M0) |
 
-Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.json, i18n, README). Installation de test : copie manuelle dans `~/SiYuan/data/plugins/siyuan-docseeker/` puis désactivation/réactivation du plugin dans Marketplace > Téléchargés > Plugins (suffit, pas besoin de relancer SiYuan ; ⌘R ne marche pas). Pas encore d'`icon.png`.
+Build : `npm run package` → `dist/index.js` + `package.zip` (index.js, plugin.json, i18n, README). Installation de test : copie manuelle dans `~/SiYuan/data/plugins/siyuan-docseeker/` puis désactivation/réactivation du plugin dans Marketplace > Téléchargés > Plugins (suffit, pas besoin de relancer SiYuan ; ⌘R ne marche pas). `icon.png` fait (`scripts/gen-icon.mjs`), pas encore de `preview.png` (capture d'écran à fournir).
 
 ## Décisions prises
 
@@ -110,3 +110,8 @@ Commits : identité passée à la volée (`git -c user.name="francois" -c user.e
 - Une commande enchaînée (`npm test | grep … && git commit`) **ne s'arrête pas** sur un test rouge : vérifier les résultats avant de commiter.
 - Node 26 ne peut pas exécuter directement les `.ts` du projet (syntaxe non supportée par le strip-types) : passer par Vitest.
 - Les noms de fichiers macOS sont en NFD ; le noyau SiYuan répond 404 à `HEAD` sur ces noms.
+
+
+## Release 0.2.0 (préparée, non publiée)
+
+`npm run release:check` vérifie tout sans publier (arbre propre, main, versions, CHANGELOG, typecheck, tests, zip) puis affiche les commandes manuelles : `git tag v0.2.0`, `git push origin v0.2.0`, `gh release create v0.2.0 package.zip --title "DocSeeker 0.2.0" --notes-file CHANGELOG.md`. À faire : `preview.png`, inscription au Marché (dépôt `siyuan-note/bazaar`), boutons Pause/Reprendre absents de l'interface (clés i18n seulement).

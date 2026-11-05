@@ -2,7 +2,7 @@
   "name": "siyuan-docseeker",
   "author": "mmxm",
   "url": "https://github.com/mmxm/siyuan-docseeker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "3.8.0",
   "backends": ["all"],
   "frontends": ["desktop", "browser-desktop"],
@@ -16,8 +16,11 @@
     "fr_FR": "Recherche plein texte dans les PDF avec vignettes surlignées",
     "en_US": "Full-text search inside PDFs with highlighted thumbnails"
   },
+  "icon": "icon.png",
   "readme": {
-    "default": "README.md"
+    "default": "README.md",
+    "fr_FR": "README.md",
+    "en_US": "README_en_US.md"
   },
   "keywords": ["pdf", "search", "recherche", "thumbnail", "vignette"]
 }

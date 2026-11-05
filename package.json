@@ -1,6 +1,6 @@
 {
   "name": "siyuan-docseeker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Plugin SiYuan : recherche plein texte dans les PDF avec vignettes surlignées",
   "private": true,
   "type": "module",
@@ -14,7 +14,8 @@
     "gen:ranking-fixture": "node scripts/gen-docseeker-ranking-fixture.mjs",
     "measure:memory": "vitest run -c vitest.perf.config.ts memory",
     "measure:multiword": "vitest run -c vitest.perf.config.ts multiword",
-    "measure:corpus": "vitest run -c vitest.perf.config.ts corpus.measure"
+    "measure:corpus": "vitest run -c vitest.perf.config.ts corpus.measure",
+    "release:check": "node scripts/release.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
