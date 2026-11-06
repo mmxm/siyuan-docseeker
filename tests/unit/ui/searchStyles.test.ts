@@ -108,4 +108,69 @@ describe("SEARCH_CSS", () => {
     expect(inner).toContain("direction: ltr");
     expect(inner).toContain("unicode-bidi: bidi-override");
   });
+
+  describe("barre de filtres", () => {
+    it.each([
+      ".docseeker-filters > summary:focus-visible",
+      ".docseeker-filter-field input:focus-visible",
+      ".docseeker-filter-field select:focus-visible",
+      ".docseeker-filter-reset:focus-visible",
+      ".docseeker-reset-filters:focus-visible",
+    ])("donne un focus visible fort à %s", (selector) => {
+      expect(rulesFor(selector).join(" ")).toContain(FOCUS);
+    });
+
+    it("la barre est un flex qui passe à la ligne, avec un espace de 8px", () => {
+      const rule = rulesFor(".docseeker-toolbar").join(" ");
+      expect(rule).toContain("display: flex");
+      expect(rule).toContain("flex-wrap: wrap");
+      expect(rule).toContain("gap: 8px");
+    });
+
+    it("la grille s'adapte à la largeur, sans largeur fixe (320 px)", () => {
+      const rule = rulesFor(".docseeker-filter-grid").join(" ");
+      expect(rule).toContain("repeat(auto-fit, minmax(min(100%, 140px), 1fr))");
+      expect(rule).not.toMatch(/(?<!max-|min-)width:\s*\d+px/);
+    });
+
+    it("les champs et le select se plient à la largeur de leur cellule, sans largeur fixe en px", () => {
+      for (const selector of ['.docseeker-filter-field input:not([type="checkbox"])', ".docseeker-filter-field select"]) {
+        const rule = rulesFor(selector).join(" ");
+        expect(rule, selector).not.toBe("");
+        expect(rule, selector).toContain("width: 100%");
+        expect(rule, selector).toContain("box-sizing: border-box");
+        expect(rule, selector).not.toMatch(/(?<![-\w])width:\s*\d+px/);
+      }
+    });
+
+    it("garantit 32px de hauteur minimale aux contrôles, au résumé et au bouton", () => {
+      for (const selector of [
+        '.docseeker-filter-field input:not([type="checkbox"])',
+        ".docseeker-filter-field select",
+        ".docseeker-filters > summary",
+        ".docseeker-filter-reset",
+        ".docseeker-reset-filters",
+      ]) {
+        expect(rulesFor(selector).join(" "), selector).toMatch(/min-height:\s*32px/);
+      }
+    });
+
+    it("l'erreur utilise la couleur d'erreur du thème et le champ invalide un contour", () => {
+      expect(rulesFor(".docseeker-filter-error").join(" ")).toContain("var(--b3-theme-error)");
+      expect(rulesFor('.docseeker-filter-field [aria-invalid="true"]').join(" ")).toContain("var(--b3-theme-error)");
+    });
+
+    it("le bouton aria-disabled est visiblement inactif ; l'erreur masquée n'occupe rien", () => {
+      expect(rulesFor('.docseeker-filter-reset[aria-disabled="true"]').join(" ")).toContain("cursor: not-allowed");
+      expect(rulesFor(".docseeker-filter-error[hidden]").join(" ")).toContain("display: none");
+    });
+
+    it("prévoit un bloc forced-colors pour le focus des filtres", () => {
+      const idx = SEARCH_CSS.indexOf("@media (forced-colors: active)");
+      expect(idx).toBeGreaterThan(-1);
+      const block = SEARCH_CSS.slice(idx);
+      expect(block).toContain(".docseeker-filter-field");
+      expect(block).toContain("Highlight");
+    });
+  });
 });

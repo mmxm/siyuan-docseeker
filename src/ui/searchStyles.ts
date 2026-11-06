@@ -5,6 +5,25 @@ export const SEARCH_CSS = `
 .docseeker-search { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 8px; gap: 8px; color: var(--b3-theme-on-background); background: var(--b3-theme-background); }
 .docseeker-search input[type="search"] { width: 100%; box-sizing: border-box; min-height: 32px; }
 .docseeker-search input[type="search"]:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.docseeker-filters { flex: 1 1 100%; min-width: 0; }
+.docseeker-filters > summary { display: flex; align-items: center; min-height: 32px; cursor: pointer; font-size: 12px; color: var(--b3-theme-on-surface); }
+.docseeker-filters > summary:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; padding: 4px 0 8px; align-items: end; }
+.docseeker-filter-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.docseeker-filter-field label { font-size: 12px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
+.docseeker-filter-field input:not([type="checkbox"]), .docseeker-filter-field select { width: 100%; box-sizing: border-box; min-height: 32px; }
+.docseeker-filter-field input:focus-visible, .docseeker-filter-field select:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-filter-field [aria-invalid="true"] { border-color: var(--b3-theme-error); box-shadow: 0 0 0 1px var(--b3-theme-error); }
+.docseeker-filter-check { flex-direction: row; align-items: center; gap: 8px; min-height: 32px; }
+.docseeker-filter-check input { margin: 0; min-width: 16px; min-height: 16px; }
+.docseeker-filter-error { margin: 0; font-size: 12px; color: var(--b3-theme-error); overflow-wrap: anywhere; }
+.docseeker-filter-error[hidden] { display: none; }
+.docseeker-filter-actions { display: flex; align-items: flex-end; }
+.docseeker-filter-reset, .docseeker-reset-filters { min-height: 32px; min-width: 32px; }
+.docseeker-filter-reset:focus-visible, .docseeker-reset-filters:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-filter-reset[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.docseeker-reset-filters[hidden] { display: none; }
 .docseeker-status { font-size: 12px; color: var(--b3-theme-on-surface); min-height: 1.4em; }
 .docseeker-index-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .docseeker-index-activity { font-size: 12px; color: var(--b3-theme-on-surface); min-height: 1.4em; white-space: normal; overflow-wrap: anywhere; }
@@ -54,6 +73,9 @@ export const SEARCH_CSS = `
 @media (forced-colors: active) {
   .docseeker-highlight { background: transparent; outline: 2px solid Highlight; outline-offset: -2px; }
   .docseeker-card:focus-visible { outline-color: Highlight; }
+  .docseeker-filters > summary:focus-visible, .docseeker-filter-field input:focus-visible, .docseeker-filter-field select:focus-visible, .docseeker-filter-reset:focus-visible, .docseeker-reset-filters:focus-visible { outline-color: Highlight; }
+  .docseeker-filter-field [aria-invalid="true"] { border-color: Mark; box-shadow: none; outline: 2px solid Mark; }
+  .docseeker-filter-reset[aria-disabled="true"] { opacity: 1; color: GrayText; border-color: GrayText; }
 }
 `;
 

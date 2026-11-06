@@ -4,8 +4,11 @@
  */
 import type { IndexActivitySnapshot } from "../indexer/indexActivity";
 import type { ResultDoc, SearchViewModel } from "../search/searchController";
+import { countActiveFilters, type SearchOptions } from "../search/resultOptions";
 import { containingFolder } from "./pathLabel";
 import { ensureSearchStyle } from "./searchStyles";
+import { mountSearchToolbar, type SearchToolbar } from "./searchToolbar";
+import { nextUiId } from "./uniqueId";
 
 export interface ThumbnailRequest {
   readonly docId: string;
@@ -36,6 +39,12 @@ export interface SearchViewDeps {
   };
   readonly schedule?: (fn: () => void, ms: number) => unknown;
   readonly clear?: (handle: unknown) => void;
+  /** Filtres de résultats : absents, la vue n'affiche pas la barre de filtres. */
+  readonly options?: {
+    getOptions(): SearchOptions;
+    setOptions(next: SearchOptions): void;
+    getFolders(): readonly string[];
+  };
 }
 
 export interface SearchView {
@@ -92,6 +101,25 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   autoIndexPartialOne: "Index à jour, mais {n} élément n'a pas pu être lu : voir le journal des paramètres",
   autoIndexPartialMany: "Index à jour, mais {n} éléments n'ont pas pu être lus : voir le journal des paramètres",
   indexingMayMiss: "Indexation en cours : des résultats peuvent manquer",
+  filtersLabel: "Filtres",
+  filtersActiveOne: "Filtres (1 actif)",
+  filtersActiveMany: "Filtres ({n} actifs)",
+  filterFolder: "Dossier",
+  filterAllFolders: "Tous les dossiers",
+  filterSubfolders: "Inclure les sous-dossiers",
+  filterName: "Nom du document contient",
+  filterMinPages: "Pages au moins",
+  filterMaxPages: "Pages au plus",
+  filterModifiedAfter: "Modifié après",
+  filterReset: "Réinitialiser les filtres",
+  filterError: "Erreur : ",
+  filterErrMinMax: "Pages au moins ne peut pas dépasser Pages au plus.",
+  filterErrInteger: "Saisissez un nombre entier supérieur ou égal à 1.",
+  filterErrDate: "Saisissez une date valide.",
+  hiddenByFiltersOne: "1 document masqué par les filtres",
+  hiddenByFiltersMany: "{n} documents masqués par les filtres",
+  noResultFiltersOne: "Aucun résultat avec 1 filtre actif.",
+  noResultFiltersMany: "Aucun résultat avec {n} filtres actifs.",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -144,6 +172,17 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     actions.appendChild(settingsButton);
   }
 
+  // Bouton de réinitialisation à côté du statut quand les filtres masquent tous les résultats.
+  let resetButton: HTMLButtonElement | undefined;
+  if (deps.options) {
+    resetButton = doc.createElement("button");
+    resetButton.type = "button";
+    resetButton.className = "b3-button b3-button--outline docseeker-reset-filters";
+    resetButton.textContent = tr("filterReset");
+    resetButton.hidden = true;
+    actions.appendChild(resetButton);
+  }
+
   const list = doc.createElement("ul");
   list.className = "docseeker-list";
   list.setAttribute("aria-label", tr("resultsList"));
@@ -156,15 +195,31 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     activityRow.className = "docseeker-index-row";
   }
 
-  root.append(input, ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list);
+  let toolbarEl: HTMLElement | undefined;
+  if (deps.options) {
+    toolbarEl = doc.createElement("div");
+    toolbarEl.className = "docseeker-toolbar";
+  }
+
+  root.append(input, ...(toolbarEl ? [toolbarEl] : []), ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list);
   host.appendChild(root);
+  const opts = deps.options;
+  // Fonctions liées explicitement : pas de spread de méthodes (qui perdrait `this` d'un objet à classe).
+  const toolbar: SearchToolbar | undefined =
+    opts && toolbarEl
+      ? mountSearchToolbar(toolbarEl, {
+          getOptions: () => opts.getOptions(),
+          setOptions: (next) => opts.setOptions(next),
+          getFolders: () => opts.getFolders(),
+          t: (key, vars) => tr(key, vars),
+        })
+      : undefined;
 
   const entries = new Map<string, DocEntry>();
   let disposed = false;
   // Nombre de cartes affichées par document déplié ; valable pour une seule requête.
   const expanded = new Map<string, number>();
   let expandedQuery: string | undefined;
-  let cardsSeq = 0;
 
   const allCards = (): HTMLButtonElement[] =>
     Array.from(list.querySelectorAll<HTMLButtonElement>("button.docseeker-card"));
@@ -185,7 +240,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (el.textContent !== text) el.textContent = text;
   };
 
-  const setStatus = (text: string, opts: { error?: boolean; settings?: boolean } = {}): void => {
+  const setStatus = (text: string, opts: { error?: boolean; settings?: boolean; reset?: boolean } = {}): void => {
     if (opts.error) {
       setText(statusEl, "");
       setText(alertEl, text);
@@ -197,8 +252,13 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       const show = opts.settings === true;
       if (!show && !settingsButton.hidden && doc.activeElement === settingsButton) input.focus();
       settingsButton.hidden = !show;
-      actions.hidden = !show;
     }
+    if (resetButton) {
+      const show = opts.reset === true;
+      if (!show && !resetButton.hidden && doc.activeElement === resetButton) input.focus();
+      resetButton.hidden = !show;
+    }
+    if (settingsButton || resetButton) actions.hidden = (settingsButton?.hidden ?? true) && (resetButton?.hidden ?? true);
   };
 
   const dropEntry = (entry: DocEntry): void => {
@@ -235,7 +295,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     path.title = result.path; // chemin complet en infobulle
     const cardsEl = doc.createElement("div");
     cardsEl.className = "docseeker-cards";
-    cardsEl.id = `docseeker-cards-${++cardsSeq}`;
+    cardsEl.id = nextUiId("docseeker-cards");
     const entry: DocEntry = { li, signature, detachers: [] };
     const meta = deps.getDocMeta(result.docId);
     const total = result.pages.length;
@@ -398,6 +458,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (keep) keep.focus();
   };
 
+  const hiddenText = (n: number): string => count(n, "hiddenByFiltersOne", "hiddenByFiltersMany");
   const withFailed = (text: string, failedCount: number): string =>
     failedCount > 0 ? `${text}. ${count(failedCount, "failedOne", "failedMany")}` : text;
   /**
@@ -414,6 +475,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   const render = (): void => {
     if (disposed) return;
     const vm = deps.controller.getViewModel();
+    toolbar?.refresh(); // bon marché (signature des dossiers) : liste et résumé suivent l'index et les options
     const hadFocus = list.contains(doc.activeElement);
     if (vm.kind !== "results") {
       // Un état transitoire (loading, erreur...) vide la liste : l'expansion est volontairement abandonnée.
@@ -429,8 +491,13 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         setStatus(tr("loadingPartial", { loaded: vm.progress.loaded, total: vm.progress.total }));
         break;
       case "no-result": {
-        const base = vm.partial ? `${tr("noResults")}${tr("partialSuffix")}` : tr("noResults");
-        setStatus(withIndexing(withFailed(base, vm.failedCount)), { settings: vm.failedCount > 0 });
+        const byFilters = vm.hiddenByFilters > 0 && opts !== undefined;
+        const partialNote = vm.partial ? tr("partialSuffix") : "";
+        const base = opts !== undefined && byFilters
+          ? `${count(countActiveFilters(opts.getOptions().filters), "noResultFiltersOne", "noResultFiltersMany")} ${hiddenText(vm.hiddenByFilters)}${partialNote}`
+          : `${tr("noResults")}${partialNote}`;
+        const text = withIndexing(withFailed(base, vm.failedCount));
+        setStatus(byFilters ? `${text}.` : text, { settings: vm.failedCount > 0, reset: byFilters });
         break;
       }
       case "error":
@@ -443,7 +510,8 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       case "results": {
         const pages = vm.docs.reduce((n, d) => n + d.matchingPages, 0);
         const base = `${count(vm.total, "docOne", "docMany")}, ${count(pages, "pageOne", "pageMany")}`;
-        const counted = vm.partial ? `${base}${tr("partialSuffix")}` : base;
+        const withPartial = vm.partial ? `${base}${tr("partialSuffix")}` : base;
+        const counted = vm.hiddenByFilters > 0 ? `${withPartial}. ${hiddenText(vm.hiddenByFilters)}` : withPartial;
         // Texte identique tant que le classement reste affiné : la région live ne le ré-annonce pas.
         const refined = vm.ranking === "proximity" ? `${counted}. ${tr("rankingRefined")}` : counted;
         setStatus(withIndexing(withFailed(refined, vm.failedCount)), { settings: vm.failedCount > 0 });
@@ -479,6 +547,12 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         focusCard(first);
       }
     }
+  });
+
+  resetButton?.addEventListener("click", () => {
+    toolbar?.reset();
+    // Le panneau de filtres est peut-être replié : si le focus n'a pas pu y aller, retour à la saisie.
+    if (!root.contains(doc.activeElement) || doc.activeElement === doc.body || doc.activeElement === resetButton) input.focus();
   });
 
   list.addEventListener("click", (e) => {
@@ -610,6 +684,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       disposed = true;
       unsubscribe();
       cleanupActivity?.();
+      toolbar?.dispose();
       clearList();
       root.remove();
     },

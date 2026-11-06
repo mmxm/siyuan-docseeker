@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildIndex, MAX_EXPANDED_PAGES, type Bm25Index } from "../../../src/core/bm25";
+import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
 import {
   RERANK_GRACE_MS,
   createSearchController,
@@ -173,7 +174,7 @@ describe("createSearchController", () => {
   it("returns no-result with the query", () => {
     const { controller, clock } = setup();
     controller.submit("zzzz");
-    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzzz", partial: false, failedCount: 0 });
+    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzzz", partial: false, failedCount: 0, hiddenByFilters: 0 });
   });
 
   it("returns empty-query for blank or non-searchable input, immediately and cancelling pending work", () => {
@@ -244,7 +245,7 @@ describe("createSearchController", () => {
     const vm = controller.getViewModel();
     expect(vm.kind === "results" && vm.partial).toBe(true);
     controller.submit("zzz");
-    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzz", partial: true, failedCount: 0 });
+    expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzz", partial: true, failedCount: 0, hiddenByFilters: 0 });
   });
 
   it("re-runs the current query when the source notifies", () => {
@@ -963,5 +964,353 @@ describe("searchController : re-classement par proximité", () => {
     expect(seen).toHaveLength(1); // rien de plus publié par l'ancien run
     clock.advance(150);
     expect(calls).toHaveLength(2);
+  });
+});
+
+
+// ---- Filtres (J10 b) ----
+
+const FILTER_DOCS: DocInfo[] = [
+  { ...doc("a", "Alpha"), path: "assets/x/a.pdf", pageCount: 20 },
+  { ...doc("b", "Beta"), path: "assets/y/b.pdf", pageCount: 5 },
+  { ...doc("c", "Gamma"), path: "assets/x/c.pdf", pageCount: 8 },
+];
+const withFilters = (filters: Partial<SearchOptions["filters"]>): SearchOptions => ({
+  sort: { key: "relevance", direction: "desc" },
+  filters: { ...NO_FILTERS, ...filters },
+});
+
+function filterSetup(initialOptions?: SearchOptions) {
+  const source = new FakeSource(RR_PAGES, FILTER_DOCS);
+  const calls: { docs: readonly { docId: string }[] }[] = [];
+  const rerank: RerankPort = {
+    rank: ((_q: string, docs: readonly { docId: string }[]) => {
+      calls.push({ docs });
+      return new Promise(() => undefined);
+    }) as unknown as RerankPort["rank"],
+  };
+  const clock = new FakeClock();
+  const seen: SearchViewModel[] = [];
+  const controller = createSearchController({
+    source,
+    schedule: clock.schedule,
+    clear: clock.clear,
+    onChange: (vm) => seen.push(vm),
+    rerank,
+    ...(initialOptions ? { initialOptions } : {}),
+  });
+  return { source, clock, seen, controller, calls };
+}
+
+describe("searchController : filtres", () => {
+  it("getOptions renvoie les options par défaut, puis celles de initialOptions", () => {
+    expect(filterSetup().controller.getOptions().filters).toEqual(NO_FILTERS);
+    const opts = withFilters({ folder: "assets/x/" });
+    expect(filterSetup(opts).controller.getOptions().filters.folder).toBe("assets/x/");
+  });
+
+  it("setOptions normalise ce qu'il reçoit", () => {
+    const { controller } = filterSetup();
+    controller.setOptions({ sort: { key: "relevance", direction: "desc" }, filters: { ...NO_FILTERS, minPages: 0 } });
+    expect(controller.getOptions().filters).toEqual(NO_FILTERS);
+  });
+
+  it("sans requête soumise, setOptions mémorise sans rien publier ni rechercher", () => {
+    const { controller, seen, calls } = filterSetup();
+    controller.setOptions(withFilters({ folder: "assets/x/" }));
+    expect(seen).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(controller.getOptions().filters.folder).toBe("assets/x/");
+  });
+
+  it("le re-classement ne reçoit que les documents gardés par les filtres", async () => {
+    const { controller, calls } = filterSetup(withFilters({ folder: "assets/x/" }));
+    controller.submit("alpha");
+    await flushMicro();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.docs.map((d) => d.docId).sort()).toEqual(["a", "c"]);
+  });
+
+  it("setOptions relance la requête déjà soumise (pas de saisie nécessaire)", async () => {
+    const { controller, calls, clock, seen } = filterSetup();
+    controller.submit("alpha");
+    await flushMicro();
+    expect(calls[0]!.docs).toHaveLength(3);
+    controller.setOptions(withFilters({ minPages: 8 }));
+    await flushMicro();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.docs.map((d) => d.docId).sort()).toEqual(["a", "c"]);
+    clock.advance(RERANK_GRACE_MS);
+    const vm = resultOf(seen[seen.length - 1]!);
+    expect(vm.total).toBe(2);
+    expect(vm.hiddenByFilters).toBe(1);
+  });
+
+  it("des options identiques ne relancent pas la requête", async () => {
+    const { controller, calls } = filterSetup(withFilters({ minPages: 8 }));
+    controller.submit("alpha");
+    await flushMicro();
+    controller.setOptions(withFilters({ minPages: 8 }));
+    await flushMicro();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("results porte hiddenByFilters (0 sans filtre)", () => {
+    const { controller, seen } = setup(new FakeSource(RR_PAGES, FILTER_DOCS));
+    controller.submit("alpha");
+    expect(resultOf(seen[0]!).hiddenByFilters).toBe(0);
+    controller.setOptions(withFilters({ folder: "assets/y/" }));
+    const vm = resultOf(seen[seen.length - 1]!);
+    expect(vm.docs.map((d) => d.docId)).toEqual(["b"]);
+    expect(vm.hiddenByFilters).toBe(2);
+  });
+
+  it("no-result porte le nombre de documents masqués quand les filtres excluent tout", () => {
+    const { controller, seen } = setup(new FakeSource(RR_PAGES, FILTER_DOCS));
+    controller.submit("alpha");
+    controller.setOptions(withFilters({ nameContains: "zzz" }));
+    expect(seen[seen.length - 1]).toEqual({
+      kind: "no-result",
+      query: "alpha",
+      partial: false,
+      failedCount: 0,
+      hiddenByFilters: 3,
+    });
+  });
+
+  it("une requête vidée puis setOptions ne publie rien", () => {
+    const { controller, seen } = setup(new FakeSource(RR_PAGES, FILTER_DOCS));
+    controller.submit("alpha");
+    controller.submit("");
+    const n = seen.length;
+    controller.setOptions(withFilters({ minPages: 3 }));
+    expect(seen).toHaveLength(n);
+  });
+
+  it("pas de re-classement pendant vm.partial, même avec des filtres", async () => {
+    const source = new FakeSource(RR_PAGES, FILTER_DOCS);
+    source.phase = "loading";
+    source.progress = { loaded: 3, total: 5, failed: [] };
+    const calls: unknown[] = [];
+    const clock = new FakeClock();
+    const seen: SearchViewModel[] = [];
+    const controller = createSearchController({
+      source,
+      schedule: clock.schedule,
+      clear: clock.clear,
+      onChange: (vm) => seen.push(vm),
+      rerank: { rank: ((...a: unknown[]) => (calls.push(a), new Promise(() => undefined))) as unknown as RerankPort["rank"] },
+      initialOptions: withFilters({ folder: "assets/x/" }),
+    });
+    controller.submit("alpha");
+    await flushMicro();
+    expect(calls).toHaveLength(0);
+    const vm = resultOf(seen[0]!);
+    expect(vm.docs.map((d) => d.docId).sort()).toEqual(["a", "c"]);
+    expect(vm.partial).toBe(true);
+  });
+
+  it("setOptions abandonne le re-classement en cours (signal annulé) avant d'en lancer un autre", async () => {
+    const source = new FakeSource(RR_PAGES, FILTER_DOCS);
+    const signals: AbortSignal[] = [];
+    const clock = new FakeClock();
+    const controller = createSearchController({
+      source,
+      schedule: clock.schedule,
+      clear: clock.clear,
+      onChange: () => undefined,
+      rerank: {
+        rank: ((_q: string, _d: unknown, o: { signal: AbortSignal }) => (
+          signals.push(o.signal), new Promise(() => undefined)
+        )) as unknown as RerankPort["rank"],
+      },
+    });
+    controller.submit("alpha");
+    await flushMicro();
+    controller.setOptions(withFilters({ minPages: 8 }));
+    await flushMicro();
+    expect(signals).toHaveLength(2);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+  });
+});
+
+// ---- Filtres : courses, états et normalisation (J10 b, revue) ----
+
+function controllableFilterSetup(initialOptions?: SearchOptions, phase?: LoadPhase) {
+  const source = new FakeSource(RR_PAGES, FILTER_DOCS);
+  if (phase) source.phase = phase;
+  const calls: Call[] = [];
+  const rerank: RerankPort = {
+    rank: ((query: string, docs: readonly { docId: string }[], o: { signal?: AbortSignal; onWindow?: (r: unknown) => void }) =>
+      new Promise((resolve, reject) => {
+        calls.push({ query, docs, signal: o.signal, onWindow: o.onWindow, resolve: resolve as Call["resolve"], reject });
+      })) as unknown as RerankPort["rank"],
+  };
+  const clock = new FakeClock();
+  const seen: SearchViewModel[] = [];
+  const controller = createSearchController({
+    source,
+    schedule: clock.schedule,
+    clear: clock.clear,
+    onChange: (vm) => seen.push(vm),
+    rerank,
+    ...(initialOptions ? { initialOptions } : {}),
+  });
+  return { source, clock, seen, controller, calls };
+}
+const docIdsOf = (vm: SearchViewModel): string[] => resultOf(vm).docs.map((d) => d.docId);
+
+describe("searchController : filtres, courses et états", () => {
+  it("un ancien re-classement résolu APRÈS setOptions est ignoré (pas de document exclu, pas d'ancienne fenêtre)", async () => {
+    const { controller, clock, calls, seen } = controllableFilterSetup();
+    controller.submit("alpha");
+    const old = calls[0]!;
+    controller.setOptions(withFilters({ minPages: 8 })); // exclut b
+    expect(calls).toHaveLength(2);
+    old.resolve(reversed(old.docs as Parameters<typeof reversed>[0]));
+    old.onWindow?.(reversed(old.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen).toHaveLength(0); // rien n'a été publié par l'ancien run
+    clock.advance(RERANK_GRACE_MS);
+    expect(seen).toHaveLength(1);
+    const vm = resultOf(seen[0]!);
+    expect(vm.ranking).toBe("bm25");
+    expect(vm.docs.map((d) => d.docId).sort()).toEqual(["a", "c"]);
+    expect(vm.hiddenByFilters).toBe(1);
+    for (const published of seen) expect(docIdsOf(published)).not.toContain("b");
+    // Le nouveau run, lui, s'applique.
+    const fresh = calls[1]!;
+    fresh.resolve(reversed(fresh.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(resultOf(seen[seen.length - 1]!).ranking).toBe("proximity");
+    expect(docIdsOf(seen[seen.length - 1]!).sort()).toEqual(["a", "c"]);
+  });
+
+  it("résolution avant setOptions, puis la grâce : la liste filtrée remplace l'ancienne, sans document exclu", async () => {
+    const { controller, clock, calls, seen } = controllableFilterSetup();
+    controller.submit("alpha");
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    expect(docIdsOf(seen[0]!)).toHaveLength(3);
+    controller.setOptions(withFilters({ minPages: 8 }));
+    clock.advance(RERANK_GRACE_MS);
+    expect(seen).toHaveLength(2);
+    expect(docIdsOf(seen[1]!).sort()).toEqual(["a", "c"]);
+    expect(resultOf(seen[1]!).ranking).toBe("bm25");
+  });
+
+  it("invalidate() puis setOptions avant l'échéance : un seul run (relance coalescée annulée)", async () => {
+    const { controller, clock, calls } = controllableFilterSetup();
+    controller.submit("alpha");
+    controller.invalidate();
+    expect(clock.pending).toBeGreaterThan(0);
+    controller.setOptions(withFilters({ minPages: 8 }));
+    clock.advance(1000);
+    await flushMicro();
+    expect(calls).toHaveLength(2); // submit + setOptions ; pas de troisième run
+  });
+
+  it("setOptions pendant le chargement : republie des résultats partiels filtrés, sans re-classement", () => {
+    const { controller, source, seen, calls } = controllableFilterSetup(undefined, "loading");
+    source.progress = { loaded: 3, total: 5, failed: [] };
+    controller.submit("alpha");
+    expect(docIdsOf(seen[0]!)).toHaveLength(3);
+    controller.setOptions(withFilters({ folder: "assets/y/" }));
+    const vm = resultOf(seen[seen.length - 1]!);
+    expect(vm.docs.map((d) => d.docId)).toEqual(["b"]);
+    expect(vm.partial).toBe(true);
+    expect(vm.hiddenByFilters).toBe(2);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("setOptions pendant une erreur de l'index : l'erreur est republiée", () => {
+    const { controller, source, seen } = controllableFilterSetup(undefined, "error");
+    source.lastError = "disque illisible";
+    controller.submit("alpha");
+    controller.setOptions(withFilters({ minPages: 8 }));
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toEqual({ kind: "error", message: "disque illisible" });
+  });
+
+  it("setOptions après dispose() : ne publie rien, ne jette pas, n'altère pas les options", () => {
+    const { controller, seen } = controllableFilterSetup();
+    controller.dispose();
+    expect(() => controller.setOptions(withFilters({ minPages: 8 }))).not.toThrow();
+    expect(seen).toHaveLength(0);
+    expect(controller.getOptions().filters).toEqual(NO_FILTERS);
+  });
+
+  it("réinitialiser (NO_FILTERS) depuis un no-result republie des résultats", () => {
+    const { controller, seen } = setup(new FakeSource(RR_PAGES, FILTER_DOCS));
+    controller.submit("alpha");
+    controller.setOptions(withFilters({ nameContains: "zzz" }));
+    expect(seen[seen.length - 1]?.kind).toBe("no-result");
+    controller.setOptions({ sort: { key: "relevance", direction: "desc" }, filters: { ...NO_FILTERS } });
+    const vm = resultOf(seen[seen.length - 1]!);
+    expect(vm.docs).toHaveLength(3);
+    expect(vm.hiddenByFilters).toBe(0);
+  });
+
+  it("un document exclu puis réintroduit revient dans la fenêtre du re-classement", async () => {
+    const { controller, calls } = controllableFilterSetup();
+    controller.submit("alpha");
+    controller.setOptions(withFilters({ minPages: 8 }));
+    controller.setOptions(withFilters({}));
+    await flushMicro();
+    expect(calls).toHaveLength(3);
+    expect(calls[1]!.docs.map((d) => d.docId).sort()).toEqual(["a", "c"]);
+    expect(calls[2]!.docs.map((d) => d.docId).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("getOptions renvoie un objet immuable : une mutation n'affecte pas l'état", () => {
+    const { controller } = filterSetup(withFilters({ folder: "assets/x/" }));
+    const o = controller.getOptions() as { filters: { folder: string }; sort: { key: string } };
+    expect(() => {
+      o.filters.folder = "autre/";
+    }).toThrow(TypeError);
+    expect(() => {
+      o.sort.key = "name";
+    }).toThrow(TypeError);
+    expect(controller.getOptions().filters.folder).toBe("assets/x/");
+    expect(controller.getOptions().sort.key).toBe("relevance");
+  });
+
+  it("initialOptions invalide est normalisé", () => {
+    const bad = {
+      sort: { key: "nope", direction: "up" },
+      filters: { folder: " assets/x ", nameContains: " a ", minPages: 9, maxPages: 2, modifiedAfterMs: Number.NaN },
+    } as unknown as SearchOptions;
+    const { controller } = filterSetup(bad);
+    expect(controller.getOptions()).toEqual({
+      sort: { key: "relevance", direction: "desc" },
+      filters: { folder: "assets/x/", includeSubfolders: true, nameContains: "a" },
+    });
+  });
+
+  it("des options équivalentes après normalisation (« assets/x » et « assets/x/ ») ne relancent rien", async () => {
+    const { controller, calls, seen } = controllableFilterSetup(withFilters({ folder: "assets/x/" }));
+    controller.submit("alpha");
+    await flushMicro();
+    controller.setOptions(withFilters({ folder: "assets/x" }));
+    controller.setOptions(withFilters({ folder: "assets/x/ " }));
+    await flushMicro();
+    expect(calls).toHaveLength(1);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("des clés dans un autre ordre ne relancent rien et ne publient rien", async () => {
+    const { controller, calls, seen } = controllableFilterSetup(withFilters({ minPages: 2, nameContains: "a" }));
+    controller.submit("alpha");
+    await flushMicro();
+    const reordered = {
+      filters: { nameContains: "a", minPages: 2, includeSubfolders: true, folder: "" },
+      sort: { direction: "desc", key: "relevance" },
+    } as SearchOptions;
+    controller.setOptions(reordered);
+    await flushMicro();
+    expect(calls).toHaveLength(1);
+    expect(seen).toHaveLength(0);
   });
 });

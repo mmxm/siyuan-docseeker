@@ -5,6 +5,7 @@
 import { groupByDocument, searchPages, type Bm25Index } from "../core/bm25";
 import type { ProximityResult } from "./proximityRanker";
 import { isSearchable, titleBonuses } from "./queryMatch";
+import { applyFilters, DEFAULT_OPTIONS, normalizeSearchOptions, sameOptions, type SearchOptions } from "./resultOptions";
 
 import type { DocInfo, LoadPhase, LoadProgress } from "./searchStore";
 
@@ -41,6 +42,8 @@ export type SearchViewModel =
       readonly partial: boolean;
       /** Nombre de .dsx illisibles (résultats potentiellement incomplets). */
       readonly failedCount: number;
+      /** Documents trouvés mais masqués par les filtres (0 sans filtre). */
+      readonly hiddenByFilters: number;
     }
   | { readonly kind: "error"; readonly message: string }
   | {
@@ -52,6 +55,8 @@ export type SearchViewModel =
       readonly failedCount: number;
       /** "proximity" dès qu'au moins une fenêtre du re-classement par proximité est appliquée. */
       readonly ranking: "bm25" | "proximity";
+      /** Documents trouvés mais masqués par les filtres (0 sans filtre). */
+      readonly hiddenByFilters: number;
     };
 
 /** Re-classement par proximité (le `ProximityRanker`), injecté : le contrôleur ne connaît que ce port. */
@@ -74,6 +79,8 @@ export interface SearchControllerOptions {
   readonly loadingRefreshMs?: number;
   /** Re-classement (proximité et police) de toute requête ; absent : ordre BM25 seul. */
   readonly rerank?: RerankPort;
+  /** Options de départ (filtres, tri) ; en session seulement, jamais persistées. */
+  readonly initialOptions?: SearchOptions;
 }
 
 export interface SearchController {
@@ -81,6 +88,13 @@ export interface SearchController {
   submit(query: string): void;
   /** Un document a été réindexé : relance proprement le re-classement de la requête courante (s'il y en a un). */
   invalidate(): void;
+  /**
+   * Change les filtres/le tri (action explicite). Relance la requête déjà soumise ; sans requête soumise,
+   * l'option est seulement mémorisée.
+   */
+  setOptions(next: SearchOptions): void;
+  /** Options courantes : objet gelé, à ne pas muter. */
+  getOptions(): SearchOptions;
   getViewModel(): SearchViewModel;
   dispose(): void;
 }
@@ -96,7 +110,13 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function compute(source: SearchSource, query: string): SearchViewModel {
+/** Normalise puis gèle (sort et filters compris) : `getOptions` peut renvoyer l'état sans copie ni risque de mutation. */
+function frozenOptions(input: unknown): SearchOptions {
+  const o = normalizeSearchOptions(input);
+  return Object.freeze({ sort: Object.freeze(o.sort), filters: Object.freeze(o.filters) });
+}
+
+function compute(source: SearchSource, query: string, options: SearchOptions): SearchViewModel {
   if (!isSearchable(query)) return EMPTY;
   const phase = source.getPhase();
   if (phase === "error") return { kind: "error", message: source.getLastError() ?? DEFAULT_ERROR_MESSAGE };
@@ -125,8 +145,10 @@ function compute(source: SearchSource, query: string): SearchViewModel {
       pages: hit.pages.map(({ page, score }) => ({ page, score })),
     });
   }
-  if (docs.length === 0) return { kind: "no-result", query, partial, failedCount };
-  return { kind: "results", query, docs, partial, total: docs.length, failedCount, ranking: "bm25" };
+  // Filtres après BM25 et AVANT le re-classement : sa fenêtre de documents ne contient aucun document exclu.
+  const { kept, hidden } = applyFilters(docs, options.filters, (id) => source.getDoc(id));
+  if (kept.length === 0) return { kind: "no-result", query, partial, failedCount, hiddenByFilters: hidden };
+  return { kind: "results", query, docs: kept, partial, total: kept.length, failedCount, ranking: "bm25", hiddenByFilters: hidden };
 }
 
 /** Applique un résultat de re-classement à l'ordre BM25 : documents réordonnés, 5 premières pages réordonnées. */
@@ -171,6 +193,7 @@ export function createSearchController(options: SearchControllerOptions): Search
     loadingRefreshMs = DEFAULT_LOADING_REFRESH_MS,
     rerank,
   } = options;
+  let searchOptions: SearchOptions = frozenOptions(options.initialOptions ?? DEFAULT_OPTIONS);
   /** Dernière requête soumise (pas le texte en cours de frappe). */
   let query = "";
   let current: SearchViewModel = EMPTY;
@@ -280,7 +303,7 @@ export function createSearchController(options: SearchControllerOptions): Search
     cancelCoalescing(); // ce run recalcule déjà tout : une relance coalescée en attente devient inutile
     let vm: SearchViewModel;
     try {
-      vm = compute(source, query);
+      vm = compute(source, query, searchOptions);
     } catch (error) {
       vm = { kind: "error", message: describeError(error) };
       onWarn?.("search failed", error);
@@ -339,6 +362,17 @@ export function createSearchController(options: SearchControllerOptions): Search
       unpublished = undefined;
       armCoalescing(); // une seule relance, même avec la notification du store qui suit
     },
+    setOptions(next) {
+      if (disposed) return;
+      const normalized = frozenOptions(next);
+      if (sameOptions(normalized, searchOptions)) return;
+      searchOptions = normalized;
+      if (!isSearchable(query)) return; // rien de soumis : l'option est seulement mémorisée
+      cancelCoalescing();
+      abortRerank();
+      run();
+    },
+    getOptions: () => searchOptions,
     getViewModel: () => current,
     dispose() {
       if (disposed) return;

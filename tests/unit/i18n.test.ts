@@ -7,6 +7,10 @@ const NEW_KEYS = [
   "autoIndexRunning", "autoIndexCount", "autoIndexUpToDate", "autoIndexFailed", "autoIndexDiscoveryFailed",
   "autoIndexPartialOne", "autoIndexPartialMany", "indexingMayMiss", "clearDoneRebuilding", "clearDoneWillRebuild",
   "settingsSaveFailed", "autoIndexIntervalDisabledHint", "autoIndexMigrating",
+  "filtersLabel", "filtersActiveOne", "filtersActiveMany", "filterFolder", "filterAllFolders", "filterSubfolders",
+  "filterName", "filterMinPages", "filterMaxPages", "filterModifiedAfter", "filterReset", "filterError",
+  "filterErrMinMax", "filterErrInteger", "filterErrDate", "hiddenByFiltersOne", "hiddenByFiltersMany",
+  "noResultFiltersOne", "noResultFiltersMany",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
 
@@ -89,5 +93,32 @@ describe("i18n/fr_FR.json", () => {
     expect(fr.autoIndexFailed).toContain("{n}");
     expect(fr.clearDoneRebuilding).toBe("Index vidé. Reconstruction en cours…");
     expect(fr.clearDone).toBe("Index vidé. Lancez Réindexer pour le reconstruire.");
+  });
+
+  it("les textes des filtres sont en français, sans balise ni entité, avec les variables attendues", () => {
+    expect(fr.filtersLabel).toBe("Filtres");
+    expect(fr.filtersActiveOne).toBe("Filtres (1 actif)");
+    expect(fr.filtersActiveMany).toBe("Filtres ({n} actifs)");
+    expect(fr.filterAllFolders).toBe("Tous les dossiers");
+    expect(fr.filterError).toBe("Erreur : ");
+    expect(fr.hiddenByFiltersOne).toBe("1 document masqué par les filtres");
+    expect(fr.hiddenByFiltersMany).toBe("{n} documents masqués par les filtres");
+    expect(fr.noResultFiltersMany).toContain("{n}");
+    expect(fr.noResultFiltersOne).not.toContain("{n}");
+  });
+
+  it.each(["filtersActiveMany", "hiddenByFiltersMany", "noResultFiltersMany"])("%s contient {n} exactement une fois", (key) => {
+    expect(String(fr[key]).match(/\{n\}/g)).toHaveLength(1);
+  });
+
+  it.each(["filtersActiveOne", "hiddenByFiltersOne", "noResultFiltersOne"])("%s ne contient pas {n}", (key) => {
+    expect(String(fr[key])).not.toContain("{n}");
+  });
+
+  it("DEFAULT_STRINGS de la vue et fr_FR.json disent la même chose pour les clés de filtres", async () => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    for (const key of NEW_KEYS.filter((k) => k.startsWith("filter") || k.startsWith("hiddenBy") || k.startsWith("noResultFilters"))) {
+      expect(DEFAULT_STRINGS[key], key).toBe(fr[key]);
+    }
   });
 });

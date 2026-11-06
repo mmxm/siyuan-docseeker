@@ -4,6 +4,7 @@ import type { SearchIndexData } from "../../src/core/codec/format";
 import type { IndexerEvent } from "../../src/indexer/indexer";
 import { InvalidPdfPathError } from "../../src/siyuan/openPdf";
 import { createWarnLog, mountSearchTab, type SearchTabDeps } from "../../src/searchTab";
+import { RERANK_GRACE_MS } from "../../src/search/searchController";
 import { createSharedIndex, type SharedIndex } from "../../src/search/sharedIndex";
 
 const PDF_A = "assets/Alpha-20240101120000-abc1234.pdf";
@@ -51,7 +52,7 @@ interface Harness {
 
 const sharedInstances: SharedIndex[] = [];
 
-function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
+function harness(over: { ids?: string[]; autoStart?: boolean; paths?: Readonly<Record<string, string>> } = {}): Harness {
   const ids = over.ids ?? ["a"];
   const files = new Map<string, Uint8Array>();
   for (const id of ids) files.set(`${id}.dsx`, bytes(id));
@@ -83,7 +84,10 @@ function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
   // Index partagé : créé (et chargé) une fois par le plugin, jamais par l'onglet.
   const shared = createSharedIndex({
     store: { list, read } as unknown as SearchTabDeps["store"] & { list: () => Promise<string[]> },
-    decode: async (b) => data(new TextDecoder().decode(b) === "b" ? PDF_B : PDF_A),
+    decode: async (b) => {
+      const id = new TextDecoder().decode(b);
+      return data(over.paths?.[id] ?? (id === "b" ? PDF_B : PDF_A));
+    },
     indexer: indexerEvents,
     onWarn,
   });
@@ -907,7 +911,7 @@ describe("mountSearchTab : indicateur d'indexation automatique", () => {
     expect(region.textContent).toBe("");
   });
 
-  it("l'indicateur est placé juste après le champ de recherche, avant la liste", () => {
+  it("l'indicateur suit la barre de filtres, qui suit le champ de recherche, avant la liste", () => {
     const { h } = mount(activity());
     const root = h.host.querySelector(".docseeker-search")!;
     const kids = [...root.children];
@@ -916,7 +920,8 @@ describe("mountSearchTab : indicateur d'indexation automatique", () => {
     const list = kids.findIndex((k) => k.tagName === "UL");
     expect(input).toBeLessThan(row);
     expect(row).toBeLessThan(list);
-    expect(row).toBe(input + 1);
+    expect(kids[input + 1]!.className).toBe("docseeker-toolbar");
+    expect(row).toBe(input + 2);
   });
 
   it("sans dépendance indexActivity, aucune région n'est ajoutée", () => {
@@ -1126,6 +1131,120 @@ describe("mountSearchTab : résultats partiels pendant l'indexation", () => {
     await flush();
     const after = h.host.querySelectorAll("li.docseeker-doc, ul.docseeker-list > li").length;
     expect(after).toBe(before + 1);
+    tab.dispose();
+  });
+});
+
+describe("mountSearchTab : filtres (J10 b)", () => {
+  it("monte la barre de filtres, dossiers lus dans l'index partagé, sans persistance", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    const details = h.host.querySelector<HTMLDetailsElement>("details.docseeker-filters")!;
+    expect(details).not.toBeNull();
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    const select = h.host.querySelector<HTMLSelectElement>(".docseeker-filters select")!;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "assets/"]);
+    tab.dispose();
+  });
+
+  it("un filtre appliqué relance la requête soumise et masque les documents exclus", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    expect(h.host.querySelector(".docseeker-status")!.textContent).toContain("2 documents");
+    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
+    name.value = "beta";
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
+    await flush();
+    const status = h.host.querySelector(".docseeker-status")!.textContent!;
+    expect(status).toContain("1 document,");
+    expect(status).toContain("1 document masqué par les filtres");
+    expect(h.host.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres (1 actif)");
+    tab.dispose();
+  });
+
+  it("un filtre posé sans requête soumise ne lance aucune recherche", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
+    name.value = "beta";
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
+    await flush();
+    expect(cards(h.host)).toHaveLength(0);
+    expect(h.host.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres (1 actif)");
+    tab.dispose();
+  });
+
+  it("les filtres ne survivent pas à la fermeture de l'onglet et rien n'est écrit (mêmes deps, stockage espionné)", async () => {
+    const h = harness({ ids: ["a"] });
+    const touched: string[] = [];
+    const store = new Proxy(h.deps.store as object, {
+      get(target, prop, receiver) {
+        touched.push(String(prop));
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    }) as SearchTabDeps["store"];
+    const deps: SearchTabDeps = { ...h.deps, store };
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const tab = mountSearchTab(h.host, deps);
+    await flush();
+    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
+    name.value = "x";
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(h.host.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres (1 actif)");
+    tab.dispose();
+    const host2 = document.createElement("div");
+    document.body.append(host2);
+    const tab2 = mountSearchTab(host2, deps); // mêmes deps : seul l'état en mémoire de l'onglet pouvait survivre
+    await flush();
+    expect(host2.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres");
+    expect(setItem).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+    expect(touched.filter((k) => k !== "read")).toEqual([]);
+    tab2.dispose();
+    setItem.mockRestore();
+  });
+
+  it("la liste des dossiers vient de searchStore.listDocs() (assets/a/ et assets/b/)", async () => {
+    const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    const details = h.host.querySelector<HTMLDetailsElement>("details.docseeker-filters")!;
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    const select = h.host.querySelector<HTMLSelectElement>(".docseeker-filters select")!;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "assets/", "assets/a/", "assets/b/"]);
+    tab.dispose();
+  });
+
+  it("sans requête soumise : ni lecture du store ni re-classement ; la soumission suivante applique le filtre mémorisé", async () => {
+    const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    const details = h.host.querySelector<HTMLDetailsElement>("details.docseeker-filters")!;
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    const reads = h.read.mock.calls.length;
+    const decodes = h.decodePageMatches.mock.calls.length;
+    const select = h.host.querySelector<HTMLSelectElement>(".docseeker-filters select")!;
+    select.value = "assets/a/";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS * 2);
+    await flush();
+    expect(h.read.mock.calls.length).toBe(reads);
+    expect(h.decodePageMatches.mock.calls.length).toBe(decodes);
+    expect(cards(h.host)).toHaveLength(0);
+    await type(h.host, "chat");
+    const status = h.host.querySelector(".docseeker-status")!.textContent!;
+    expect(status).toContain("1 document,");
+    expect(status).toContain("1 document masqué par les filtres");
     tab.dispose();
   });
 });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SearchViewModel } from "../../../src/search/searchController";
-import { mountSearchView, type ThumbnailAttacher } from "../../../src/ui/searchView";
+import { mountSearchView, type SearchViewDeps, type ThumbnailAttacher } from "../../../src/ui/searchView";
 import { SEARCH_STYLE_ID } from "../../../src/ui/searchStyles";
 
 function doc(id: string, pages: number[], title = `Titre ${id}`) {
@@ -19,8 +19,9 @@ function results(
   partial = false,
   failedCount = 0,
   ranking: "bm25" | "proximity" = "bm25",
+  hiddenByFilters = 0,
 ): SearchViewModel {
-  return { kind: "results", query: "chat", docs, partial, total: docs.length, failedCount, ranking };
+  return { kind: "results", query: "chat", docs, partial, total: docs.length, failedCount, ranking, hiddenByFilters };
 }
 
 let host: HTMLElement;
@@ -31,7 +32,7 @@ let attach: Mock;
 let onOpen: Mock;
 let submit: Mock;
 
-function mount(extra: { onOpenSettings?: () => void; t?: (key: string) => string } = {}) {
+function mount(extra: { onOpenSettings?: () => void; t?: (key: string) => string; options?: NonNullable<SearchViewDeps["options"]> } = {}) {
   const thumbnails: ThumbnailAttacher = { attach: attach as ThumbnailAttacher["attach"] };
   return mountSearchView(host, {
     controller: { submit: submit as (q: string) => void, getViewModel: () => vm },
@@ -191,7 +192,7 @@ describe("mountSearchView", () => {
 
   it("affiche les messages de statut", () => {
     mount();
-    update({ kind: "no-result", query: "x", partial: false, failedCount: 0 });
+    update({ kind: "no-result", query: "x", partial: false, failedCount: 0, hiddenByFilters: 0 });
     expect(status()).toBe("Aucun résultat");
     update({ kind: "loading", progress: { loaded: 12, total: 47, failed: [] } });
     expect(status()).toBe("Résultats partiels, index en cours de construction (12/47)");
@@ -428,7 +429,7 @@ describe("mountSearchView", () => {
       update(results([doc("a", [1])]));
       expect(document.activeElement).toBe(host.querySelector("input"));
       cards()[0]!.focus();
-      update({ kind: "no-result", query: "x", partial: false, failedCount: 0 });
+      update({ kind: "no-result", query: "x", partial: false, failedCount: 0, hiddenByFilters: 0 });
       expect(document.activeElement).toBe(host.querySelector("input"));
     });
 
@@ -452,13 +453,13 @@ describe("mountSearchView", () => {
       update(results([doc("a", [1])], false, 2));
       expect(status()).toContain("2 index illisibles : réindexez depuis les paramètres (détails dans le journal)");
       expect(host.querySelector<HTMLButtonElement>("button.docseeker-open-settings")!.hidden).toBe(false);
-      update({ kind: "no-result", query: "x", partial: false, failedCount: 1 });
+      update({ kind: "no-result", query: "x", partial: false, failedCount: 1, hiddenByFilters: 0 });
       expect(status()).toContain("1 index illisible : réindexez depuis les paramètres (détails dans le journal)");
     });
 
     it("utilise réellement la fonction de traduction fournie", () => {
       mount({ t: (k) => (k === "noResults" ? "No results" : k) });
-      update({ kind: "no-result", query: "x", partial: false, failedCount: 0 });
+      update({ kind: "no-result", query: "x", partial: false, failedCount: 0, hiddenByFilters: 0 });
       expect(status()).toBe("No results");
     });
   });
@@ -897,5 +898,230 @@ describe("mountSearchView", () => {
       expect(attach.mock.calls.length).toBe(before + 3);
       expect(detach).toHaveBeenCalledTimes(3);
     });
+  });
+});
+
+
+// ---- Filtres (J10 b) ----
+import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
+
+describe("filtres dans la vue", () => {
+  let opts: SearchOptions;
+  let setOptions: Mock;
+  const optionsDeps = (): NonNullable<SearchViewDeps["options"]> => ({
+    getOptions: () => opts,
+    setOptions: setOptions as (o: SearchOptions) => void,
+    getFolders: () => ["assets/", "assets/a/"],
+  });
+  beforeEach(() => {
+    opts = { sort: { key: "relevance", direction: "desc" }, filters: NO_FILTERS };
+    setOptions = vi.fn((o: SearchOptions) => {
+      opts = o;
+    });
+  });
+  const noResult = (hiddenByFilters: number): SearchViewModel => ({
+    kind: "no-result", query: "x", partial: false, failedCount: 0, hiddenByFilters,
+  });
+  const resetButton = () =>
+    Array.from(host.querySelectorAll<HTMLButtonElement>(".docseeker-actions button")).find(
+      (b) => b.textContent === "Réinitialiser les filtres",
+    );
+
+  it("sans deps.options, aucune barre de filtres", () => {
+    mount();
+    expect(host.querySelector(".docseeker-toolbar")).toBeNull();
+  });
+
+  it("la barre est entre le champ et la ligne d'indexation, dans div.docseeker-toolbar", () => {
+    mountSearchView(host, {
+      controller: { submit: submit as (q: string) => void, getViewModel: () => vm },
+      subscribe: () => () => undefined,
+      thumbnails: { attach: attach as ThumbnailAttacher["attach"] },
+      onOpen: onOpen as (d: string, p: number, q: string) => void,
+      getDocMeta: () => undefined,
+      options: optionsDeps(),
+      indexActivity: { getSnapshot: () => ({ phase: "idle" }) as never, subscribe: () => () => undefined },
+    });
+    const root = host.querySelector(".docseeker-search")!;
+    const kids = Array.from(root.children).map((c) => c.className.split(" ")[0]);
+    expect(kids.slice(0, 3)).toEqual(["b3-text-field", "docseeker-toolbar", "docseeker-index-row"]);
+    expect(host.querySelector(".docseeker-toolbar > details.docseeker-filters")).not.toBeNull();
+  });
+
+  it("statut des résultats : documents masqués au pluriel et au singulier", () => {
+    mount({ options: optionsDeps() });
+    update(results([doc("a", [1, 2, 3])], false, 0, "bm25", 5));
+    expect(status()).toBe("1 document, 3 pages. 5 documents masqués par les filtres");
+    update(results([doc("a", [1])], false, 0, "bm25", 1));
+    expect(status()).toBe("1 document, 1 page. 1 document masqué par les filtres");
+    update(results([doc("a", [1])], false, 0, "bm25", 0));
+    expect(status()).toBe("1 document, 1 page");
+  });
+
+  it("zéro résultat à cause des filtres : texte avec le nombre de filtres et bouton visible", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, folder: "assets/a/", minPages: 3 } };
+    mount({ options: optionsDeps() });
+    update(noResult(4));
+    expect(status()).toBe("Aucun résultat avec 2 filtres actifs. 4 documents masqués par les filtres.");
+    const btn = resetButton()!;
+    expect(btn.hidden).toBe(false);
+    expect(host.querySelector<HTMLElement>(".docseeker-actions")!.hidden).toBe(false);
+  });
+
+  it("zéro résultat : singulier pour 1 filtre et 1 document masqué", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    update(noResult(1));
+    expect(status()).toBe("Aucun résultat avec 1 filtre actif. 1 document masqué par les filtres.");
+  });
+
+  it("le bouton du statut réinitialise les filtres", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    update(noResult(2));
+    resetButton()!.click();
+    expect(setOptions).toHaveBeenCalledTimes(1);
+    expect(opts.filters).toEqual(NO_FILTERS);
+  });
+
+  it("pas de bouton ni de texte de filtres quand rien n'est masqué", () => {
+    mount({ options: optionsDeps() });
+    update(noResult(0));
+    expect(status()).toBe("Aucun résultat");
+    expect(resetButton()?.hidden ?? true).toBe(true);
+  });
+
+  it("après réinitialisation par le bouton du statut, le focus ne reste pas sur <body>", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    update(noResult(2));
+    resetButton()!.focus();
+    resetButton()!.click();
+    update(noResult(0));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  const actionButtons = () => Array.from(host.querySelectorAll<HTMLButtonElement>(".docseeker-actions button")).filter((b) => !b.hidden);
+
+  it("no-result filtré pendant l'indexation : le suffixe « résultats partiels » est ajouté", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    update({ kind: "no-result", query: "x", partial: true, failedCount: 0, hiddenByFilters: 1 });
+    expect(status()).toBe(
+      "Aucun résultat avec 1 filtre actif. 1 document masqué par les filtres (résultats partiels, index en cours de construction).",
+    );
+  });
+
+  it("no-result filtré avec index illisibles : deux boutons visibles (paramètres et réinitialisation)", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps(), onOpenSettings: () => undefined });
+    update({ kind: "no-result", query: "x", partial: false, failedCount: 2, hiddenByFilters: 1 });
+    expect(actionButtons().map((b) => b.textContent)).toEqual(["Ouvrir les paramètres", "Réinitialiser les filtres"]);
+    expect(status()).toBe(
+      "Aucun résultat avec 1 filtre actif. 1 document masqué par les filtres. 2 index illisibles : réindexez depuis les paramètres (détails dans le journal).",
+    );
+  });
+
+  it("hiddenByFilters > 0 sans deps.options : texte simple, aucun bouton de réinitialisation", () => {
+    mount();
+    update(noResult(3));
+    expect(status()).toBe("Aucun résultat");
+    expect(host.querySelector(".docseeker-reset-filters")).toBeNull();
+    update(results([doc("a", [1])], false, 0, "bm25", 3));
+    expect(status()).toBe("1 document, 1 page. 3 documents masqués par les filtres");
+  });
+
+  it("results + classement affiné + documents masqués : ordre des suffixes", () => {
+    mount({ options: optionsDeps() });
+    update(results([doc("a", [1, 2, 3])], false, 0, "proximity", 5));
+    expect(status()).toBe(
+      "1 document, 3 pages. 5 documents masqués par les filtres. Classement affiné par proximité des mots et taille de police",
+    );
+  });
+
+  it("le bouton de réinitialisation se cache sur les results, loading et error suivants", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    const visible = () => resetButton()?.hidden === false;
+    for (const next of [
+      results([doc("a", [1])]),
+      { kind: "loading", progress: { loaded: 1, total: 2, failed: [] } } as SearchViewModel,
+      { kind: "error", message: "boom" } as SearchViewModel,
+    ]) {
+      update(noResult(2));
+      expect(visible()).toBe(true);
+      update(next);
+      expect(visible()).toBe(false);
+      expect(host.querySelector<HTMLElement>(".docseeker-actions")!.hidden).toBe(true);
+    }
+  });
+
+  it("réinitialisation par le bouton du statut, panneau fermé : le focus revient à la saisie", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    const select = host.querySelector<HTMLSelectElement>("details select")!;
+    vi.spyOn(select, "focus").mockImplementation(() => undefined); // un select d'un details fermé ne prend pas le focus
+    update(noResult(2));
+    resetButton()!.focus();
+    resetButton()!.click();
+    expect(document.activeElement).toBe(host.querySelector("input[type=search]"));
+  });
+
+  it("réinitialisation par le bouton du statut, panneau ouvert : le focus va sur « Dossier »", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    host.querySelector<HTMLDetailsElement>("details")!.open = true;
+    update(noResult(2));
+    resetButton()!.focus();
+    resetButton()!.click();
+    expect(document.activeElement).toBe(host.querySelector("details select"));
+  });
+
+  it("panneau ouvert : un nouveau dossier et le résumé se mettent à jour sans basculer le panneau", () => {
+    let folders = ["assets/"];
+    mount({ options: { ...optionsDeps(), getFolders: () => folders } });
+    const details = host.querySelector<HTMLDetailsElement>("details")!;
+    details.open = true;
+    const values = () => Array.from(host.querySelectorAll<HTMLOptionElement>("details select option")).map((o) => o.value);
+    expect(values()).toEqual(["", "assets/"]);
+    folders = ["assets/", "assets/new/"];
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 2 } }; // setOptions externe
+    update({ kind: "empty-query" });
+    expect(values()).toEqual(["", "assets/", "assets/new/"]);
+    expect(host.querySelector("summary")!.textContent).toBe("Filtres (1 actif)");
+  });
+
+  it("panneau fermé : la liste n'est pas reconstruite (résumé à jour), puis reconstruite à l'ouverture", () => {
+    let folders = ["assets/"];
+    mount({ options: { ...optionsDeps(), getFolders: () => folders } });
+    const details = host.querySelector<HTMLDetailsElement>("details")!;
+    const values = () => Array.from(host.querySelectorAll<HTMLOptionElement>("details select option")).map((o) => o.value);
+    folders = ["assets/", "assets/new/"];
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 2 } };
+    update({ kind: "empty-query" });
+    expect(values()).toEqual(["", "assets/"]);
+    expect(host.querySelector("summary")!.textContent).toBe("Filtres (1 actif)");
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    expect(values()).toEqual(["", "assets/", "assets/new/"]);
+  });
+
+  it("deux vues montées ensemble : tous les ids du document sont uniques", () => {
+    const second = document.createElement("div");
+    document.body.appendChild(second);
+    const many = results([doc("a", [1, 2, 3, 4, 5, 6, 7]), doc("b", [1, 2, 3, 4, 5, 6, 7, 8])]);
+    for (const h of [host, second]) {
+      mountSearchView(h, {
+        controller: { submit: submit as (q: string) => void, getViewModel: () => many },
+        subscribe: () => () => undefined,
+        thumbnails: { attach: attach as ThumbnailAttacher["attach"] },
+        onOpen: onOpen as (d: string, p: number, q: string) => void,
+        getDocMeta: () => undefined,
+        options: optionsDeps(),
+      });
+    }
+    const ids = Array.from(document.querySelectorAll("[id]")).map((e) => e.id);
+    expect(ids.length).toBeGreaterThan(10);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

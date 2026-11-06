@@ -8,6 +8,7 @@ import { decodePageMatches as realDecodePageMatches, decodePagesMatches as realD
 import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
 import { createProximityRanker } from "./search/proximityRanker";
+import { listFolders } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
@@ -328,6 +329,12 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     getDocMeta: (docId) => {
       const info = searchStore.getDoc(docId);
       return info ? { pdfSize: info.pdfSize, pdfModifiedMs: info.pdfModifiedMs } : undefined;
+    },
+    // Filtres de la session : mémoire du contrôleur seulement, rien n'est persisté.
+    options: {
+      getOptions: () => controller.getOptions(),
+      setOptions: (next) => controller.setOptions(next),
+      getFolders: () => listFolders(searchStore.listDocs()),
     },
     ...(deps.indexActivity ? { indexActivity: deps.indexActivity, schedule, clear } : {}),
     ...(deps.t ? { t: deps.t } : {}),
