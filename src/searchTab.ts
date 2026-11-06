@@ -3,6 +3,7 @@
  * rendu des vignettes, vue) et le clic vers l'ouverture du PDF surlignée. Tout est injecté : aucun accès
  * direct à `window`, au noyau ou à SiYuan (voir `index.ts` pour le câblage réel).
  */
+import type { IndexActivitySnapshot } from "./indexer/indexActivity";
 import { decodePageMatches as realDecodePageMatches, decodePagesMatches as realDecodePagesMatches } from "./core/codec/decode";
 import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
@@ -38,6 +39,11 @@ export interface SearchTabDeps {
   readonly loadDocument: (path: string, signal?: AbortSignal) => Promise<RenderableDocument>;
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly onWarn: (message: string, error?: unknown) => void;
+  /** Activité d'indexation pour l'indicateur discret (fournie par le plugin ; l'onglet ne voit pas l'indexeur). */
+  readonly indexActivity?: {
+    getSnapshot(): IndexActivitySnapshot;
+    subscribe(listener: () => void): () => void;
+  };
   readonly decodePageMatches?: typeof realDecodePageMatches;
   /** Décodeur multi-pages du re-classement ; absent avec un `decodePageMatches` injecté : repli page par page. */
   readonly decodePagesMatches?: typeof realDecodePagesMatches;
@@ -62,6 +68,7 @@ const DOC_NOT_FOUND = "Document introuvable dans l'index : voir les paramètres 
 const HIGHLIGHT_UNAVAILABLE = "Surlignage indisponible";
 const OBSERVER_ROOT_MARGIN = "200px 0px";
 const PAGE_SIZE_WAIT_MS = 400;
+
 export const WARN_LOG_MAX = 50;
 
 /** Message discret expliquant l'absence de surlignage, ou undefined (succès, ou ouverture remplacée). */
@@ -320,9 +327,11 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       const info = searchStore.getDoc(docId);
       return info ? { pdfSize: info.pdfSize, pdfModifiedMs: info.pdfModifiedMs } : undefined;
     },
+    ...(deps.indexActivity ? { indexActivity: deps.indexActivity, schedule, clear } : {}),
     ...(deps.t ? { t: deps.t } : {}),
   });
   host.append(errorEl, messageEl);
+
 
   // Le rafraîchissement et le chargement sont faits par l'index partagé ; l'onglet n'en garde que
   // l'invalidation de ses propres correspondances par page et l'affichage de l'erreur éventuelle.

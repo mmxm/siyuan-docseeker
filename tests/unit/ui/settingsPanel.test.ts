@@ -8,6 +8,7 @@ import {
 } from "../../../src/ui/settingsPanel";
 import { SEARCH_STYLE_ID } from "../../../src/ui/searchStyles";
 import type { IndexerEvent } from "../../../src/indexer/indexer";
+import { createSettings, DEFAULT_SETTINGS, type DocSeekerSettings } from "../../../src/settings";
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -31,6 +32,17 @@ const STRINGS: Record<string, string> = {
   clearBusy: "Indexation en cours : attendez la fin avant de vider l'index.",
   clearRunning: "Vidage en cours…",
   clearDone: "Index vidé. Lancez Réindexer pour le reconstruire.",
+  clearDoneRebuilding: "Index vidé. Reconstruction en cours…",
+  autoIndex: "Indexation automatique",
+  autoIndexInterval: "Fréquence de vérification",
+  freq5: "Toutes les 5 minutes",
+  freq15: "Toutes les 15 minutes",
+  freq60: "Toutes les heures",
+  settingsSaveFailed: "Réglage appliqué mais non enregistré : il sera perdu au redémarrage.",
+  clearDoneWillRebuild: "Index vidé. Il sera reconstruit automatiquement.",
+  autoIndexDesc: "Indexe les PDF nouveaux ou modifiés.",
+  autoIndexIntervalDesc: "Délai entre deux vérifications.",
+  autoIndexIntervalDisabledHint: "Disponible quand l'indexation automatique est activée.",
   clearPartialOne: "Index vidé en partie : {n} fichier n'a pas pu être supprimé.",
   clearPartialMany: "Index vidé en partie : {n} fichiers n'ont pas pu être supprimés.",
   clearManifestFailed: "Le manifeste n'a pas pu être supprimé : rien n'a été vidé. Réessayez le vidage.",
@@ -55,6 +67,9 @@ interface Harness {
   warn: Mock<(message: string, error?: unknown) => void>;
   isIndexing: ReturnType<typeof vi.fn>;
   clearing: ReturnType<typeof createClearingFlag>;
+  settings: ReturnType<typeof createSettings>;
+  save: ReturnType<typeof vi.fn>;
+  startAutoSync: Mock<() => boolean>;
   /** Appelle le callback de confirmation / d'annulation de la dernière boîte. */
   accept(): void;
   cancel(): void;
@@ -85,7 +100,12 @@ function harness(): Harness {
     onConfirm = yes;
     onCancel = no;
   });
+  const save = vi.fn(async (_v: DocSeekerSettings) => undefined);
+  const settings = createSettings({ load: async () => undefined, save, onWarn: warn });
+  const startAutoSync = vi.fn((): boolean => true);
   const deps: SettingsPanelDeps = {
+    settings,
+    startAutoSync,
     t: (key) => STRINGS[key] ?? key,
     indexer: {
       onEvent: (l) => {
@@ -112,7 +132,7 @@ function harness(): Harness {
   };
   return {
     deps, listeners, warnListeners, lines, startIndexing, clearIndex, refreshIndex, runDiagnostic, showMessage,
-    clearing, confirm, warn, isIndexing, accept: () => onConfirm(), cancel: () => onCancel?.(),
+    clearing, confirm, warn, isIndexing, settings, save, startAutoSync, accept: () => onConfirm(), cancel: () => onCancel?.(),
   };
 }
 
@@ -206,10 +226,10 @@ describe("settingsPanel : Réindexer", () => {
     const status = statusOf(panel.reindex);
     const progress = [...panel.reindex.querySelectorAll("pre")].find((p) => p !== status)!;
     emit(h, { type: "started" });
-    expect(status.textContent).toBe("Indexation démarrée");
+    expect(status.textContent).toBe(""); // passe automatique : silencieuse tant qu'il n'y a rien à dire
     emit(h, { type: "progress", path: "assets/a.pdf", page: 2, total: 9 });
     expect(progress.textContent).toBe("assets/a.pdf : page 2/9");
-    expect(status.textContent).toBe("Indexation démarrée");
+    expect(status.textContent).toBe("");
     expect(progress.hasAttribute("aria-live")).toBe(false);
     expect(progress.getAttribute("role")).toBeNull();
     emit(h, { type: "indexed", path: "assets/a.pdf", pages: 9 });
@@ -227,13 +247,252 @@ describe("settingsPanel : Réindexer", () => {
   });
 });
 
+describe("settingsPanel : passes automatiques silencieuses", () => {
+  const zero = { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0 };
+
+  it("started puis idle à zéro, hors clic sur Réindexer : aucun message d'état", () => {
+    const panel = createSettingsPanel(h.deps);
+    emit(h, { type: "started" });
+    emit(h, { type: "idle", summary: zero });
+    expect(statusOf(panel.reindex).textContent).toBe("");
+    panel.dispose();
+  });
+
+  it("une passe automatique qui a travaillé affiche son bilan", () => {
+    const panel = createSettingsPanel(h.deps);
+    emit(h, { type: "started" });
+    emit(h, { type: "idle", summary: { ...zero, indexed: 1 } });
+    expect(statusOf(panel.reindex).textContent).toBe("Terminé : 1 indexé, 0 sans texte, 0 échecs, 0 supprimés");
+    panel.dispose();
+  });
+
+  it("le bouton Réindexer affiche « démarrée » puis le bilan, même à zéro", async () => {
+    let finish: () => void = () => undefined;
+    h.startIndexing.mockImplementation(() => new Promise<void>((r) => (finish = r)));
+    const panel = createSettingsPanel(h.deps);
+    btn(panel.reindex).click();
+    emit(h, { type: "started" });
+    expect(statusOf(panel.reindex).textContent).toBe("Indexation démarrée");
+    emit(h, { type: "idle", summary: zero });
+    expect(statusOf(panel.reindex).textContent).toBe("Terminé : 0 indexés, 0 sans texte, 0 échecs, 0 supprimés");
+    finish();
+    await flush();
+    // passe suivante automatique : retour au silence
+    statusOf(panel.reindex).textContent = "";
+    emit(h, { type: "started" });
+    emit(h, { type: "idle", summary: zero });
+    expect(statusOf(panel.reindex).textContent).toBe("");
+    panel.dispose();
+  });
+
+  it("un échec d'une passe automatique reste visible (événement failed)", () => {
+    const panel = createSettingsPanel(h.deps);
+    emit(h, { type: "failed", path: "a.pdf", message: "vide" });
+    expect(statusOf(panel.reindex).textContent).toContain("a.pdf");
+    panel.dispose();
+  });
+});
+
+describe("settingsPanel : réglages d'indexation automatique", () => {
+  const switchOf = (panel: ReturnType<typeof createSettingsPanel>): HTMLInputElement =>
+    panel.autoIndex.querySelector<HTMLInputElement>("input.b3-switch")!;
+  const selectOf = (panel: ReturnType<typeof createSettingsPanel>): HTMLSelectElement =>
+    panel.autoIndexInterval.querySelector<HTMLSelectElement>("select.b3-select")!;
+
+  it("interrupteur b3-switch nommé, coché par défaut", () => {
+    const panel = createSettingsPanel(h.deps);
+    const sw = switchOf(panel);
+    expect(sw.type).toBe("checkbox");
+    expect(sw.checked).toBe(true);
+    expect(sw.getAttribute("aria-label")).toBe("Indexation automatique");
+    panel.dispose();
+  });
+
+  it("liste de fréquences 5, 15, 60 min, 5 sélectionnée, libellés i18n et nom accessible", () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ["5", "Toutes les 5 minutes"],
+      ["15", "Toutes les 15 minutes"],
+      ["60", "Toutes les heures"],
+    ]);
+    expect(select.value).toBe("5");
+    expect(select.getAttribute("aria-label")).toBe("Fréquence de vérification");
+    expect(select.disabled).toBe(false);
+    panel.dispose();
+  });
+
+  it("basculer l'interrupteur met à jour les réglages, enregistre et désactive la liste", async () => {
+    const panel = createSettingsPanel(h.deps);
+    const sw = switchOf(panel);
+    sw.checked = false;
+    sw.dispatchEvent(new Event("change"));
+    await flush();
+    expect(h.settings.get().autoIndex).toBe(false);
+    expect(h.save).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, autoIndex: false });
+    expect(selectOf(panel).disabled).toBe(true);
+    panel.dispose();
+  });
+
+  it("changer la fréquence met à jour les réglages", async () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    select.value = "15";
+    select.dispatchEvent(new Event("change"));
+    await flush();
+    expect(h.settings.get().intervalMinutes).toBe(15);
+    panel.dispose();
+  });
+
+  it("reflète les réglages chargés après coup (abonnement) et se désabonne au dispose", async () => {
+    const panel = createSettingsPanel(h.deps);
+    await h.settings.update({ autoIndex: false, intervalMinutes: 60 });
+    expect(switchOf(panel).checked).toBe(false);
+    expect(selectOf(panel).value).toBe("60");
+    expect(selectOf(panel).disabled).toBe(true);
+    panel.dispose();
+    await h.settings.update({ autoIndex: true });
+    expect(switchOf(panel).checked).toBe(false);
+  });
+
+  it("un enregistrement qui échoue est journalisé et signalé, le réglage reste appliqué", async () => {
+    h.save.mockRejectedValueOnce(new Error("disque plein"));
+    const panel = createSettingsPanel(h.deps);
+    const sw = switchOf(panel);
+    sw.checked = false;
+    sw.dispatchEvent(new Event("change"));
+    await flush();
+    expect(h.warn).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
+    expect(h.showMessage).toHaveBeenCalledWith(expect.stringContaining("non enregistré"), expect.any(Number), "error");
+    expect(h.settings.get().autoIndex).toBe(false);
+    const zone = panel.autoIndex.querySelector('[role="status"]')!;
+    expect(zone.textContent).toBe(STRINGS.settingsSaveFailed);
+    sw.checked = true;
+    sw.dispatchEvent(new Event("change"));
+    await flush();
+    expect(zone.textContent).toBe(""); // enregistré cette fois : le message disparaît
+    panel.dispose();
+  });
+});
+
+describe("settingsPanel : accessibilité des réglages", () => {
+  it("l'interrupteur a role=switch et une description reliée par aria-describedby", () => {
+    const panel = createSettingsPanel(h.deps);
+    const sw = panel.autoIndex.querySelector<HTMLInputElement>("input.b3-switch")!;
+    expect(sw.getAttribute("role")).toBe("switch");
+    const desc = panel.autoIndex.querySelector(`#${sw.getAttribute("aria-describedby")}`);
+    expect(desc?.textContent).toBe(STRINGS.autoIndexDesc);
+    panel.dispose();
+  });
+
+  it("la liste désactivée l'explique dans sa description, et la retire une fois activée", async () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = panel.autoIndexInterval.querySelector<HTMLSelectElement>("select")!;
+    const desc = (): string => panel.autoIndexInterval.querySelector(`#${select.getAttribute("aria-describedby")}`)!.textContent!;
+    expect(desc()).toBe(STRINGS.autoIndexIntervalDesc);
+    await h.settings.update({ autoIndex: false });
+    expect(desc()).toBe(`${STRINGS.autoIndexIntervalDesc} ${STRINGS.autoIndexIntervalDisabledHint}`);
+    await h.settings.update({ autoIndex: true });
+    expect(desc()).toBe(STRINGS.autoIndexIntervalDesc);
+    panel.dispose();
+  });
+
+  it("deux panneaux n'utilisent pas les mêmes identifiants", () => {
+    const a = createSettingsPanel(h.deps);
+    const b = createSettingsPanel(h.deps);
+    const idOf = (p: typeof a) => p.autoIndex.querySelector("input")!.getAttribute("aria-describedby");
+    expect(idOf(a)).not.toBe(idOf(b));
+    a.dispose();
+    b.dispose();
+  });
+});
+
+describe("settingsPanel : état « en cours » et passe silencieuse", () => {
+  it("panneau ouvert pendant une passe automatique puis idle à zéro : « Indexation en cours » disparaît", () => {
+    h.isIndexing.mockReturnValue(true);
+    const panel = createSettingsPanel(h.deps);
+    expect(statusOf(panel.reindex).textContent).toBe(STRINGS.indexRunning);
+    emit(h, { type: "idle", summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0 } });
+    expect(statusOf(panel.reindex).textContent).toBe("");
+    panel.dispose();
+  });
+});
+
+describe("settingsPanel : reconstruction après vidage", () => {
+  const run = async (panel: ReturnType<typeof createSettingsPanel>): Promise<void> => {
+    btn(panel.clearIndex).click();
+    h.accept();
+    await flush();
+  };
+
+  it("indexation automatique activée : message « Reconstruction en cours… » et synchronisation déclenchée après libération du drapeau", async () => {
+    const seen: boolean[] = [];
+    h.startAutoSync.mockImplementation(() => (seen.push(h.clearing.active()), true));
+    const panel = createSettingsPanel(h.deps);
+    await run(panel);
+    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.clearDoneRebuilding);
+    expect(h.showMessage).toHaveBeenCalledWith(STRINGS.clearDoneRebuilding, expect.any(Number), "info");
+    expect(h.startAutoSync).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([false]);
+    panel.dispose();
+  });
+
+  it("synchronisation non lancée (false) : pas de promesse d'immédiateté", async () => {
+    h.startAutoSync.mockReturnValue(false);
+    const panel = createSettingsPanel(h.deps);
+    await run(panel);
+    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.clearDoneWillRebuild);
+    expect(h.showMessage).toHaveBeenCalledWith(STRINGS.clearDoneWillRebuild, expect.any(Number), "info");
+    panel.dispose();
+  });
+
+  it("startAutoSync qui lève : journalisé, drapeau libéré, la chaîne ne rejette pas", async () => {
+    h.startAutoSync.mockImplementation(() => { throw new Error("planificateur KO"); });
+    const panel = createSettingsPanel(h.deps);
+    await run(panel);
+    expect(h.warn).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
+    expect(h.clearing.active()).toBe(false);
+    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.clearDoneWillRebuild);
+    panel.dispose();
+  });
+
+  it("indexation automatique coupée : ancien message, aucune synchronisation", async () => {
+    await h.settings.update({ autoIndex: false });
+    const panel = createSettingsPanel(h.deps);
+    await run(panel);
+    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.clearDone);
+    expect(h.startAutoSync).not.toHaveBeenCalled();
+    panel.dispose();
+  });
+
+  it("échec du manifeste ou du vidage : pas de reconstruction", async () => {
+    h.clearIndex.mockResolvedValueOnce({ removed: [], failed: [], manifestFailed: true });
+    const panel = createSettingsPanel(h.deps);
+    await run(panel);
+    expect(h.startAutoSync).not.toHaveBeenCalled();
+    h.clearIndex.mockRejectedValueOnce(new Error("KO"));
+    await run(panel);
+    expect(h.startAutoSync).not.toHaveBeenCalled();
+    panel.dispose();
+  });
+
+  it("vidage partiel : message d'erreur partiel, mais la reconstruction est lancée", async () => {
+    h.clearIndex.mockResolvedValueOnce({ removed: [], failed: [{ name: "a.dsx", error: new Error("x") }], manifestFailed: false });
+    const panel = createSettingsPanel(h.deps);
+    await run(panel);
+    expect(h.startAutoSync).toHaveBeenCalledTimes(1);
+    expect(alertOf(panel.clearIndex).textContent).toContain("Index vidé en partie");
+    panel.dispose();
+  });
+});
+
 describe("describeEvent", () => {
   it("décrit chaque type d'événement, avec les accords au singulier", () => {
-    const many = { indexed: 2, skippedScanned: 2, failed: 3, removed: 4, cancelled: true };
+    const many = { indexed: 2, skippedScanned: 2, failed: 3, removed: 4, cancelled: true, incomplete: 0 };
     expect(describeEvent({ type: "idle", summary: many })).toBe(
       "Terminé : 2 indexés, 2 sans texte, 3 échecs, 4 supprimés (annulé)",
     );
-    const one = { indexed: 1, skippedScanned: 0, failed: 1, removed: 1, cancelled: false };
+    const one = { indexed: 1, skippedScanned: 0, failed: 1, removed: 1, cancelled: false, incomplete: 0 };
     expect(describeEvent({ type: "idle", summary: one })).toBe("Terminé : 1 indexé, 0 sans texte, 1 échec, 1 supprimé");
     expect(describeEvent({ type: "indexed", path: "p", pages: 1 })).toBe("Indexé : p (1 page)");
     expect(describeEvent({ type: "failed", path: "p", message: "m" })).toBe("Échec : p : m");
@@ -295,9 +554,9 @@ describe("settingsPanel : Vider l'index", () => {
     const panel = createSettingsPanel(h.deps);
     await clearAndConfirm(panel);
     expect(calls).toEqual(["clear", "refresh"]);
-    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.clearDone);
+    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.clearDoneRebuilding);
     expect(alertOf(panel.clearIndex).textContent).toBe("");
-    expect(h.showMessage).toHaveBeenCalledWith(STRINGS.clearDone, expect.any(Number), "info");
+    expect(h.showMessage).toHaveBeenCalledWith(STRINGS.clearDoneRebuilding, expect.any(Number), "info");
     expect(h.warn).not.toHaveBeenCalled();
     expect(h.clearing.active()).toBe(false);
     panel.dispose();

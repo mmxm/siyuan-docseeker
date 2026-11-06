@@ -2,6 +2,7 @@
  * Vue de l'onglet de recherche : DOM natif, aucun innerHTML (le texte issu
  * des PDF/titres passe uniquement par textContent / setAttribute).
  */
+import type { IndexActivitySnapshot } from "../indexer/indexActivity";
 import type { ResultDoc, SearchViewModel } from "../search/searchController";
 import { containingFolder } from "./pathLabel";
 import { ensureSearchStyle } from "./searchStyles";
@@ -28,6 +29,13 @@ export interface SearchViewDeps {
   onOpenSettings?(): void;
   getDocMeta(docId: string): { pdfSize: number; pdfModifiedMs: number } | undefined;
   readonly t?: (key: string) => string;
+  /** Activité d'indexation (indicateur discret sous le champ de recherche, avis « des résultats peuvent manquer »). */
+  readonly indexActivity?: {
+    getSnapshot(): IndexActivitySnapshot;
+    subscribe(listener: () => void): () => void;
+  };
+  readonly schedule?: (fn: () => void, ms: number) => unknown;
+  readonly clear?: (handle: unknown) => void;
 }
 
 export interface SearchView {
@@ -36,6 +44,8 @@ export interface SearchView {
 }
 
 export const MAX_CARDS_PER_DOC = 5;
+/** Durée d'affichage de « Index à jour » après une passe qui a travaillé. */
+export const UP_TO_DATE_VISIBLE_MS = 8000;
 /** Nombre de cartes ajoutées à chaque clic sur « et N autres pages ». */
 export const EXPAND_BATCH = 10;
 
@@ -73,6 +83,14 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   cardLabel: "{title}, p. {page}",
   cardPage: "p. {page}",
   rankingRefined: "Classement affiné par proximité des mots",
+  autoIndexRunning: "Indexation en cours",
+  autoIndexCount: "{done}/{total} PDF",
+  autoIndexUpToDate: "Index à jour",
+  autoIndexFailed: "{n} PDF en échec : voir le journal dans les paramètres",
+  autoIndexDiscoveryFailed: "La découverte des PDF a échoué : voir le journal dans les paramètres",
+  autoIndexPartialOne: "Index à jour, mais {n} élément n'a pas pu être lu : voir le journal des paramètres",
+  autoIndexPartialMany: "Index à jour, mais {n} éléments n'ont pas pu être lus : voir le journal des paramètres",
+  indexingMayMiss: "Indexation en cours : des résultats peuvent manquer",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -129,7 +147,15 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   list.className = "docseeker-list";
   list.setAttribute("aria-label", tr("resultsList"));
 
-  root.append(input, statusEl, alertEl, actions, list);
+  // Indicateur d'indexation, juste sous le champ : la région live (texte fixe) est stable dans l'arbre, vidée par son
+  // contenu ; la fraction N/M est un nœud visuel aria-hidden hors de la région ; le bouton aussi.
+  let activityRow: HTMLElement | undefined;
+  if (deps.indexActivity) {
+    activityRow = doc.createElement("div");
+    activityRow.className = "docseeker-index-row";
+  }
+
+  root.append(input, ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list);
   host.appendChild(root);
 
   const entries = new Map<string, DocEntry>();
@@ -373,6 +399,9 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
 
   const withFailed = (text: string, failedCount: number): string =>
     failedCount > 0 ? `${text}. ${count(failedCount, "failedOne", "failedMany")}` : text;
+  const isIndexingNow = (): boolean => deps.indexActivity?.getSnapshot().phase === "running";
+  /** Pendant l'indexation, les résultats (ou leur absence) peuvent être incomplets. */
+  const withIndexing = (text: string): string => (isIndexingNow() ? `${text}. ${tr("indexingMayMiss")}` : text);
 
   const render = (): void => {
     if (disposed) return;
@@ -393,7 +422,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         break;
       case "no-result": {
         const base = vm.partial ? `${tr("noResults")}${tr("partialSuffix")}` : tr("noResults");
-        setStatus(withFailed(base, vm.failedCount), { settings: vm.failedCount > 0 });
+        setStatus(withIndexing(withFailed(base, vm.failedCount)), { settings: vm.failedCount > 0 });
         break;
       }
       case "error":
@@ -409,7 +438,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         const counted = vm.partial ? `${base}${tr("partialSuffix")}` : base;
         // Texte identique tant que le classement reste affiné : la région live ne le ré-annonce pas.
         const refined = vm.ranking === "proximity" ? `${counted}. ${tr("rankingRefined")}` : counted;
-        setStatus(withFailed(refined, vm.failedCount), { settings: vm.failedCount > 0 });
+        setStatus(withIndexing(withFailed(refined, vm.failedCount)), { settings: vm.failedCount > 0 });
         renderResults(vm.docs, vm.query);
         break;
       }
@@ -484,12 +513,91 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   const unsubscribe = deps.subscribe(render);
   render();
 
+  // --- Indicateur d'indexation.
+  let cleanupActivity: (() => void) | undefined;
+  if (deps.indexActivity && activityRow) {
+    const source = deps.indexActivity;
+    const schedule = deps.schedule ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
+    const clearTimer = deps.clear ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    const region = doc.createElement("div");
+    region.className = "docseeker-index-activity";
+    region.setAttribute("role", "status");
+    region.setAttribute("aria-live", "polite");
+    region.setAttribute("aria-atomic", "true");
+    const countEl = doc.createElement("span");
+    countEl.className = "docseeker-index-count";
+    countEl.setAttribute("aria-hidden", "true");
+    const settingsBtn = doc.createElement("button");
+    settingsBtn.type = "button";
+    settingsBtn.className = "b3-button b3-button--outline docseeker-index-settings";
+    settingsBtn.textContent = tr("openSettings");
+    settingsBtn.hidden = true;
+    if (deps.onOpenSettings) {
+      settingsBtn.addEventListener("click", () => deps.onOpenSettings?.());
+      activityRow.append(region, countEl, settingsBtn);
+    } else {
+      activityRow.append(region, countEl);
+    }
+    let hideHandle: unknown;
+    let hasHide = false;
+    let lastRunning = false;
+    const stopHide = (): void => {
+      if (!hasHide) return;
+      hasHide = false;
+      clearTimer(hideHandle);
+    };
+    const show = (text: string, countText: string, withButton: boolean): void => {
+      if (region.textContent !== text) region.textContent = text; // inchangé : pas de ré-annonce
+      if (countEl.textContent !== countText) countEl.textContent = countText;
+      settingsBtn.hidden = !withButton;
+    };
+    const renderActivity = (): void => {
+      if (disposed) return;
+      const snap = source.getSnapshot();
+      stopHide();
+      switch (snap.phase) {
+        case "running":
+          show(tr("autoIndexRunning"), snap.total > 0 ? tr("autoIndexCount", { done: snap.done, total: snap.total }) : "", false);
+          break;
+        case "done":
+          show(tr("autoIndexUpToDate"), "", false);
+          hasHide = true;
+          hideHandle = schedule(() => {
+            hasHide = false;
+            if (!disposed) show("", "", false);
+          }, UP_TO_DATE_VISIBLE_MS);
+          break;
+        case "partial":
+          show(count(snap.incomplete, "autoIndexPartialOne", "autoIndexPartialMany"), "", true);
+          break;
+        case "failed":
+          show(snap.discovery ? tr("autoIndexDiscoveryFailed") : tr("autoIndexFailed", { n: snap.failed }), "", true);
+          break;
+        default:
+          show("", "", false);
+      }
+      const running = snap.phase === "running";
+      if (running !== lastRunning) {
+        lastRunning = running;
+        render(); // l'avis « des résultats peuvent manquer » apparaît ou disparaît, sans relancer la requête
+      }
+    };
+    const unsubscribeActivity = source.subscribe(renderActivity);
+    lastRunning = isIndexingNow();
+    renderActivity();
+    cleanupActivity = () => {
+      stopHide();
+      unsubscribeActivity();
+    };
+  }
+
   return {
     focusInput: () => input.focus(),
     dispose() {
       if (disposed) return;
       disposed = true;
       unsubscribe();
+      cleanupActivity?.();
       clearList();
       root.remove();
     },

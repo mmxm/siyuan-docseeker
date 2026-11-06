@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- Indexation automatique : au démarrage, au retour sur la fenêtre, puis périodiquement (5, 15 ou 60 minutes). Les PDF ajoutés ou modifiés sont indexés, les PDF supprimés sont retirés de l'index. Réglable dans les paramètres.
+- Indicateur d'état sous le champ de recherche : indexation en cours (résultats éventuellement incomplets), échecs, dossiers non lisibles.
+- Les PDF en échec permanent sont retentés à intervalles espacés ; l'indexation attend pendant la saisie.
+- Nettoyage des fichiers temporaires orphelins au démarrage.
+
 - Nouveau panneau de paramètres du plugin : Réindexer, Vider l'index (avec confirmation), Diagnostic technique et journal des avertissements. La section « Avancé » de l'onglet disparaît ; l'onglet propose « Ouvrir les paramètres ».
 - La recherche se lance uniquement avec Entrée (plus de recherche à la frappe).
 - Les résultats n'affichent plus que le dossier contenant le PDF ; le compteur indique « N pages ».

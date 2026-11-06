@@ -49,7 +49,8 @@ Avant de pouvoir chercher, les PDF doivent être indexés.
 
 Comportement à connaître :
 
-- L'indexation ne démarre **que** par le bouton **Réindexer**. Pour prendre en compte un PDF ajouté ou modifié, relancez-la. Les PDF inchangés ne sont pas relus, et les PDF supprimés sont retirés de l'index.
+- L'indexation est **automatique** (réglable dans les paramètres du plugin) : quelques secondes après le démarrage, au retour sur la fenêtre (au plus une fois toutes les 30 secondes), puis toutes les 5, 15 ou 60 minutes. Les PDF ajoutés ou modifiés sont indexés, les PDF supprimés sont retirés de l'index, les PDF inchangés ne sont pas relus. Elle attend que vous ayez fini de taper ou de défiler. **Réindexer** force une vérification immédiate.
+- Un PDF qui échoue (corrompu, vide) est retenté à intervalles espacés ; l'onglet de recherche signale les échecs et les dossiers non lisibles, le détail est dans le journal des paramètres.
 - Si l'indexation s'interrompt (fermeture de SiYuan, par exemple), la prochaine réindexation reprend là où elle s'était arrêtée.
 - **Durée indicative** : environ 191 s pour 44 PDF, mesurés avec Node sur un disque local. Dans le navigateur, c'est plus long. Ces chiffres sont donnés à titre indicatif.
 - **Taille des index** : environ 3 Ko par page indexée.

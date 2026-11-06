@@ -820,3 +820,259 @@ describe("createWarnLog", () => {
     expect(seen).toHaveBeenCalledTimes(60);
   });
 });
+
+describe("mountSearchTab : indicateur d'indexation automatique", () => {
+  type Snapshot = {
+    phase: "idle" | "running" | "done" | "partial" | "failed";
+    done: number;
+    total: number;
+    failed: number;
+    incomplete: number;
+    discovery: boolean;
+  };
+  const IDLE: Snapshot = { phase: "idle", done: 0, total: 0, failed: 0, incomplete: 0, discovery: false };
+  const snap = (over: Partial<Snapshot>): Snapshot => ({ ...IDLE, ...over });
+  function activity(initial: Snapshot = IDLE) {
+    let snapshot = initial;
+    const listeners = new Set<() => void>();
+    return {
+      source: {
+        getSnapshot: () => snapshot,
+        subscribe: (l: () => void) => {
+          listeners.add(l);
+          return () => listeners.delete(l);
+        },
+      },
+      set: (next: Snapshot) => {
+        snapshot = next;
+        for (const l of [...listeners]) l();
+      },
+      listeners,
+    };
+  }
+  const T: Record<string, string> = {
+    autoIndexRunning: "Indexation en cours",
+    autoIndexCount: "{done}/{total} PDF",
+    autoIndexUpToDate: "Index à jour",
+    autoIndexFailed: "{n} PDF en échec : voir le journal dans les paramètres",
+    autoIndexDiscoveryFailed: "La découverte des PDF a échoué : voir le journal dans les paramètres",
+    autoIndexPartialOne: "Index à jour, mais {n} élément n'a pas pu être lu : voir le journal des paramètres",
+    autoIndexPartialMany: "Index à jour, mais {n} éléments n'ont pas pu être lus : voir le journal des paramètres",
+    indexingMayMiss: "Indexation en cours : des résultats peuvent manquer",
+    openSettings: "Ouvrir les paramètres",
+  };
+  const mount = (a: ReturnType<typeof activity>) => {
+    const h = harness();
+    h.deps = { ...h.deps, indexActivity: a.source, t: (key: string) => T[key] ?? key };
+    const tab = mountSearchTab(h.host, h.deps);
+    const region = h.host.querySelector<HTMLElement>(".docseeker-index-activity")!;
+    const count = h.host.querySelector<HTMLElement>(".docseeker-index-count")!;
+    const button = (): HTMLButtonElement | null => h.host.querySelector(".docseeker-index-settings");
+    return { h, tab, region, count, button };
+  };
+
+  it("région polie stable : role=status, aria-live, aria-atomic, jamais `hidden`, vide au repos", () => {
+    const { region } = mount(activity());
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.getAttribute("aria-atomic")).toBe("true");
+    expect(region.hasAttribute("hidden")).toBe(false);
+    expect(region.textContent).toBe("");
+  });
+
+  it("l'indicateur est placé juste après le champ de recherche, avant la liste", () => {
+    const { h } = mount(activity());
+    const root = h.host.querySelector(".docseeker-search")!;
+    const kids = [...root.children];
+    const input = kids.findIndex((k) => k.tagName === "INPUT");
+    const row = kids.findIndex((k) => k.querySelector(".docseeker-index-activity") !== null);
+    const list = kids.findIndex((k) => k.tagName === "UL");
+    expect(input).toBeLessThan(row);
+    expect(row).toBeLessThan(list);
+    expect(row).toBe(input + 1);
+  });
+
+  it("sans dépendance indexActivity, aucune région n'est ajoutée", () => {
+    const h = harness();
+    mountSearchTab(h.host, h.deps);
+    expect(h.host.querySelector(".docseeker-index-activity")).toBeNull();
+  });
+
+  it("en cours : texte live FIXE ; la fraction N/M est dans un nœud aria-hidden qui ne réécrit pas la région live", () => {
+    const a = activity();
+    const { region, count } = mount(a);
+    a.set(snap({ phase: "running", done: 1, total: 3 }));
+    expect(region.textContent).toBe("Indexation en cours");
+    expect(region.contains(count)).toBe(false);
+    expect(count.getAttribute("aria-hidden")).toBe("true");
+    expect(count.textContent).toBe("1/3 PDF");
+    const node = region.firstChild;
+    a.set(snap({ phase: "running", done: 2, total: 3 }));
+    expect(region.firstChild).toBe(node);
+    expect(count.textContent).toBe("2/3 PDF");
+  });
+
+  it("total inconnu : pas de fraction", () => {
+    const a = activity();
+    const { region, count } = mount(a);
+    a.set(snap({ phase: "running", done: 0, total: 0 }));
+    expect(region.textContent).toBe("Indexation en cours");
+    expect(count.textContent).toBe("");
+  });
+
+  it("terminé : « Index à jour » 8 s puis la région est vidée (mais reste dans l'arbre)", () => {
+    const a = activity();
+    const { region, h } = mount(a);
+    a.set(snap({ phase: "running", done: 0, total: 1 }));
+    a.set(snap({ phase: "done" }));
+    expect(region.textContent).toBe("Index à jour");
+    vi.advanceTimersByTime(7999);
+    expect(region.textContent).toBe("Index à jour");
+    vi.advanceTimersByTime(1);
+    expect(region.textContent).toBe("");
+    expect(h.host.contains(region)).toBe(true);
+  });
+
+  it("une nouvelle passe annule le masquage différé", () => {
+    const a = activity();
+    const { region } = mount(a);
+    a.set(snap({ phase: "done" }));
+    vi.advanceTimersByTime(2000);
+    a.set(snap({ phase: "running", done: 0, total: 2 }));
+    vi.advanceTimersByTime(20_000);
+    expect(region.textContent).toBe("Indexation en cours");
+  });
+
+  it("échecs : message persistant, bouton « Ouvrir les paramètres » à côté ; au repos il disparaît", () => {
+    const a = activity();
+    const { region, button, h } = mount(a);
+    expect(button()?.hidden).toBe(true);
+    a.set(snap({ phase: "failed", failed: 2 }));
+    expect(region.textContent).toBe("2 PDF en échec : voir le journal dans les paramètres");
+    vi.advanceTimersByTime(60_000);
+    expect(region.textContent).not.toBe("");
+    expect(button()!.hidden).toBe(false);
+    expect(button()!.textContent).toBe("Ouvrir les paramètres");
+    expect(region.contains(button())).toBe(false); // hors de la région live
+    button()!.click();
+    expect(h.openSettings).toHaveBeenCalledTimes(1);
+    a.set(snap({ phase: "idle" }));
+    expect(region.textContent).toBe("");
+    expect(button()!.hidden).toBe(true);
+  });
+
+  it("échec de découverte : texte distinct", () => {
+    const a = activity();
+    const { region } = mount(a);
+    a.set(snap({ phase: "failed", failed: 1, discovery: true }));
+    expect(region.textContent).toBe("La découverte des PDF a échoué : voir le journal dans les paramètres");
+  });
+
+  it("parcours incomplet : « Index à jour, mais N éléments… » persistant, pluriel et bouton", () => {
+    const a = activity();
+    const { region, button } = mount(a);
+    a.set(snap({ phase: "partial", incomplete: 1 }));
+    expect(region.textContent).toBe("Index à jour, mais 1 élément n'a pas pu être lu : voir le journal des paramètres");
+    a.set(snap({ phase: "partial", incomplete: 3 }));
+    expect(region.textContent).toBe("Index à jour, mais 3 éléments n'ont pas pu être lus : voir le journal des paramètres");
+    vi.advanceTimersByTime(60_000);
+    expect(region.textContent).not.toBe("");
+    expect(button()!.hidden).toBe(false);
+  });
+
+  it("sans onOpenSettings, pas de bouton", () => {
+    const h = harness();
+    const a = activity();
+    h.deps = { ...h.deps, indexActivity: a.source };
+    delete (h.deps as { onOpenSettings?: unknown }).onOpenSettings;
+    mountSearchTab(h.host, h.deps);
+    expect(h.host.querySelector(".docseeker-index-settings")).toBeNull();
+  });
+
+  it("état initial non nul (onglet ouvert pendant une indexation) : affiché au montage", () => {
+    const { region, count } = mount(activity(snap({ phase: "running", done: 1, total: 4 })));
+    expect(region.textContent).toBe("Indexation en cours");
+    expect(count.textContent).toBe("1/4 PDF");
+  });
+
+  it("dispose se désabonne, annule le minuteur et retire l'indicateur", () => {
+    const a = activity();
+    const { tab, region, h } = mount(a);
+    a.set(snap({ phase: "done" }));
+    tab.dispose();
+    expect(a.listeners.size).toBe(0);
+    expect(h.host.querySelector(".docseeker-index-activity")).toBeNull();
+    expect(() => vi.advanceTimersByTime(10_000)).not.toThrow();
+    expect(region.isConnected).toBe(false);
+  });
+});
+
+describe("mountSearchTab : résultats partiels pendant l'indexation", () => {
+  const T: Record<string, string> = { indexingMayMiss: "Indexation en cours : des résultats peuvent manquer" };
+  const IDLE = { phase: "idle", done: 0, total: 0, failed: 0, incomplete: 0, discovery: false } as const;
+  function setup() {
+    const h = harness();
+    let snapshot: { phase: "idle" | "running" | "done" | "partial" | "failed"; done: number; total: number; failed: number; incomplete: number; discovery: boolean } = IDLE;
+    const listeners = new Set<() => void>();
+    h.deps = {
+      ...h.deps,
+      t: (key: string) => T[key] ?? key,
+      indexActivity: {
+        getSnapshot: () => snapshot,
+        subscribe: (l) => (listeners.add(l), () => listeners.delete(l)),
+      },
+    };
+    const set = (phase: typeof snapshot.phase, done = 0): void => {
+      snapshot = { ...IDLE, phase, done, total: 3 };
+      for (const l of [...listeners]) l();
+    };
+    const status = (): string => h.host.querySelector(".docseeker-status")!.textContent!;
+    return { h, set, status };
+  }
+
+  it("sur « aucun résultat » : le suffixe apparaît pendant l'indexation et disparaît ensuite, sans relancer la requête", async () => {
+    const { h, set, status } = setup();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "zzzinconnu");
+    expect(status()).toBe("Aucun résultat");
+    const reads = h.read.mock.calls.length;
+    set("running");
+    expect(status()).toBe("Aucun résultat. Indexation en cours : des résultats peuvent manquer");
+    set("running", 1); // le N/M ne re-rend pas le texte
+    expect(status()).toBe("Aucun résultat. Indexation en cours : des résultats peuvent manquer");
+    set("done");
+    expect(status()).toBe("Aucun résultat");
+    expect(h.read.mock.calls.length).toBe(reads);
+    tab.dispose();
+  });
+
+  it("sur des résultats : le suffixe est aussi ajouté", async () => {
+    const { h, set, status } = setup();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    expect(cards(h.host).length).toBeGreaterThan(0);
+    set("running");
+    expect(status()).toContain("des résultats peuvent manquer");
+    expect(cards(h.host).length).toBeGreaterThan(0);
+    set("idle");
+    expect(status()).not.toContain("peuvent manquer");
+    tab.dispose();
+  });
+
+  it("une indexation terminée (indexed) met à jour les résultats de la requête courante sans nouvelle saisie", async () => {
+    const h = harness({ ids: ["a"] });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    const before = h.host.querySelectorAll("li.docseeker-doc, ul.docseeker-list > li").length;
+    h.files.set("b.dsx", bytes("b"));
+    h.emit({ type: "indexed", path: PDF_B, pages: 3 });
+    await vi.advanceTimersByTimeAsync(5000);
+    await flush();
+    const after = h.host.querySelectorAll("li.docseeker-doc, ul.docseeker-list > li").length;
+    expect(after).toBe(before + 1);
+    tab.dispose();
+  });
+});

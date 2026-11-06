@@ -77,6 +77,7 @@ describe("SEARCH_CSS", () => {
 
   it("masque réellement les boutons de dépliage hidden", () => {
     expect(SEARCH_CSS).toContain(".docseeker-more[hidden], .docseeker-less[hidden] { display: none; }");
+    expect(SEARCH_CSS).toContain(".docseeker-index-settings[hidden] { display: none; }");
   });
 
   it("gère les couleurs forcées pour les surlignages", () => {

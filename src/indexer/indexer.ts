@@ -29,8 +29,22 @@ export const MANIFEST_VERSION = 1;
 export const EVENT_MESSAGE_MAX_LENGTH = 200;
 export const NORMALIZER_VERSION = 1;
 export const EXTRACTOR_VERSION = "docseeker-extract-1";
-const EMPTY_SUMMARY: IndexSummary = { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false };
-const DISCOVERY_FAILURE_PATH = "(discovery)";
+const EMPTY_SUMMARY: IndexSummary = {
+  indexed: 0,
+  skippedScanned: 0,
+  failed: 0,
+  removed: 0,
+  cancelled: false,
+  incomplete: 0,
+  incompleteDetails: [],
+  failures: [],
+};
+/** Délais avant une nouvelle tentative d'un PDF en échec (passes automatiques) : 5 min, 30 min, 2 h (plafond). */
+export const FAILURE_BACKOFF_MS: readonly number[] = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
+/** Pas d'attente tant que `shouldYield` est vrai. */
+export const YIELD_STEP_MS = 500;
+/** Chemin des échecs qui ne portent pas sur un PDF (découverte) ; le manifeste utilise MANIFEST_FILE_NAME. */
+export const DISCOVERY_FAILURE_PATH = "(discovery)";
 
 export interface PdfViewportLike {
   readonly transform: readonly number[];
@@ -58,6 +72,13 @@ export interface IndexerDeps {
   readonly onListenerError?: (error: unknown) => void;
   /** Appelé si la libération d'un document échoue ; le résultat de l'indexation n'est pas modifié. */
   readonly onDestroyError?: (error: unknown) => void;
+  /**
+   * Vrai tant que l'utilisateur est actif : une passe AUTOMATIQUE attend, avant chaque chargement de PDF,
+   * par pas de `YIELD_STEP_MS`. Jamais pour une passe manuelle. Un détecteur qui lève compte comme faux.
+   */
+  readonly shouldYield?: () => boolean;
+  /** Attente injectable (tests sans vrai minuteur). */
+  readonly delay?: (ms: number) => Promise<void>;
 }
 
 export interface IndexSummary {
@@ -66,6 +87,12 @@ export interface IndexSummary {
   readonly failed: number;
   readonly removed: number;
   readonly cancelled: boolean;
+  /** Éléments que le parcours n'a pas pu lire (dossier illisible, taille inconnue…) : l'index peut être incomplet. */
+  readonly incomplete: number;
+  /** « chemin : raison » pour chaque élément non parcouru. */
+  readonly incompleteDetails?: readonly string[];
+  /** « chemin : message » pour chaque échec, y compris les PDF sautés par le retrait progressif. */
+  readonly failures?: readonly string[];
 }
 
 export type IndexerEvent =
@@ -85,19 +112,26 @@ export interface IndexerState {
 }
 
 export interface Indexer {
-  /** Lance une synchronisation ; si une est en cours, renvoie la même promesse. Ne rejette jamais. */
-  start(): Promise<IndexSummary>;
+  /**
+   * Lance une synchronisation ; si une est en cours, renvoie la même promesse. Ne rejette jamais.
+   * `automatic` : passe planifiée (retrait progressif des PDF en échec, pause pendant l'activité) ;
+   * sans option, passe manuelle qui remet les compteurs d'échecs à zéro.
+   */
+  start(options?: { readonly automatic?: boolean }): Promise<IndexSummary>;
   pause(): void;
   resume(): void;
   cancel(): void;
   /** Force la réindexation d'un PDF (ou de tous), après la synchronisation en cours le cas échéant. */
   reindex(path?: string): Promise<IndexSummary>;
+  /** Vide la table de retrait progressif des PDF en échec (ex. après « Vider l'index »). */
+  resetFailures(): void;
   getState(): IndexerState;
   onEvent(listener: (event: IndexerEvent) => void): () => void;
 }
 
 interface Run {
   readonly abort: AbortController;
+  readonly automatic: boolean;
   promise: Promise<IndexSummary>;
   queue: IndexQueue | null;
 }
@@ -107,6 +141,16 @@ interface Counters {
   skippedScanned: number;
   failed: number;
   removed: number;
+  incomplete: number;
+  incompleteDetails: string[];
+  failures: string[];
+}
+
+interface FailureRecord {
+  readonly fingerprint: string;
+  readonly attempts: number;
+  readonly nextAt: number;
+  readonly message: string;
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -173,6 +217,39 @@ export function createIndexer(deps: IndexerDeps): Indexer {
   let run: Run | null = null;
   let paused = false;
   let lastSummary: IndexSummary | null = null;
+  /** PDF en échec : échecs consécutifs et prochain essai autorisé pour une passe automatique (mémoire seulement). */
+  const failedPdfs = new Map<string, FailureRecord>();
+  const delay = deps.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  const reportInternal = (error: unknown): void => {
+    try {
+      deps.onListenerError?.(error);
+    } catch {
+      // un gestionnaire d'erreurs défaillant ne doit rien casser
+    }
+  };
+  const mustYield = (): boolean => {
+    try {
+      return deps.shouldYield?.() ?? false;
+    } catch (error) {
+      reportInternal(error);
+      return false;
+    }
+  };
+  /** Attend la fin de l'activité de l'utilisateur (passe automatique seulement), par pas, annulable. */
+  async function yieldToUser(runCtx: Run): Promise<void> {
+    if (!runCtx.automatic) return;
+    while (mustYield()) {
+      throwIfAborted(runCtx.abort.signal);
+      await delay(YIELD_STEP_MS);
+    }
+    throwIfAborted(runCtx.abort.signal);
+  }
+  const recordFailure = (entry: PdfEntry, message: string): void => {
+    const attempts = (failedPdfs.get(entry.path)?.attempts ?? 0) + 1;
+    const wait = FAILURE_BACKOFF_MS[Math.min(attempts, FAILURE_BACKOFF_MS.length) - 1] as number;
+    failedPdfs.set(entry.path, { fingerprint: fingerprint(entry), attempts, nextAt: deps.now() + wait, message });
+  };
 
   const emit = (event: IndexerEvent): void => {
     for (const listener of [...listeners]) {
@@ -188,6 +265,13 @@ export function createIndexer(deps: IndexerDeps): Indexer {
     }
   };
 
+  /** Compte un échec, le retient dans le bilan et l'annonce. */
+  function fail(counters: Counters, path: string, message: string): void {
+    counters.failed += 1;
+    counters.failures.push(`${path} : ${message}`);
+    emit({ type: "failed", path, message });
+  }
+
   async function loadPrevious(): Promise<PdfEntry[]> {
     const bytes = await deps.store.read(MANIFEST_FILE_NAME);
     if (bytes === null) return [];
@@ -195,17 +279,29 @@ export function createIndexer(deps: IndexerDeps): Indexer {
   }
 
   async function execute(runCtx: Run, force: ReadonlySet<string> | "all" | null): Promise<IndexSummary> {
-    const counters: Counters = { indexed: 0, skippedScanned: 0, failed: 0, removed: 0 };
+    const counters: Counters = {
+      indexed: 0,
+      skippedScanned: 0,
+      failed: 0,
+      removed: 0,
+      incomplete: 0,
+      incompleteDetails: [],
+      failures: [],
+    };
     const signal = runCtx.abort.signal;
-    const summary = (): IndexSummary => ({ ...counters, cancelled: signal.aborted });
+    const summary = (): IndexSummary => ({
+      ...counters,
+      incompleteDetails: [...counters.incompleteDetails],
+      failures: [...counters.failures],
+      cancelled: signal.aborted,
+    });
     emit({ type: "started" });
     try {
       await synchronize(runCtx, counters, force);
     } catch (error) {
       if (!signal.aborted) {
-        counters.failed += 1;
         const path = error instanceof ManifestReadError ? MANIFEST_FILE_NAME : DISCOVERY_FAILURE_PATH;
-        emit({ type: "failed", path, message: truncate(messageOf(error)) });
+        fail(counters, path, truncate(messageOf(error)));
       }
     }
     const result = summary();
@@ -223,6 +319,14 @@ export function createIndexer(deps: IndexerDeps): Indexer {
     throwIfAborted(signal);
     const discovered = await deps.discover();
     throwIfAborted(signal);
+    // Un parcours incomplet n'est jamais « à jour » : on le fait remonter (la garde de suppression est dans planIndexUpdate).
+    // discoverPdfs range un PDF sans taille dans `issues` ET `unsized` : on ne le compte qu'une fois.
+    const issuePaths = new Set(discovered.issues.map((issue) => issue.path));
+    counters.incompleteDetails = [
+      ...discovered.issues.map((issue) => `${issue.path} : ${issue.message}`),
+      ...discovered.unsized.filter((path) => !issuePaths.has(path)).map((path) => `${path} : taille inconnue`),
+    ];
+    counters.incomplete = counters.incompleteDetails.length;
 
     let current = new Map<string, PdfEntry>(previous.map((e) => [e.path, e]));
     // Écritures du manifeste sérialisées ; le signal est revérifié juste avant chaque écriture.
@@ -242,8 +346,22 @@ export function createIndexer(deps: IndexerDeps): Indexer {
 
     const plan = planIndexUpdate(previous as Manifest, discovered);
     const forced = forcedEntries(discovered.manifest, force);
-    const toIndex = [...plan.toIndex];
+    let toIndex = [...plan.toIndex];
     for (const entry of forced) if (!toIndex.some((e) => e.path === entry.path)) toIndex.push(entry);
+    // Retrait progressif : la table ne garde que les PDF encore présents ; une passe automatique saute ceux dont
+    // l'empreinte est inchangée et dont le prochain essai n'est pas atteint (ils restent comptés en échec).
+    const present = new Set(discovered.manifest.map((e) => e.path));
+    if (discovered.complete) for (const path of [...failedPdfs.keys()]) if (!present.has(path)) failedPdfs.delete(path);
+    if (runCtx.automatic) {
+      const nowMs = deps.now();
+      toIndex = toIndex.filter((entry) => {
+        const record = failedPdfs.get(entry.path);
+        if (!record || record.fingerprint !== fingerprint(entry) || nowMs >= record.nextAt) return true;
+        counters.failed += 1;
+        counters.failures.push(`${entry.path} : ${record.message}`);
+        return false;
+      });
+    }
 
     if (plan.removalsAllowed) {
       for (const entry of plan.toRemove) {
@@ -269,8 +387,7 @@ export function createIndexer(deps: IndexerDeps): Indexer {
       emit({ type: "removed", path: entry.path });
     } catch (error) {
       if (signal.aborted) return;
-      counters.failed += 1;
-      emit({ type: "failed", path: entry.path, message: truncate(messageOf(error)) });
+      fail(counters, entry.path, truncate(messageOf(error)));
     }
   }
 
@@ -294,6 +411,8 @@ export function createIndexer(deps: IndexerDeps): Indexer {
       };
       let doc: PdfDocumentLike | undefined;
       try {
+        await yieldToUser(runCtx);
+        guard();
         doc = await deps.loadPdf(path, jobSignal);
         guard();
         const total = doc.numPages;
@@ -312,6 +431,7 @@ export function createIndexer(deps: IndexerDeps): Indexer {
         if (isLikelyScanned(pages)) {
           await persist((m) => m.set(path, entry), jobSignal);
           if (previousEntry !== undefined) await tryRemove(dsxName(previousEntry));
+          failedPdfs.delete(path);
           counters.skippedScanned += 1;
           emit({ type: "skipped-scanned", path });
           return;
@@ -334,12 +454,14 @@ export function createIndexer(deps: IndexerDeps): Indexer {
         if (previousEntry !== undefined && dsxName(previousEntry) !== dsxName(entry)) {
           await tryRemove(dsxName(previousEntry));
         }
+        failedPdfs.delete(path);
         counters.indexed += 1;
         emit({ type: "indexed", path, pages: total });
       } catch (error) {
         if (!aborted()) {
-          counters.failed += 1;
-          emit({ type: "failed", path, message: truncate(messageOf(error)) });
+          const message = truncate(messageOf(error));
+          recordFailure(entry, message);
+          fail(counters, path, message);
         }
         throw error;
       } finally {
@@ -377,21 +499,28 @@ export function createIndexer(deps: IndexerDeps): Indexer {
     }
   }
 
-  function begin(force: ReadonlySet<string> | "all" | null): Run {
+  function begin(force: ReadonlySet<string> | "all" | null, automatic: boolean): Run {
     const abort = new AbortController();
-    const runCtx: Run = { abort, queue: null, promise: Promise.resolve(EMPTY_SUMMARY) };
+    const runCtx: Run = { abort, automatic, queue: null, promise: Promise.resolve(EMPTY_SUMMARY) };
     run = runCtx; // publié avant `execute` : un listener de « started » voit déjà la synchronisation en cours
     runCtx.promise = execute(runCtx, force);
     return runCtx;
   }
 
-  function startRun(force: ReadonlySet<string> | "all" | null): Promise<IndexSummary> {
+  function startRun(force: ReadonlySet<string> | "all" | null, automatic: boolean): Promise<IndexSummary> {
     if (run !== null) return run.promise;
-    return begin(force).promise;
+    if (!automatic) failedPdfs.clear(); // passe manuelle ou forcée : tous les PDF sont retentés
+    return begin(force, automatic).promise;
   }
 
   return {
-    start: () => (run !== null ? run.promise : startRun(null)),
+    start(options) {
+      if (run !== null) {
+        if (options?.automatic !== true) failedPdfs.clear(); // une demande manuelle qui rejoint une passe : retentera tout
+        return run.promise;
+      }
+      return startRun(null, options?.automatic === true);
+    },
     pause() {
       paused = true;
       run?.queue?.pause();
@@ -408,10 +537,14 @@ export function createIndexer(deps: IndexerDeps): Indexer {
       const state = queue.state();
       for (const id of [...state.pending, ...state.running]) queue.cancel(id);
     },
+    resetFailures() {
+      failedPdfs.clear();
+    },
     reindex(path) {
       const force: ReadonlySet<string> | "all" = path === undefined ? "all" : new Set([path]);
-      if (run === null) return startRun(force);
-      return run.promise.then(() => startRun(force));
+      failedPdfs.clear();
+      if (run === null) return startRun(force, false);
+      return run.promise.then(() => startRun(force, false));
     },
     getState() {
       const status = run === null ? "idle" : paused ? "paused" : "running";

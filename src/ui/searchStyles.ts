@@ -6,6 +6,10 @@ export const SEARCH_CSS = `
 .docseeker-search input[type="search"] { width: 100%; box-sizing: border-box; min-height: 32px; }
 .docseeker-search input[type="search"]:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-status { font-size: 12px; color: var(--b3-theme-on-surface); min-height: 1.4em; }
+.docseeker-index-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.docseeker-index-activity { font-size: 12px; color: var(--b3-theme-on-surface); min-height: 1.4em; white-space: normal; overflow-wrap: anywhere; }
+.docseeker-index-count { font-size: 12px; color: var(--b3-theme-on-surface); opacity: 0.8; }
+.docseeker-index-settings { min-height: 32px; min-width: 32px; }
 .docseeker-alert { font-size: 12px; color: var(--b3-theme-error); }
 .docseeker-alert:empty { display: none; }
 .docseeker-message { font-size: 12px; color: var(--b3-theme-on-surface); }
@@ -33,6 +37,7 @@ export const SEARCH_CSS = `
 .docseeker-more-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .docseeker-more, .docseeker-less { min-height: 32px; font-size: 12px; }
 .docseeker-more[hidden], .docseeker-less[hidden] { display: none; }
+.docseeker-index-settings[hidden] { display: none; }
 .docseeker-truncated { align-self: center; font-size: 12px; }
 .docseeker-truncated[hidden] { display: none; }
 .docseeker-more:focus-visible, .docseeker-less:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }

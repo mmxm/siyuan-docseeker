@@ -1,7 +1,10 @@
 import { Plugin, Setting, confirm, openTab, showMessage } from "siyuan";
 import { createKernelApi } from "./siyuan/kernelApi";
 import { formatReport, runM0Diagnostic, type PdfjsLike } from "./diagnostic/m0";
+import { createAutoSync, type AutoSync, type AutoSyncConfig } from "./indexer/autoSync";
+import { createIndexActivity, type IndexActivity } from "./indexer/indexActivity";
 import { createIndexer, type Indexer } from "./indexer/indexer";
+import { SETTINGS_FILE, createSettings, type DocSeekerSettings, type SettingsStore } from "./settings";
 import { createLoadPdf, type PdfjsLoader } from "./indexer/loadPdf";
 import { discoverPdfs } from "./siyuan/discovery";
 import { createPetalStore, type PetalStore } from "./siyuan/petalStore";
@@ -19,14 +22,25 @@ const PETAL_ROOT = "/data/storage/petal";
 const ICON_NAME = "iconSearch";
 const COMMAND_OPEN_KEY = "openSearch";
 
-type PanelPart = "reindex" | "clearIndex" | "diagnostic" | "log";
+/** Une saisie plus récente que cela retarde la synchronisation automatique (extraction dans le thread principal). */
+const TYPING_QUIET_MS = 3000;
+const USER_ACTIVITY_EVENTS = ["keydown", "pointerdown", "wheel"] as const;
+
+type PanelPart = "autoIndex" | "autoIndexInterval" | "reindex" | "clearIndex" | "diagnostic" | "log";
 /** Items du panneau, dans l'ordre : clé i18n du titre (`<clé>Desc` pour la description) et partie du panneau. */
 const SETTING_ITEMS: readonly { key: string; part: PanelPart }[] = [
+  { key: "autoIndex", part: "autoIndex" },
+  { key: "autoIndexInterval", part: "autoIndexInterval" },
   { key: "reindex", part: "reindex" },
   { key: "clearIndex", part: "clearIndex" },
   { key: "diagnostic", part: "diagnostic" },
   { key: "warnLog", part: "log" },
 ];
+
+const toConfig = (settings: DocSeekerSettings): AutoSyncConfig => ({
+  enabled: settings.autoIndex,
+  intervalMinutes: settings.intervalMinutes,
+});
 
 declare global {
   interface Window {
@@ -82,6 +96,77 @@ export default class DocSeekerPlugin extends Plugin {
     } catch (error) {
       this.warnLog.warn("Démarrage de l'index partagé en échec", error);
     }
+    try {
+      this.getActivity();
+      this.startAutoIndex();
+    } catch (error) {
+      this.warnLog.warn("Démarrage de l'indexation automatique en échec", error);
+    }
+  }
+
+  /**
+   * Indexation automatique : lit les réglages, puis le planificateur lance une première synchronisation peu
+   * après (précédée du nettoyage des .tmp/.bak abandonnés), au retour du focus et périodiquement.
+   */
+  private startAutoIndex(): void {
+    if (this.autoSync) return;
+    const indexer = this.getIndexer();
+    const store = this.getPetalStore(createKernelApi());
+    const onVisible = (listener: () => void) => (): void => {
+      if (document.visibilityState === "visible") listener();
+    };
+    const autoSync = createAutoSync({
+      sync: async () => {
+        const summary = await indexer.start({ automatic: true });
+        return {
+          failed: summary.failed,
+          cancelled: summary.cancelled,
+          incomplete: summary.incomplete,
+          ...(summary.failures ? { failures: summary.failures } : {}),
+          ...(summary.incompleteDetails ? { incompleteDetails: summary.incompleteDetails } : {}),
+        };
+      },
+      prepare: async () => {
+        const report = await store.removeStaleTmp();
+        if (report.handled.length > 0) {
+          this.warnLog.warn(`Fichiers temporaires restaurés ou supprimés au démarrage : ${report.handled.join(", ")}`);
+        }
+        for (const failure of report.failed) this.warnLog.warn(`Nettoyage de ${failure.name} en échec`, failure.error);
+      },
+      isBusy: () => this.clearing.active() || this.userIsActive(),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onFocus: (listener) => {
+        const visible = onVisible(listener);
+        window.addEventListener("focus", listener);
+        document.addEventListener("visibilitychange", visible);
+        return () => {
+          window.removeEventListener("focus", listener);
+          document.removeEventListener("visibilitychange", visible);
+        };
+      },
+      now: () => Date.now(),
+      onWarn: (message, error) => this.warnLog.warn(message, error),
+    });
+    this.autoSync = autoSync;
+    // Détecteur d'activité (saisie, clic, molette) : partagé par le planificateur (isBusy) et l'indexeur (shouldYield).
+    // Enregistré après la création du planificateur : s'il lève, aucun écouteur ne reste sur le document.
+    const onInput = (): void => {
+      this.lastInputAt = Date.now();
+    };
+    for (const type of USER_ACTIVITY_EVENTS) document.addEventListener(type, onInput, { capture: true, passive: true });
+    const unsubscribeSettings = this.settings.subscribe(() => autoSync.configure(toConfig(this.settings.get())));
+    this.autoSyncCleanup = () => {
+      unsubscribeSettings();
+      for (const type of USER_ACTIVITY_EVENTS) document.removeEventListener(type, onInput, { capture: true });
+      autoSync.dispose();
+    };
+    this.settings
+      .load()
+      .then((loaded) => {
+        if (!this.unloaded) autoSync.start(toConfig(loaded));
+      })
+      .catch((error: unknown) => this.warnLog.warn("Démarrage de l'indexation automatique en échec", error));
   }
 
   private unloaded = false;
@@ -91,11 +176,24 @@ export default class DocSeekerPlugin extends Plugin {
   private readonly tabCleanups = new Map<Element, Array<() => void>>();
   private readonly warnLog = createWarnLog();
   private panel: SettingsPanel | null = null;
+  private autoSync: AutoSync | null = null;
+  private lastInputAt = Number.NEGATIVE_INFINITY;
+  private autoSyncCleanup: (() => void) | null = null;
+  private activity: IndexActivity | null = null;
+  private readonly settings: SettingsStore = createSettings({
+    load: () => this.loadData(SETTINGS_FILE) as Promise<unknown>,
+    save: (value) => this.saveData(SETTINGS_FILE, value) as Promise<unknown>,
+    onWarn: (message, error) => this.warnLog.warn(message, error),
+  });
   /** Vidage de l'index en cours : porté ici pour survivre à la fermeture/réouverture du panneau. */
   private readonly clearing = createClearingFlag();
 
   override onunload(): void {
     this.unloaded = true;
+    this.autoSyncCleanup?.();
+    this.autoSyncCleanup = null;
+    this.activity?.dispose();
+    this.activity = null;
     this.indexer?.cancel();
     this.sharedIndex?.dispose();
     this.sharedIndex = null;
@@ -147,6 +245,11 @@ export default class DocSeekerPlugin extends Plugin {
       isIndexing: () => indexer.getState().status !== "idle",
       clearing: this.clearing,
       clearIndex: () => store.clear(),
+      settings: this.settings,
+      startAutoSync: () => {
+        indexer.resetFailures(); // index vidé : les PDF en échec doivent être retentés sans attendre leur délai
+        return this.autoSync?.triggerNow() ?? false;
+      },
       refreshIndex: () => sharedIndex.refreshNow(),
       runDiagnostic: () => this.runDiagnostic(),
       warnLog: this.warnLog,
@@ -195,6 +298,7 @@ export default class DocSeekerPlugin extends Plugin {
       store: this.getPetalStore(kernel),
       sharedIndex,
       onOpenSettings: () => this.openSetting(),
+      indexActivity: this.getActivity(),
       openTab: openTab as unknown as OpenTabFn,
       app: this.app,
       // Les pages du PDF.js de SiYuan exposent `render` : le type d'indexation n'en décrit qu'une partie.
@@ -230,6 +334,28 @@ export default class DocSeekerPlugin extends Plugin {
     return shared;
   }
 
+  /** Vrai si l'utilisateur a saisi, cliqué ou fait défiler depuis moins de TYPING_QUIET_MS. */
+  private userIsActive(): boolean {
+    return Date.now() - this.lastInputAt < TYPING_QUIET_MS;
+  }
+
+  /** Suivi d'activité unique partagé par les onglets (indicateur discret) ; créé paresseusement. */
+  private getActivity(): IndexActivity {
+    if (this.activity) return this.activity;
+    const indexer = this.getIndexer();
+    this.activity = createIndexActivity({
+      indexer,
+      getProgress: () => {
+        const queue = indexer.getState().queue;
+        if (queue === null) return null;
+        const done = queue.completed.length + queue.failed.length;
+        return { done, total: done + queue.pending.length + queue.running.length };
+      },
+      onWarn: (message, error) => this.warnLog.warn(message, error),
+    });
+    return this.activity;
+  }
+
   private getIndexer(): Indexer {
     if (this.indexer) return this.indexer;
     const kernel = createKernelApi();
@@ -240,6 +366,7 @@ export default class DocSeekerPlugin extends Plugin {
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
       onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),
+      shouldYield: () => this.userIsActive(), // les passes automatiques cèdent la place à l'utilisateur
     });
     return this.indexer;
   }

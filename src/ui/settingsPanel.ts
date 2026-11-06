@@ -6,9 +6,11 @@
  * `createSettingsPanel` abonne des écouteurs (indexeur, journal) ; `dispose()` les libère (idempotent).
  */
 import type { IndexerEvent } from "../indexer/indexer";
+import { FREQUENCY_MINUTES, type DocSeekerSettings } from "../settings";
 import { ensureSearchStyle } from "./searchStyles";
 
 export const MESSAGE_TIMEOUT_MS = 6000;
+let panelSeq = 0;
 
 type MessageType = "info" | "error";
 
@@ -54,6 +56,14 @@ export interface SettingsPanelDeps {
   /** Exclusion mutuelle vidage / réindexation, partagée entre les ouvertures du panneau. */
   readonly clearing: ClearingFlag;
   readonly clearIndex: () => Promise<ClearOutcome>;
+  /** Réglages persistés (indexation automatique). */
+  readonly settings: {
+    get(): DocSeekerSettings;
+    update(patch: Partial<DocSeekerSettings>): Promise<void>;
+    subscribe(listener: () => void): () => void;
+  };
+  /** Déclenche une synchronisation automatique (après un vidage, drapeau déjà libéré) ; vrai si elle va avoir lieu. */
+  readonly startAutoSync: () => boolean;
   /** Rafraîchit l'index de recherche partagé après un vidage. */
   readonly refreshIndex: () => Promise<void>;
   readonly runDiagnostic: () => Promise<string>;
@@ -68,6 +78,8 @@ export interface SettingsPanelDeps {
 }
 
 export interface SettingsPanel {
+  readonly autoIndex: HTMLElement;
+  readonly autoIndexInterval: HTMLElement;
   readonly reindex: HTMLElement;
   readonly clearIndex: HTMLElement;
   readonly diagnostic: HTMLElement;
@@ -76,6 +88,8 @@ export interface SettingsPanel {
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const isQuiet = (s: { indexed: number; skippedScanned: number; failed: number; removed: number; cancelled: boolean }): boolean =>
+  s.indexed + s.skippedScanned + s.failed + s.removed === 0 && !s.cancelled;
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 export function describeEvent(event: IndexerEvent): string {
@@ -162,14 +176,20 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   const indexStatus = textBlock({ live: true, label: t("indexStatusLabel") });
   const indexProgress = textBlock({ live: false, label: t("indexProgressLabel") });
   if (deps.isIndexing()) indexStatus.textContent = t("indexRunning"); // panneau rouvert pendant une indexation
+  // Les passes automatiques sont silencieuses ici : « démarrée » et un bilan à zéro ne s'affichent que
+  // pour une passe demandée par le bouton.
+  let manualRun = false;
   const indexButton = guardedButton("docseeker-index", t("reindex"), indexStatus, async () => {
     if (clearing.active()) {
       indexStatus.textContent = t("reindexBlockedByClear");
       return;
     }
+    manualRun = true;
     try {
       await deps.startIndexing();
+      manualRun = false;
     } catch (error) {
+      manualRun = false;
       warnLog.warn("Indexation en échec", error);
       const text = `${t("indexFailed")} : ${messageOf(error)}`;
       indexStatus.textContent = text;
@@ -178,6 +198,11 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   });
   const unsubscribeIndexer = deps.indexer.onEvent((event) => {
     if (event.type === "progress") indexProgress.textContent = describeEvent(event);
+    else if (!manualRun && event.type === "started") return;
+    else if (!manualRun && event.type === "idle" && isQuiet(event.summary)) {
+      indexProgress.textContent = "";
+      if (indexStatus.textContent === t("indexRunning")) indexStatus.textContent = ""; // panneau ouvert en pleine passe
+    }
     else {
       indexProgress.textContent = "";
       indexStatus.textContent = describeEvent(event);
@@ -199,19 +224,23 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   clearButton.textContent = t("clearIndex");
 
   const partialText = (n: number): string => t(n === 1 ? "clearPartialOne" : "clearPartialMany").replace("{n}", String(n));
-  const doClear = async (): Promise<void> => {
+  /**
+   * "ok" : vidé sans réserve (le message final est donné par l'appelant, après le lancement de la
+   * reconstruction) ; "partial" : vidé en partie (message d'erreur déjà donné, reconstruction utile) ; "failed".
+   */
+  const doClear = async (): Promise<"ok" | "partial" | "failed"> => {
     let result: ClearOutcome;
     try {
       result = await deps.clearIndex();
     } catch (error) {
       warnLog.warn("Vidage de l'index en échec", error);
       report(`${t("clearFailed")} : ${messageOf(error)}`, "error");
-      return;
+      return "failed";
     }
     for (const failure of result.failed) warnLog.warn(`Suppression de ${failure.name} en échec`, failure.error);
     if (result.manifestFailed) {
       report(t("clearManifestFailed"), "error"); // rien n'a été supprimé d'autre : pas de rafraîchissement utile
-      return;
+      return "failed";
     }
     let refreshError: unknown;
     try {
@@ -222,8 +251,15 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
     }
     const partial = result.failed.length > 0 ? partialText(result.failed.length) : undefined;
     const refresh = refreshError === undefined ? undefined : `${t("clearRefreshFailed")} : ${messageOf(refreshError)}`;
-    if (partial === undefined && refresh === undefined) report(t("clearDone"), "info");
-    else report([partial, refresh].filter((x) => x !== undefined).join(" "), "error");
+    if (partial === undefined && refresh === undefined) return "ok";
+    report([partial, refresh].filter((x) => x !== undefined).join(" "), "error");
+    return "partial";
+  };
+
+  /** Message final d'un vidage réussi : ne promet « en cours » que si la reconstruction a vraiment démarré. */
+  const reportCleared = (rebuilding: boolean | undefined): void => {
+    if (rebuilding === undefined) report(t("clearDone"), "info");
+    else report(t(rebuilding ? "clearDoneRebuilding" : "clearDoneWillRebuild"), "info");
   };
 
   const syncClearing = (): void => {
@@ -259,7 +295,26 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
           return;
         }
         clearing.set(true);
-        void doClear().finally(() => clearing.set(false));
+        void doClear()
+          .catch((error: unknown) => {
+            warnLog.warn("Vidage de l'index en échec", error);
+            report(`${t("clearFailed")} : ${messageOf(error)}`, "error");
+            return "failed" as const;
+          })
+          .then((outcome) => {
+            clearing.set(false); // libéré AVANT la reconstruction, que le drapeau bloquerait sinon
+            let rebuilding: boolean | undefined;
+            if (outcome !== "failed" && deps.settings.get().autoIndex) {
+              try {
+                rebuilding = deps.startAutoSync();
+              } catch (error) {
+                warnLog.warn("Reconstruction automatique après vidage en échec", error);
+                rebuilding = false;
+              }
+            }
+            if (outcome === "ok") reportCleared(rebuilding);
+          })
+          .catch((error: unknown) => warnLog.warn("Fin du vidage de l'index en échec", error));
       },
       () => undefined,
     );
@@ -293,8 +348,64 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   renderLog();
   const unsubscribeLog = warnLog.subscribe(renderLog);
 
+  // --- Réglages d'indexation automatique : appliqués au changement, sans bouton Enregistrer.
+  const uid = `docseeker-${++panelSeq}`;
+  const describedNode = (id: string): HTMLElement => {
+    const node = doc.createElement("span");
+    node.id = id;
+    node.hidden = true; // référencé par aria-describedby, jamais affiché
+    return node;
+  };
+  const switchInput = doc.createElement("input");
+  switchInput.type = "checkbox";
+  switchInput.className = "b3-switch fn__flex-center";
+  switchInput.setAttribute("role", "switch");
+  switchInput.setAttribute("aria-label", t("autoIndex"));
+  const switchDesc = describedNode(`${uid}-auto-desc`);
+  switchDesc.textContent = t("autoIndexDesc");
+  switchInput.setAttribute("aria-describedby", switchDesc.id);
+  const intervalSelect = doc.createElement("select");
+  intervalSelect.className = "b3-select fn__flex-center";
+  intervalSelect.setAttribute("aria-label", t("autoIndexInterval"));
+  const intervalDesc = describedNode(`${uid}-interval-desc`);
+  intervalSelect.setAttribute("aria-describedby", intervalDesc.id);
+  for (const minutes of FREQUENCY_MINUTES) {
+    const option = doc.createElement("option");
+    option.value = String(minutes);
+    option.textContent = t(`freq${minutes}`);
+    intervalSelect.append(option);
+  }
+  // Erreur d'enregistrement : région locale annoncée (le toast de SiYuan ne l'est pas de façon fiable).
+  const settingsStatus = textBlock({ live: true, label: t("indexStatusLabel") });
+  const syncSettings = (): void => {
+    const current = deps.settings.get();
+    switchInput.checked = current.autoIndex;
+    intervalSelect.value = String(current.intervalMinutes);
+    intervalSelect.disabled = !current.autoIndex;
+    const base = t("autoIndexIntervalDesc");
+    intervalDesc.textContent = current.autoIndex ? base : `${base} ${t("autoIndexIntervalDisabledHint")}`;
+  };
+  syncSettings();
+  const unsubscribeSettings = deps.settings.subscribe(syncSettings);
+  const applySetting = (patch: Partial<DocSeekerSettings>): void => {
+    deps.settings.update(patch).then(
+      () => {
+        settingsStatus.textContent = "";
+      },
+      (error: unknown) => {
+        warnLog.warn("Enregistrement des réglages en échec", error);
+        settingsStatus.textContent = t("settingsSaveFailed");
+        deps.showMessage(t("settingsSaveFailed"), MESSAGE_TIMEOUT_MS, "error");
+      },
+    );
+  };
+  switchInput.addEventListener("change", () => applySetting({ autoIndex: switchInput.checked }));
+  intervalSelect.addEventListener("change", () => applySetting({ intervalMinutes: Number(intervalSelect.value) }));
+
   let disposed = false;
   return {
+    autoIndex: container(switchInput, switchDesc, settingsStatus),
+    autoIndexInterval: container(intervalSelect, intervalDesc),
     reindex: container(indexButton, indexStatus, indexProgress),
     clearIndex: container(clearButton, clearStatus, clearAlert),
     diagnostic: container(diagnosticButton, diagnosticStatus, diagnosticReport),
@@ -305,6 +416,7 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
       unsubscribeIndexer();
       unsubscribeLog();
       unsubscribeClearing();
+      unsubscribeSettings();
     },
   };
 }

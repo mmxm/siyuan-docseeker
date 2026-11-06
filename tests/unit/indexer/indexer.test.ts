@@ -118,7 +118,9 @@ describe("createIndexer - nominal", () => {
 
     const summary = await indexer.start();
 
-    expect(summary).toEqual({ indexed: 2, skippedScanned: 0, failed: 0, removed: 0, cancelled: false });
+    expect(summary).toEqual({
+      indexed: 2, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0, incompleteDetails: [], failures: [],
+    });
     expect([...store.files.keys()].sort()).toEqual([dsxName(a), dsxName(b), MANIFEST_FILE_NAME].sort());
     expect(store.manifestPaths().sort()).toEqual(["assets/a.pdf", "assets/b.pdf"]);
     const doc = await decodeIndex(store.files.get(dsxName(a))!);
@@ -646,5 +648,290 @@ describe("createIndexer - listeners", () => {
     off();
     await indexer.start();
     expect(seen).toEqual([]);
+  });
+});
+
+describe("createIndexer - parcours incomplet (J9)", () => {
+  const withDiscovery = (base: ReturnType<typeof setup>, result: DiscoveryResult) =>
+    createIndexer({ ...base.deps, discover: async () => result });
+
+  it("remonte le nombre d'éléments non parcourus (issues + tailles inconnues) et leurs chemins", async () => {
+    const a = entry("assets/a.pdf");
+    const base = setup([a]);
+    const indexer = withDiscovery(base, {
+      manifest: [a],
+      issues: [
+        { kind: "directory", path: "assets/prive", message: "illisible" },
+        { kind: "depth", path: "assets/profond", message: "trop profond" },
+      ],
+      complete: false,
+      unsized: ["assets/inconnu.pdf"],
+    });
+    const summary = await indexer.start();
+    expect(summary.incomplete).toBe(3);
+    expect(summary.incompleteDetails).toEqual([
+      "assets/prive : illisible",
+      "assets/profond : trop profond",
+      "assets/inconnu.pdf : taille inconnue",
+    ]);
+    expect(summary.indexed).toBe(1);
+  });
+
+  it("un PDF sans taille présent dans issues ET unsized (forme réelle de discoverPdfs) n'est compté qu'une fois", async () => {
+    const base = setup([]);
+    const indexer = withDiscovery(base, {
+      manifest: [],
+      issues: [{ kind: "pdf", path: "assets/sans-taille.pdf", message: "HEAD 404" }],
+      complete: false,
+      unsized: ["assets/sans-taille.pdf"],
+    });
+    const summary = await indexer.start();
+    expect(summary.incomplete).toBe(1);
+    expect(summary.incompleteDetails).toEqual(["assets/sans-taille.pdf : HEAD 404"]);
+  });
+
+  it("unsized seul (sans issue correspondante) est compté", async () => {
+    const base = setup([]);
+    const summary = await withDiscovery(base, { manifest: [], issues: [], complete: false, unsized: ["assets/x.pdf"] }).start();
+    expect(summary.incomplete).toBe(1);
+    expect(summary.incompleteDetails).toEqual(["assets/x.pdf : taille inconnue"]);
+  });
+
+  it("resetFailures() vide la table de retrait progressif : la passe automatique suivante retente", async () => {
+    const bad = entry("assets/bad.pdf");
+    const store = new FakeStore();
+    const loaded: string[] = [];
+    const indexer = createIndexer({
+      discover: async () => discovery([bad]),
+      store,
+      loadPdf: async (path) => {
+        loaded.push(path);
+        throw new Error("illisible");
+      },
+      now: () => 1,
+    });
+    await indexer.start({ automatic: true });
+    await indexer.start({ automatic: true });
+    expect(loaded).toHaveLength(1);
+    indexer.resetFailures();
+    await indexer.start({ automatic: true });
+    expect(loaded).toHaveLength(2);
+  });
+
+  it("la garde de suppression tient : un parcours incomplet ne supprime rien", async () => {
+    const a = entry("assets/a.pdf");
+    const store = new FakeStore();
+    await setup([a], { store }).indexer.start();
+    const base = setup([], { store });
+    const summary = await withDiscovery(base, { manifest: [], issues: [{ kind: "directory", path: "x", message: "m" }], complete: false, unsized: [] }).start();
+    expect(summary.removed).toBe(0);
+    expect(summary.incomplete).toBe(1);
+    expect(store.files.has(dsxName(a))).toBe(true);
+  });
+
+  it("parcours complet : incomplete vaut 0", async () => {
+    const summary = await setup([entry("assets/a.pdf")]).indexer.start();
+    expect(summary.incomplete).toBe(0);
+    expect(summary.incompleteDetails).toEqual([]);
+  });
+
+  it("le bilan d'une passe annulée ou en échec de découverte garde les champs", async () => {
+    const base = setup([]);
+    const summary = await createIndexer({ ...base.deps, discover: async () => { throw new Error("racine illisible"); } }).start();
+    expect(summary.failed).toBe(1);
+    expect(summary.failures).toEqual(["(discovery) : racine illisible"]);
+    expect(summary.incomplete).toBe(0);
+  });
+});
+
+describe("createIndexer - détails des échecs dans le bilan", () => {
+  it("failures liste « chemin : message » de chaque échec", async () => {
+    const bad = entry("assets/bad.pdf");
+    const { indexer } = setup([bad], { pdfs: { [bad.path]: new FakePdf({ failOnPage: 1 }) } });
+    const summary = await indexer.start();
+    expect(summary.failures).toEqual(["assets/bad.pdf : boom page"]);
+  });
+});
+
+describe("createIndexer - retrait progressif des PDF en échec permanent", () => {
+  const MIN = 60_000;
+  function build(entries: PdfEntry[], failing: Set<string>) {
+    const store = new FakeStore();
+    let clock = 1_000_000;
+    const loaded: string[] = [];
+    const indexer = createIndexer({
+      discover: async () => discovery(entries),
+      store,
+      loadPdf: async (path) => {
+        loaded.push(path);
+        if (failing.has(path)) throw new Error("illisible");
+        return new FakePdf();
+      },
+      now: () => clock,
+    });
+    return { indexer, loaded, advance: (ms: number) => (clock += ms), store };
+  }
+
+  it("une passe automatique saute un PDF en échec dont l'empreinte est inchangée, avant nextAt (5 min), et le compte encore en échec", async () => {
+    const bad = entry("assets/bad.pdf");
+    const t = build([bad], new Set([bad.path]));
+    expect((await t.indexer.start({ automatic: true })).failed).toBe(1);
+    expect(t.loaded).toHaveLength(1);
+    t.advance(MIN);
+    const second = await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(1);
+    expect(second.failed).toBe(1);
+    expect(second.failures).toEqual(["assets/bad.pdf : illisible"]);
+  });
+
+  it("ne génère pas d'événement failed ni progress pour un PDF sauté", async () => {
+    const bad = entry("assets/bad.pdf");
+    const t = build([bad], new Set([bad.path]));
+    await t.indexer.start({ automatic: true });
+    const events: string[] = [];
+    t.indexer.onEvent((e) => events.push(e.type));
+    await t.indexer.start({ automatic: true });
+    expect(events).toEqual(["started", "idle"]);
+  });
+
+  it("paliers : 5 min, puis 30 min, puis 2 h", async () => {
+    const bad = entry("assets/bad.pdf");
+    const t = build([bad], new Set([bad.path]));
+    await t.indexer.start({ automatic: true }); // échec 1 : prochain essai dans 5 min
+    t.advance(5 * MIN);
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(2); // échec 2 : prochain essai dans 30 min
+    t.advance(29 * MIN);
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(2);
+    t.advance(MIN);
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(3); // échec 3 : 2 h
+    t.advance(119 * MIN);
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(3);
+    t.advance(MIN);
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(4);
+    t.advance(121 * MIN); // palier plafonné à 2 h
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(5);
+  });
+
+  it("si l'empreinte change (taille), nouvel essai immédiat", async () => {
+    const t0 = entry("assets/bad.pdf", 100);
+    const failing = new Set([t0.path]);
+    const entries = [t0];
+    const store = new FakeStore();
+    const loaded: string[] = [];
+    const indexer = createIndexer({
+      discover: async () => discovery(entries),
+      store,
+      loadPdf: async (path) => {
+        loaded.push(path);
+        if (failing.has(path)) throw new Error("illisible");
+        return new FakePdf();
+      },
+      now: () => 5,
+    });
+    await indexer.start({ automatic: true });
+    entries[0] = entry("assets/bad.pdf", 101);
+    await indexer.start({ automatic: true });
+    expect(loaded).toHaveLength(2);
+  });
+
+  it("le bouton manuel (start sans option) et reindex() vident la table", async () => {
+    const bad = entry("assets/bad.pdf");
+    const t = build([bad], new Set([bad.path]));
+    await t.indexer.start({ automatic: true });
+    await t.indexer.start();
+    expect(t.loaded).toHaveLength(2);
+    await t.indexer.start({ automatic: true });
+    expect(t.loaded).toHaveLength(2); // nouveau backoff après l'échec manuel
+    await t.indexer.reindex();
+    expect(t.loaded).toHaveLength(3);
+  });
+
+  it("un PDF réparé est indexé puis oublié ; un PDF disparu quitte la table", async () => {
+    const bad = entry("assets/bad.pdf");
+    const failing = new Set([bad.path]);
+    const t = build([bad], failing);
+    await t.indexer.start({ automatic: true });
+    failing.clear();
+    t.advance(5 * MIN);
+    const summary = await t.indexer.start({ automatic: true });
+    expect(summary).toMatchObject({ indexed: 1, failed: 0 });
+  });
+});
+
+describe("createIndexer - pause pendant l'activité de l'utilisateur", () => {
+  function build(entries: PdfEntry[], yielding: () => boolean, delay: (ms: number) => Promise<void>) {
+    const loaded: string[] = [];
+    const store = new FakeStore();
+    const indexer = createIndexer({
+      discover: async () => discovery(entries),
+      store,
+      loadPdf: async (path) => {
+        loaded.push(path);
+        return new FakePdf();
+      },
+      now: () => 1,
+      shouldYield: yielding,
+      delay,
+    });
+    return { indexer, loaded };
+  }
+
+  it("une passe automatique attend par pas de 500 ms tant que shouldYield est vrai", async () => {
+    let busy = true;
+    const waits: number[] = [];
+    const t = build([entry("assets/a.pdf")], () => busy, async (ms) => {
+      waits.push(ms);
+      if (waits.length === 3) busy = false;
+    });
+    const run = await t.indexer.start({ automatic: true });
+    expect(waits).toEqual([500, 500, 500]);
+    expect(run.indexed).toBe(1);
+    expect(t.loaded).toHaveLength(1);
+  });
+
+  it("aucune attente quand shouldYield est faux", async () => {
+    const waits: number[] = [];
+    const t = build([entry("assets/a.pdf")], () => false, async (ms) => void waits.push(ms));
+    await t.indexer.start({ automatic: true });
+    expect(waits).toEqual([]);
+  });
+
+  it("pas de pause pour une passe manuelle", async () => {
+    const waits: number[] = [];
+    const t = build([entry("assets/a.pdf")], () => true, async (ms) => void waits.push(ms));
+    const summary = await t.indexer.start();
+    expect(waits).toEqual([]);
+    expect(summary.indexed).toBe(1);
+  });
+
+  it("annulable pendant l'attente : rien n'est chargé", async () => {
+    let indexerRef: ReturnType<typeof createIndexer>;
+    const t = build([entry("assets/a.pdf")], () => true, async () => indexerRef.cancel());
+    indexerRef = t.indexer;
+    const summary = await t.indexer.start({ automatic: true });
+    expect(summary.cancelled).toBe(true);
+    expect(t.loaded).toHaveLength(0);
+  });
+
+  it("un shouldYield qui lève est traité comme faux (le PDF est indexé)", async () => {
+    const warnings: unknown[] = [];
+    const store = new FakeStore();
+    const indexer = createIndexer({
+      discover: async () => discovery([entry("assets/a.pdf")]),
+      store,
+      loadPdf: async () => new FakePdf(),
+      now: () => 1,
+      shouldYield: () => { throw new Error("détecteur KO"); },
+      onListenerError: (e) => warnings.push(e),
+    });
+    const summary = await indexer.start({ automatic: true });
+    expect(summary.indexed).toBe(1);
+    expect(warnings).toHaveLength(1);
   });
 });
