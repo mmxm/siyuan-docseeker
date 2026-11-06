@@ -45,4 +45,15 @@ describe("SEARCH_CSS", () => {
   it("colore les surlignages en jaune translucide", () => {
     expect(rulesFor(".docseeker-highlight").join(" ")).toContain("rgba(255, 220, 0");
   });
+
+  it("tronque le chemin par le début (la fin du dossier reste visible)", () => {
+    const outer = rulesFor(".docseeker-doc-path").join(" ");
+    expect(outer).toContain("direction: rtl");
+    expect(outer).toContain("text-overflow: ellipsis");
+    expect(outer).toContain("white-space: nowrap");
+    expect(outer).toContain("overflow: hidden");
+    const inner = rulesFor(".docseeker-doc-path-text").join(" ");
+    expect(inner).toContain("direction: ltr");
+    expect(inner).toContain("unicode-bidi: bidi-override");
+  });
 });

@@ -26,6 +26,16 @@ Légende utilisée ci-dessous :
 
 ---
 
+## 1 bis. Feuille de route en cours (décidée le 2026-11-06)
+
+Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramètres du plugin : Réindexer, diagnostic, vider l'index, interrupteur d'indexation automatique) → **J9** (indexation automatique : démarrage, nouveaux PDF, suppressions, `removeStaleTmp`) → **J11** (classement phase 2, format `.dsx` v2, migration automatique grâce à J9) → **J10** (parité avec la recherche SiYuan : chemin, filtres, tris, onglet ou fenêtre flottante, raccourcis).
+
+- **J7 : fait et commité, non validé dans SiYuan.** Vérifié : `npm run typecheck` propre, `npm test` 1 362 tests verts (47 fichiers), deux relectures indépendantes (TypeScript, accessibilité). Changements : `submit(query)` remplace `setQuery` et le débounce ; Entrée lance la recherche, la croix native et Échap vident ; dossier contenant seul affiché (`src/ui/pathLabel.ts`, ellipse par le début en CSS rtl, chemin complet en infobulle) ; « N pages » ; placeholder « (Entrée pour lancer) ».
+  - **À valider à la main dans SiYuan** : rendu de l'ellipse rtl, Entrée dans le champ Electron (IME compris), croix native (émet-elle `search` ou `input` ?), annonces du lecteur d'écran.
+  - **Écarts connus, non traités** : pas de bouton « Rechercher » (pointeur/commande vocale) ; pas d'`aria-busy` pendant le calcul ; chemin complet seulement en infobulle ; Échap efface les résultats.
+
+---
+
 ## 2. Ce qui est fait, par jalon et capacité
 
 Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : tous les commits sont du 2026-11-04 ou du 2026-11-05 (22 et 12 commits ; 34 au total, premier commit `cfa0773`).
@@ -66,7 +76,7 @@ Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 
 - **[SiYuan]** : plusieurs onglets validés (`35f3255`). **Non vérifié** : réindexation à chaud (un PDF réindexé pendant qu'un onglet est ouvert).
 
 ### Onglet de recherche
-- **Fichiers** : `src/searchTab.ts` (assemblage, injection de toutes les dépendances), `src/search/searchController.ts` (débounce, requête, vue-modèle), `src/search/pageMatches.ts` (correspondances par page, LRU), `src/search/queryMatch.ts` (mot entier, préfixe sur le dernier mot seulement), `src/ui/searchView.ts` (DOM sans `innerHTML`, clavier, ARIA), `src/ui/searchStyles.ts` (CSS avec variables `--b3-*`).
+- **Fichiers** : `src/searchTab.ts` (assemblage, injection de toutes les dépendances), `src/search/searchController.ts` (`submit`, requête, vue-modèle ; plus de débounce depuis J7), `src/search/pageMatches.ts` (correspondances par page, LRU), `src/search/queryMatch.ts` (mot entier, préfixe sur le dernier mot seulement), `src/ui/searchView.ts` (DOM sans `innerHTML`, clavier, ARIA), `src/ui/searchStyles.ts` (CSS avec variables `--b3-*`).
 - **Commits** : `d8aacc3`, `a6bd83c`, `9aa03ca`, `52d347b` (assemblage), `fb53c5c` (validation multi-mots sur les vrais index).
 - **[SiYuan]** : recherche « BPCO » (3 documents, 30 pages) (`7e725d2`). Multi-mots et préfixes essayés à la main : OK.
 

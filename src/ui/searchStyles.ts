@@ -20,7 +20,9 @@ export const SEARCH_CSS = `
 .docseeker-doc-heading { margin: 0; font-size: inherit; font-weight: normal; }
 .docseeker-doc-title { font-weight: bold; overflow-wrap: anywhere; }
 .docseeker-doc-count { margin-left: 2px; font-size: 12px; color: var(--b3-theme-on-surface); }
-.docseeker-doc-path { font-size: 12px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
+.docseeker-doc-path { font-size: 12px; color: var(--b3-theme-on-surface); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.docseeker-doc-path[hidden] { display: none; }
+.docseeker-doc-path-text { direction: ltr; unicode-bidi: bidi-override; }
 .docseeker-more-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .docseeker-more, .docseeker-less { min-height: 32px; font-size: 12px; }
 .docseeker-more[hidden], .docseeker-less[hidden] { display: none; }

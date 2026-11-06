@@ -3,6 +3,7 @@
  * des PDF/titres passe uniquement par textContent / setAttribute).
  */
 import type { ResultDoc, SearchViewModel } from "../search/searchController";
+import { containingFolder } from "./pathLabel";
 import { ensureSearchStyle } from "./searchStyles";
 
 export interface ThumbnailRequest {
@@ -19,7 +20,7 @@ export interface ThumbnailAttacher {
 }
 
 export interface SearchViewDeps {
-  readonly controller: { setQuery(q: string): void; getViewModel(): SearchViewModel };
+  readonly controller: { submit(q: string): void; getViewModel(): SearchViewModel };
   readonly subscribe: (listener: () => void) => () => void;
   readonly thumbnails: ThumbnailAttacher;
   onOpen(docId: string, page: number, query: string): void;
@@ -47,9 +48,9 @@ interface DocEntry {
 /** Chaînes par défaut (français) : `deps.t` les remplace quand une clé i18n existe. */
 export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   searchLabel: "Rechercher dans les PDF",
-  searchPlaceholder: "Rechercher dans les PDF",
+  searchPlaceholder: "Rechercher dans vos PDF (Entrée pour lancer)",
   resultsList: "Résultats de la recherche",
-  emptyQuery: "Saisissez des mots à rechercher",
+  emptyQuery: "Saisissez des mots puis appuyez sur Entrée",
   loadingPartial: "Résultats partiels, index en cours de construction ({loaded}/{total})",
   partialSuffix: " (résultats partiels, index en cours de construction)",
   noResults: "Aucun résultat",
@@ -61,8 +62,6 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   docMany: "{n} documents",
   pageOne: "{n} page",
   pageMany: "{n} pages",
-  matchOne: "{n} page correspondante",
-  matchMany: "{n} pages correspondantes",
   moreOne: "et {n} autre page",
   moreMany: "et {n} autres pages",
   showLess: "Replier",
@@ -98,6 +97,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   input.className = "b3-text-field fn__block";
   input.placeholder = tr("searchPlaceholder");
   input.setAttribute("aria-label", tr("searchLabel"));
+  input.setAttribute("enterkeyhint", "search");
 
   // Deux régions live présentes dès le montage (sinon certains lecteurs d'écran n'annoncent rien).
   const statusEl = doc.createElement("div");
@@ -192,11 +192,17 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     name.textContent = result.title;
     const counter = doc.createElement("span");
     counter.className = "docseeker-doc-count";
-    counter.textContent = `— ${count(result.matchingPages, "matchOne", "matchMany")}`;
+    counter.textContent = `— ${count(result.matchingPages, "pageOne", "pageMany")}`;
     title.append(name, " ", counter);
     const path = doc.createElement("div");
     path.className = "docseeker-doc-path";
-    path.textContent = result.path;
+    const folder = containingFolder(result.path);
+    const pathText = doc.createElement("span");
+    pathText.className = "docseeker-doc-path-text";
+    pathText.textContent = folder;
+    path.appendChild(pathText);
+    path.hidden = folder === "";
+    path.title = result.path; // chemin complet en infobulle
     const cardsEl = doc.createElement("div");
     cardsEl.className = "docseeker-cards";
     cardsEl.id = `docseeker-cards-${++cardsSeq}`;
@@ -409,12 +415,23 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (hadFocus && !list.contains(doc.activeElement) && !disposed) input.focus();
   };
 
-  input.addEventListener("input", () => deps.controller.setQuery(input.value));
+  // Champ vidé sans clavier (croix native de type=search) : retour immédiat à l'état vide.
+  // Du texte tapé ne lance rien.
+  const submitIfCleared = (): void => {
+    if (input.value === "") deps.controller.submit("");
+  };
+  input.addEventListener("search", submitIfCleared);
+  input.addEventListener("input", submitIfCleared);
+  // Taper ne lance rien : la recherche part à Entrée (hors composition IME).
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
+    if (e.key === "Enter") {
+      if (e.isComposing) return;
+      e.preventDefault();
+      deps.controller.submit(input.value);
+    } else if (e.key === "Escape") {
       e.preventDefault();
       input.value = "";
-      deps.controller.setQuery("");
+      deps.controller.submit("");
     } else if (e.key === "ArrowDown") {
       const first = allCards()[0];
       if (first) {
@@ -456,7 +473,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     } else if (e.key === "Escape") {
       e.preventDefault();
       input.value = "";
-      deps.controller.setQuery("");
+      deps.controller.submit("");
       input.focus();
     }
   });

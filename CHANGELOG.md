@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## Non publié
+
+- La recherche se lance uniquement avec Entrée (plus de recherche à la frappe).
+- Les résultats n'affichent plus que le dossier contenant le PDF ; le compteur indique « N pages ».
+
 ## 0.2.0 — 2026-11-05
 
 Première version utilisable de DocSeeker. Depuis la 0.1.0 (diagnostic technique seul), la recherche est complète.

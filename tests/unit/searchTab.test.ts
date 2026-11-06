@@ -116,8 +116,17 @@ function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
 async function type(host: HTMLElement, text: string): Promise<void> {
   const input = host.querySelector<HTMLInputElement>("input")!;
   input.value = text;
-  input.dispatchEvent(new Event("input"));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(500);
+  await flush();
+}
+
+/** Frappe sans Entrée : ne doit rien lancer. */
+async function typeOnly(host: HTMLElement, text: string): Promise<void> {
+  const input = host.querySelector<HTMLInputElement>("input")!;
+  input.value = text;
+  input.dispatchEvent(new Event("input"));
+  await vi.advanceTimersByTimeAsync(2000);
   await flush();
 }
 
@@ -209,6 +218,18 @@ describe("mountSearchTab", () => {
     expect(h.list).toHaveBeenCalledTimes(1); // le chargement vient du partagé, pas de l'onglet
     expect(h.read).toHaveBeenCalledWith("a.dsx");
     expect(h.read).not.toHaveBeenCalledWith("manifest.json");
+    await type(h.host, "chat");
+    expect(cards(h.host).map((c) => c.dataset["page"])).toEqual(["2", "3"]);
+    tab.dispose();
+  });
+
+  it("taper sans Entrée ne lance pas de recherche ; Entrée la lance", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await typeOnly(h.host, "chat");
+    expect(cards(h.host)).toHaveLength(0);
+    expect(h.host.textContent).toContain("appuyez sur Entrée");
     await type(h.host, "chat");
     expect(cards(h.host).map((c) => c.dataset["page"])).toEqual(["2", "3"]);
     tab.dispose();

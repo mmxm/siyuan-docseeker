@@ -1,6 +1,6 @@
 /**
- * Contrôleur de recherche : logique pure (sans DOM). Débounce la saisie,
- * exécute la requête sur l'index de la source et produit un view-model.
+ * Contrôleur de recherche : logique pure (sans DOM). La recherche part à la
+ * soumission explicite (`submit`), jamais à la frappe ; exécute la requête sur l'index de la source et produit un view-model.
  */
 import { groupByDocument, searchPages, type Bm25Index } from "../core/bm25";
 import { tokenize } from "../core/normalize";
@@ -68,7 +68,6 @@ export interface SearchControllerOptions {
   readonly source: SearchSource;
   readonly schedule: (fn: () => void, ms: number) => unknown;
   readonly clear: (handle: unknown) => void;
-  readonly debounceMs?: number;
   readonly onChange: (viewModel: SearchViewModel) => void;
   /** Appelé avec l'erreur complète quand le calcul d'une requête échoue. */
   readonly onWarn?: (message: string, error?: unknown) => void;
@@ -79,14 +78,14 @@ export interface SearchControllerOptions {
 }
 
 export interface SearchController {
-  setQuery(query: string): void;
+  /** Soumet la requête (touche Entrée) : lance la recherche tout de suite, même si c'est la même requête. */
+  submit(query: string): void;
   /** Un document a été réindexé : relance proprement le re-classement de la requête courante (s'il y en a un). */
   invalidate(): void;
   getViewModel(): SearchViewModel;
   dispose(): void;
 }
 
-export const DEFAULT_DEBOUNCE_MS = 200;
 export const DEFAULT_LOADING_REFRESH_MS = 150;
 /** Attente maximale de la fenêtre 1 du re-classement avant de publier l'ordre BM25. */
 export const RERANK_GRACE_MS = 300;
@@ -172,21 +171,15 @@ export function createSearchController(options: SearchControllerOptions): Search
     clear,
     onChange,
     onWarn,
-    debounceMs = DEFAULT_DEBOUNCE_MS,
     loadingRefreshMs = DEFAULT_LOADING_REFRESH_MS,
     rerank,
   } = options;
+  /** Dernière requête soumise (pas le texte en cours de frappe). */
   let query = "";
   let current: SearchViewModel = EMPTY;
-  let pending: { handle: unknown } | undefined;
   let coalescing: { handle: unknown } | undefined;
   let requestNumber = 0;
   let disposed = false;
-
-  const cancel = (): void => {
-    if (pending) clear(pending.handle);
-    pending = undefined;
-  };
 
   const cancelCoalescing = (): void => {
     if (coalescing) clear(coalescing.handle);
@@ -314,8 +307,8 @@ export function createSearchController(options: SearchControllerOptions): Search
   };
 
   const onSourceChange = (): void => {
-    // Pas de requête active, ou saisie en cours (le débounce lancera la recherche) : rien à recalculer.
-    if (disposed || !isSearchable(query) || pending) return;
+    // Pas de requête soumise : rien à recalculer.
+    if (disposed || !isSearchable(query)) return;
     if (source.getPhase() === "loading") {
       // Un document de plus toutes les quelques ms : une seule recherche par fenêtre.
       armCoalescing();
@@ -327,10 +320,9 @@ export function createSearchController(options: SearchControllerOptions): Search
   const unsubscribe = source.subscribe(onSourceChange);
 
   return {
-    setQuery(next) {
+    submit(next) {
       if (disposed) return;
       query = next;
-      cancel();
       cancelCoalescing();
       abortRerank();
       if (!isSearchable(next)) {
@@ -339,26 +331,19 @@ export function createSearchController(options: SearchControllerOptions): Search
         onChange(EMPTY);
         return;
       }
-      const slot: { handle: unknown } = { handle: undefined };
-      slot.handle = schedule(() => {
-        if (pending === slot) pending = undefined;
-        run();
-      }, debounceMs);
-      pending = slot;
+      run();
     },
     invalidate() {
       if (disposed || !rerank || !wantsRerank(query)) return;
       // Les mesures en vol portent sur l'ancien contenu : jamais de snapshot périmé publié.
       abortInFlight();
       unpublished = undefined;
-      if (pending) return; // la saisie en cours lancera la recherche
       armCoalescing(); // une seule relance, même avec la notification du store qui suit
     },
     getViewModel: () => current,
     dispose() {
       if (disposed) return;
       disposed = true;
-      cancel();
       cancelCoalescing();
       abortRerank();
       requestNumber++;

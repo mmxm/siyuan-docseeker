@@ -96,34 +96,36 @@ describe("createSearchController", () => {
     expect(controller.getViewModel()).toEqual({ kind: "empty-query" });
   });
 
-  it("debounces: nothing runs before 200 ms, one search after", () => {
+  it("submit searches immediately, with no timer involved", () => {
     const { controller, clock, seen } = setup();
-    controller.setQuery("grad");
-    clock.advance(199);
-    expect(seen).toHaveLength(0);
-    clock.advance(1);
+    controller.submit("grad");
+    expect(clock.pending).toBe(0);
     expect(seen).toHaveLength(1);
     expect(seen[0]?.kind).toBe("results");
   });
 
-  it("keeps only the latest query when typing fast", () => {
-    const { controller, clock, seen } = setup();
-    controller.setQuery("boost");
-    clock.advance(100);
-    controller.setQuery("descent");
-    clock.advance(199);
-    expect(seen).toHaveLength(0);
-    clock.advance(1);
-    expect(seen).toHaveLength(1);
-    const vm = seen[0];
+  it("keeps only the latest submitted query", () => {
+    const { controller, seen } = setup();
+    controller.submit("boost");
+    controller.submit("descent");
+    expect(seen).toHaveLength(2);
+    const vm = seen[1];
     expect(vm?.kind === "results" && vm.query).toBe("descent");
     expect(vm?.kind === "results" && vm.docs.map((d) => d.docId)).toEqual(["a"]);
   });
 
+  it("submitting the same query again re-runs the search", () => {
+    const { controller, seen, source } = setup();
+    const spy = vi.spyOn(source, "getIndex");
+    controller.submit("gradient");
+    controller.submit("gradient");
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(seen).toHaveLength(2);
+  });
+
   it("joins DocInfo and returns ranked pages", () => {
     const { controller, clock } = setup();
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const vm = controller.getViewModel();
     if (vm.kind !== "results") throw new Error("expected results");
     expect(vm.total).toBe(2);
@@ -137,8 +139,7 @@ describe("createSearchController", () => {
   it("transmits the full page list (capped) so the view can expand it", () => {
     const pages = Array.from({ length: 12 }, (_, i) => ({ docId: "a", page: i + 1, text: "gradient" }));
     const { controller, clock } = setup(new FakeSource(pages, [doc("a", "Alpha")]));
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const vm = controller.getViewModel();
     if (vm.kind !== "results") throw new Error("expected results");
     expect(vm.docs[0]?.matchingPages).toBe(12);
@@ -148,8 +149,7 @@ describe("createSearchController", () => {
   it("caps the transmitted page list at MAX_EXPANDED_PAGES while keeping the real matchingPages", () => {
     const pages = Array.from({ length: MAX_EXPANDED_PAGES + 30 }, (_, i) => ({ docId: "a", page: i + 1, text: "gradient" }));
     const { controller, clock } = setup(new FakeSource(pages, [doc("a", "Alpha")]));
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const vm = controller.getViewModel();
     if (vm.kind !== "results") throw new Error("expected results");
     expect(vm.docs[0]?.matchingPages).toBe(MAX_EXPANDED_PAGES + 30);
@@ -165,36 +165,39 @@ describe("createSearchController", () => {
       [doc("a", "Other"), doc("b", "Gradient")],
     );
     const { controller, clock } = setup(source);
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const vm = controller.getViewModel();
     expect(vm.kind === "results" && vm.docs[0]?.docId).toBe("b");
   });
 
   it("returns no-result with the query", () => {
     const { controller, clock } = setup();
-    controller.setQuery("zzzz");
-    clock.advance(200);
+    controller.submit("zzzz");
     expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzzz", partial: false, failedCount: 0 });
   });
 
   it("returns empty-query for blank or non-searchable input, immediately and cancelling pending work", () => {
-    const { controller, clock, seen } = setup();
-    controller.setQuery("grad");
-    controller.setQuery("   ");
+    const { controller, clock, seen, source } = setup();
+    controller.submit("grad");
+    controller.submit("   ");
     expect(controller.getViewModel()).toEqual({ kind: "empty-query" });
     expect(clock.pending).toBe(0);
     clock.advance(1000);
     expect(seen.at(-1)).toEqual({ kind: "empty-query" });
-    expect(seen.every((vm) => vm.kind === "empty-query")).toBe(true);
+    expect(seen).toHaveLength(2);
+    // Plus de requête active : une notification du store ne relance rien.
+    const spy = vi.spyOn(source, "getIndex");
+    source.emit();
+    clock.advance(1000);
+    expect(spy).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(2);
   });
 
   it("returns no-index (not indexing) when the index is empty and idle", () => {
     const source = new FakeSource([], []);
     source.phase = "idle";
     const { controller, clock } = setup(source);
-    controller.setQuery("abc");
-    clock.advance(200);
+    controller.submit("abc");
     expect(controller.getViewModel()).toEqual({ kind: "no-index", indexing: false });
   });
 
@@ -202,8 +205,7 @@ describe("createSearchController", () => {
     const source = new FakeSource([], []);
     source.phase = "loading";
     const { controller, clock } = setup(source);
-    controller.setQuery("abc");
-    clock.advance(200);
+    controller.submit("abc");
     expect(controller.getViewModel()).toEqual({ kind: "no-index", indexing: true });
   });
 
@@ -212,9 +214,25 @@ describe("createSearchController", () => {
     source.phase = "loading";
     source.progress = { loaded: 1, total: 4, failed: [] };
     const { controller, clock } = setup(source);
-    controller.setQuery("abc");
-    clock.advance(200);
+    controller.submit("abc");
     expect(controller.getViewModel()).toEqual({ kind: "loading", progress: source.progress });
+  });
+
+  it("submit pendant le chargement : la coalescence suit la dernière requête soumise", () => {
+    const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
+    source.phase = "loading";
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    const { controller, clock, seen } = setup(source);
+    controller.submit("gradient");
+    controller.submit("boost");
+    const before = seen.length;
+    for (let i = 0; i < 20; i++) source.emit();
+    expect(seen.length).toBe(before);
+    clock.advance(150);
+    expect(seen.length).toBe(before + 1);
+    const vm = seen.at(-1);
+    expect(vm?.kind === "results" && vm.query).toBe("boost");
+    expect(vm?.kind === "results" && vm.partial).toBe(true);
   });
 
   it("marks results partial while loading", () => {
@@ -222,19 +240,16 @@ describe("createSearchController", () => {
     source.phase = "loading";
     source.progress = { loaded: 1, total: 3, failed: [] };
     const { controller, clock } = setup(source);
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const vm = controller.getViewModel();
     expect(vm.kind === "results" && vm.partial).toBe(true);
-    controller.setQuery("zzz");
-    clock.advance(200);
+    controller.submit("zzz");
     expect(controller.getViewModel()).toEqual({ kind: "no-result", query: "zzz", partial: true, failedCount: 0 });
   });
 
   it("re-runs the current query when the source notifies", () => {
     const { controller, clock, source, seen } = setup();
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const before = seen.length;
     source.index = buildIndex([...PAGES, { docId: "c", page: 1, text: "gradient new" }]);
     source.docs = [...source.docs, doc("c", "Gamma")];
@@ -253,8 +268,7 @@ describe("createSearchController", () => {
   it("ignores hits whose docId is missing from the catalog", () => {
     const source = new FakeSource(PAGES, [doc("a", "Alpha")]);
     const { controller, clock } = setup(source);
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     const vm = controller.getViewModel();
     expect(vm.kind === "results" && vm.docs.map((d) => d.docId)).toEqual(["a"]);
   });
@@ -262,8 +276,7 @@ describe("createSearchController", () => {
   it("gives no-result when every hit is outside the catalog", () => {
     const source = new FakeSource(PAGES, [doc("zzz")]);
     const { controller, clock } = setup(source);
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     expect(controller.getViewModel().kind).toBe("no-result");
   });
 
@@ -272,7 +285,7 @@ describe("createSearchController", () => {
     source.getIndex = () => {
       throw new Error("boom");
     };
-    controller.setQuery("gradient");
+    controller.submit("gradient");
     expect(() => clock.advance(200)).not.toThrow();
     expect(controller.getViewModel()).toEqual({ kind: "error", message: "boom" });
   });
@@ -282,8 +295,7 @@ describe("createSearchController", () => {
     source.getIndex = () => {
       throw "plain";
     };
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     expect(controller.getViewModel()).toEqual({ kind: "error", message: "plain" });
   });
 
@@ -293,35 +305,23 @@ describe("createSearchController", () => {
     source.getIndex = () => {
       throw new Error("boom");
     };
-    controller.setQuery("gradient");
-    clock.advance(200);
+    controller.submit("gradient");
     source.getIndex = good;
-    controller.setQuery("boost");
-    clock.advance(200);
+    controller.submit("boost");
     expect(controller.getViewModel().kind).toBe("results");
-  });
-
-  it("honours a custom debounce", () => {
-    const clock = new FakeClock();
-    const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
-    const onChange = vi.fn();
-    const c = createSearchController({ source, schedule: clock.schedule, clear: clock.clear, debounceMs: 50, onChange });
-    c.setQuery("gradient");
-    clock.advance(50);
-    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it("dispose cancels pending work, unsubscribes and silences later calls", () => {
     const { controller, clock, source, seen } = setup();
-    controller.setQuery("gradient");
+    controller.submit("gradient");
     controller.dispose();
     expect(clock.pending).toBe(0);
     expect(source.listenerCount).toBe(0);
     clock.advance(1000);
-    controller.setQuery("boost");
+    controller.submit("boost");
     clock.advance(1000);
     source.emit();
-    expect(seen).toHaveLength(0);
+    expect(seen).toHaveLength(1);
     expect(() => controller.dispose()).not.toThrow();
   });
 
@@ -331,8 +331,7 @@ describe("createSearchController", () => {
       source.phase = "error";
       source.lastError = "list failed";
       const { controller, clock } = setup(source);
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       expect(controller.getViewModel()).toEqual({ kind: "error", message: "list failed" });
     });
 
@@ -340,8 +339,7 @@ describe("createSearchController", () => {
       const source = new FakeSource([], []);
       source.phase = "error";
       const { controller, clock } = setup(source);
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       const vm = controller.getViewModel();
       expect(vm.kind === "error" && vm.message.length > 0).toBe(true);
     });
@@ -350,12 +348,10 @@ describe("createSearchController", () => {
       const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
       source.progress = { loaded: 2, total: 4, failed: [{ name: "x.dsx", message: "m" }, { name: "y.dsx", message: "m" }] };
       const { controller, clock } = setup(source);
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       const vm = controller.getViewModel();
       expect(vm.kind === "results" && vm.failedCount).toBe(2);
-      controller.setQuery("zzz");
-      clock.advance(200);
+      controller.submit("zzz");
       const none = controller.getViewModel();
       expect(none.kind === "no-result" && none.failedCount).toBe(2);
     });
@@ -363,8 +359,7 @@ describe("createSearchController", () => {
     it("coalesces store notifications during loading into one search per window", () => {
       const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
       const { controller, clock, seen } = setup(source);
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       source.phase = "loading";
       source.progress = { loaded: 1, total: 50, failed: [] };
       const before = seen.length;
@@ -382,8 +377,7 @@ describe("createSearchController", () => {
     it("runs immediately when the store leaves loading, cancelling the coalescing timer", () => {
       const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
       const { controller, clock, seen } = setup(source);
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       source.phase = "loading";
       source.emit();
       const before = seen.length;
@@ -395,15 +389,14 @@ describe("createSearchController", () => {
       expect(vm.kind === "results" && vm.partial).toBe(false);
     });
 
-    it("does not search on a notification while the debounce of a new query is pending", () => {
+    it("a store notification re-runs the last submitted query", () => {
       const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
-      const { controller, clock, seen } = setup(source);
-      controller.setQuery("gradient");
-      const spy = vi.spyOn(source, "getIndex");
+      const { controller, seen } = setup(source);
+      controller.submit("boost");
       source.emit();
-      expect(spy).not.toHaveBeenCalled();
-      clock.advance(200);
-      expect(seen).toHaveLength(1);
+      expect(seen).toHaveLength(2);
+      const vm = seen[1];
+      expect(vm?.kind === "results" && vm.query).toBe("boost");
     });
 
     it("calls onWarn with the full error when run() fails", () => {
@@ -412,16 +405,14 @@ describe("createSearchController", () => {
       source.getIndex = () => {
         throw boom;
       };
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("search"), boom);
     });
 
     it("dispose cancels the coalescing timer", () => {
       const source = new FakeSource(PAGES, [doc("a"), doc("b")]);
       const { controller, clock, seen } = setup(source);
-      controller.setQuery("gradient");
-      clock.advance(200);
+      controller.submit("gradient");
       source.phase = "loading";
       source.emit();
       controller.dispose();
@@ -478,8 +469,7 @@ function rerankSetup(opts: { phase?: LoadPhase } = {}) {
 /** Ordre BM25 de référence (sans re-classement). */
 function bm25Order(query: string): string[] {
   const { controller, clock } = setup(new FakeSource(RR_PAGES, RR_DOCS));
-  controller.setQuery(query);
-  clock.advance(200);
+  controller.submit(query);
   const vm = controller.getViewModel();
   if (vm.kind !== "results") throw new Error("expected results");
   return vm.docs.map((d) => d.docId);
@@ -510,8 +500,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("requête à un mot : chemin inchangé, aucun appel, ranking bm25 publié tout de suite", () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha");
-    clock.advance(200);
+    controller.submit("alpha");
     expect(calls).toHaveLength(0);
     expect(seen).toHaveLength(1);
     expect(resultOf(seen[0]!).ranking).toBe("bm25");
@@ -519,8 +508,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("requête à deux mots : un appel avec signal et onWindow, rien publié avant la fenêtre 1 ou la grâce", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     await flushMicro();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.query).toBe("alpha beta");
@@ -532,8 +520,7 @@ describe("searchController : re-classement par proximité", () => {
   it("fenêtre 1 prête dans le délai de grâce : publie directement l'ordre re-classé (docs et 5 premières pages)", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
     const base = bm25Order("alpha beta");
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     clock.advance(RERANK_GRACE_MS - 1);
     const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
     calls[0]!.resolve(reversed(docs));
@@ -552,8 +539,7 @@ describe("searchController : re-classement par proximité", () => {
   it("grâce dépassée : publie BM25 puis applique l'ordre de la fenêtre 1 une seule fois", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
     const base = bm25Order("alpha beta");
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     clock.advance(RERANK_GRACE_MS);
     expect(seen).toHaveLength(1);
     expect(resultOf(seen[0]!).ranking).toBe("bm25");
@@ -570,8 +556,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("fenêtres suivantes (onWindow) appliquées au fur et à mesure, après la fenêtre 1", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
     calls[0]!.resolve(reversed(docs));
     await flushMicro();
@@ -585,8 +570,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("onWindow arrivé avant la prise en compte de la fenêtre 1 : le plus récent l'emporte, sans double publication", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
     const later = reversed(docs);
     calls[0]!.onWindow!(later as never);
@@ -599,8 +583,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("les pages au-delà de l'ordre fourni restent en ordre BM25", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
     const a = docs.find((d) => d.docId === "a")!;
     const original = a.pages.map((p) => p.page);
@@ -613,14 +596,29 @@ describe("searchController : re-classement par proximité", () => {
     expect(got).toEqual([original[1], ...original.filter((p) => p !== original[1])]);
   });
 
+  it("submit pendant un re-classement en vol : l'ancienne requête ne publie plus, la nouvelle oui", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.submit("alpha beta");
+    const old = calls[0]!;
+    controller.submit("beta alpha ");
+    expect(old.signal!.aborted).toBe(true);
+    const second = calls[1]!;
+    old.resolve(reversed(old.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen).toHaveLength(0);
+    second.resolve(reversed(second.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    clock.advance(RERANK_GRACE_MS * 3);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((vm) => vm.kind === "results" && vm.query === "beta alpha ")).toBe(true);
+  });
+
   it("nouvelle requête : l'exécution précédente est annulée et sa résolution tardive ignorée", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const first = calls[0]!;
-    controller.setQuery("alpha");
+    controller.submit("alpha");
     expect(first.signal!.aborted).toBe(true);
-    clock.advance(200); // requête à un mot : publiée tout de suite
     const published = seen.length;
     first.resolve(reversed(first.docs as Parameters<typeof reversed>[0]));
     first.onWindow?.({ docs: [], pagesOrderByDoc: new Map(), bonusByDoc: new Map(), failedDocIds: new Set() });
@@ -632,8 +630,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("une nouvelle exécution (même requête) annule la précédente", async () => {
     const { controller, clock, calls, source } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     source.emit();
     expect(calls).toHaveLength(2);
     expect(calls[0]!.signal!.aborted).toBe(true);
@@ -642,8 +639,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("dispose annule le re-classement et rien n'est publié ensuite", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     controller.dispose();
     expect(calls[0]!.signal!.aborted).toBe(true);
     calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
@@ -656,8 +652,7 @@ describe("searchController : re-classement par proximité", () => {
   it("échec du ranker avant la grâce : ordre BM25 publié aussitôt, avertissement journalisé", async () => {
     const { controller, clock, calls, seen, onWarn } = rerankSetup();
     const base = bm25Order("alpha beta");
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const boom = new Error("boom");
     calls[0]!.reject(boom);
     await flushMicro();
@@ -671,8 +666,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("échec du ranker après la grâce : BM25 conservé, avertissement, pas de seconde publication", async () => {
     const { controller, clock, calls, seen, onWarn } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     clock.advance(RERANK_GRACE_MS);
     calls[0]!.reject(new Error("late boom"));
     await flushMicro();
@@ -682,9 +676,8 @@ describe("searchController : re-classement par proximité", () => {
 
   it("un rejet d'annulation (signal annulé) n'est pas journalisé", async () => {
     const { controller, clock, calls, onWarn } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
-    controller.setQuery("");
+    controller.submit("alpha beta");
+    controller.submit("");
     calls[0]!.reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
     await flushMicro();
     expect(onWarn).not.toHaveBeenCalled();
@@ -692,16 +685,14 @@ describe("searchController : re-classement par proximité", () => {
 
   it("sans option rerank, deux mots : publié tout de suite avec ranking bm25", () => {
     const { controller, clock, seen } = setup(new FakeSource(RR_PAGES, RR_DOCS));
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     expect(seen).toHaveLength(1);
     expect(resultOf(seen[0]!).ranking).toBe("bm25");
   });
 
   it("pendant le chargement partiel : pas de re-classement avant la fenêtre de regroupement", async () => {
     const { controller, clock, calls, source } = rerankSetup({ phase: "ready" });
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     expect(calls).toHaveLength(1);
     source.phase = "loading";
     source.progress = { loaded: 1, total: 3, failed: [] };
@@ -716,8 +707,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("invalidate() relance proprement le re-classement de la requête courante", async () => {
     const { controller, clock, calls } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     controller.invalidate();
     expect(calls[0]!.signal!.aborted).toBe(true); // le snapshot périmé ne sera jamais publié
     expect(calls).toHaveLength(1); // relance coalescée
@@ -737,8 +727,7 @@ describe("searchController : re-classement par proximité", () => {
   it("M1 : runs rapprochés (150 ms) avec un ranker lent : l'ordre BM25 finit par être publié", async () => {
     const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
     source.progress = { loaded: 1, total: 3, failed: [] };
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     for (let i = 0; i < 6; i++) {
       source.emit();
       clock.advance(150);
@@ -750,20 +739,18 @@ describe("searchController : re-classement par proximité", () => {
 
   it("grâce mesurée depuis la première demande, publiée avec le BM25 du dernier run", () => {
     const { controller, clock, calls, seen, source } = rerankSetup();
-    controller.setQuery("alpha beta");
+    controller.submit("alpha beta");
     clock.advance(200);
-    clock.advance(200);
-    source.emit(); // run 2 à t = 400 : la grâce de t = 200 court toujours
+    source.emit(); // run 2 à t = 200 : la grâce de t = 0 court toujours
     expect(seen).toHaveLength(0);
-    clock.advance(100); // t = 500 = 200 + 300
+    clock.advance(100); // t = 300 = 0 + 300
     expect(seen).toHaveLength(1);
     expect(calls).toHaveLength(2);
   });
 
   it("une liste déjà affichée pour la même requête n'est pas remplacée par du BM25 pendant une relance lente", async () => {
     const { controller, clock, calls, seen, source } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
     await flushMicro();
     expect(seen).toHaveLength(1);
@@ -793,14 +780,12 @@ describe("searchController : re-classement par proximité", () => {
         throw new Error("render exploded");
       },
     });
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
     await flushMicro();
     expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("publication"), expect.objectContaining({ message: "render exploded" }));
     // minuteur de grâce : onChange qui lève
-    controller.setQuery("alpha beta ");
-    clock.advance(200);
+    controller.submit("alpha beta ");
     clock.advance(RERANK_GRACE_MS);
     expect(onWarn).toHaveBeenCalledTimes(2);
     await new Promise((r) => setTimeout(r, 0));
@@ -810,8 +795,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("F1 : toutes les mesures en échec : ranking reste bm25 ; une seule mesure réussie suffit pour proximity", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
     const allFailed = { ...reversed(docs), failedDocIds: new Set(docs.map((d) => d.docId)) };
     calls[0]!.resolve(allFailed as RankResult);
@@ -823,8 +807,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("5 : pas de ranking proximity si l'ordre n'a pas changé ; oui si seules les 5 premières pages changent", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
     const same = { docs, pagesOrderByDoc: new Map(), bonusByDoc: new Map(docs.map((d) => [d.docId, 0])), failedDocIds: new Set<string>(), done: Promise.resolve() };
     calls[0]!.resolve(same as unknown as RankResult);
@@ -838,8 +821,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("5 : après une relance identique, le view-model proximity republié garde le même contenu (statut inchangé)", async () => {
     const { controller, clock, calls, seen, source } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
     await flushMicro();
     source.emit();
@@ -853,8 +835,7 @@ describe("searchController : re-classement par proximité", () => {
   it("6 : invalidate pendant la coalescence du chargement annule le re-classement en vol", async () => {
     const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
     source.progress = { loaded: 1, total: 3, failed: [] };
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     source.emit(); // coalescence armée
     controller.invalidate();
     expect(calls[0]!.signal!.aborted).toBe(true);
@@ -865,8 +846,7 @@ describe("searchController : re-classement par proximité", () => {
 
   it("6 : invalidate suivi d'une notification du store ne donne qu'un seul run", () => {
     const { controller, clock, calls, source } = rerankSetup();
-    controller.setQuery("alpha beta");
-    clock.advance(200);
+    controller.submit("alpha beta");
     controller.invalidate();
     source.emit(); // run immédiat : annule la relance coalescée devenue inutile
     expect(calls).toHaveLength(2);

@@ -29,12 +29,12 @@ let listener: () => void;
 let detach: Mock;
 let attach: Mock;
 let onOpen: Mock;
-let setQuery: Mock;
+let submit: Mock;
 
 function mount(extra: { onReindex?: () => void; t?: (key: string) => string } = {}) {
   const thumbnails: ThumbnailAttacher = { attach: attach as ThumbnailAttacher["attach"] };
   return mountSearchView(host, {
-    controller: { setQuery: setQuery as (q: string) => void, getViewModel: () => vm },
+    controller: { submit: submit as (q: string) => void, getViewModel: () => vm },
     subscribe: (l) => {
       listener = l;
       return () => undefined;
@@ -68,7 +68,7 @@ beforeEach(() => {
   detach = vi.fn();
   attach = vi.fn(() => detach);
   onOpen = vi.fn();
-  setQuery = vi.fn();
+  submit = vi.fn();
 });
 
 describe("mountSearchView", () => {
@@ -80,15 +80,113 @@ describe("mountSearchView", () => {
     expect(input.type).toBe("search");
     expect(input.getAttribute("aria-label")).toBeTruthy();
     expect(document.querySelectorAll(`#${SEARCH_STYLE_ID}`)).toHaveLength(1);
-    expect(status()).toBe("Saisissez des mots à rechercher");
+    expect(status()).toBe("Saisissez des mots puis appuyez sur Entrée");
   });
 
-  it("transmet la saisie au contrôleur", () => {
+  it("taper ne lance aucune recherche", () => {
     mount();
     const input = host.querySelector("input")!;
     input.value = "chat";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(setQuery).toHaveBeenCalledWith("chat");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("vider le champ (croix native : événement search) repasse à l'état vide", () => {
+    mount();
+    const input = host.querySelector("input")!;
+    input.value = "chat";
+    input.dispatchEvent(new Event("search", { bubbles: true }));
+    expect(submit).not.toHaveBeenCalled();
+    input.value = "";
+    input.dispatchEvent(new Event("search", { bubbles: true }));
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("");
+  });
+
+  it("un événement input à valeur vide soumet la chaîne vide, non vide ne soumet rien", () => {
+    mount();
+    const input = host.querySelector("input")!;
+    input.value = "c";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(submit).not.toHaveBeenCalled();
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(submit).toHaveBeenCalledWith("");
+  });
+
+  it("placeholder explicite sur Entrée, aria-label court, enterkeyhint=search", () => {
+    mount();
+    const input = host.querySelector("input")!;
+    expect(input.placeholder).toBe("Rechercher dans vos PDF (Entrée pour lancer)");
+    expect(input.getAttribute("aria-label")).toBe("Rechercher dans les PDF");
+    expect(input.getAttribute("enterkeyhint")).toBe("search");
+  });
+
+  it("Entrée dans le champ soumet le texte courant, et de nouveau à chaque appui", () => {
+    mount();
+    const input = host.querySelector("input")!;
+    input.value = "chat";
+    key(input, "Enter");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenLastCalledWith("chat");
+    key(input, "Enter");
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenLastCalledWith("chat");
+  });
+
+  it("Entrée pendant une composition IME ne soumet pas", () => {
+    mount();
+    const input = host.querySelector("input")!;
+    input.value = "ね";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true }));
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("Entrée avec un champ vidé soumet la chaîne vide (retour à l'état vide)", () => {
+    mount();
+    const input = host.querySelector("input")!;
+    input.value = "";
+    key(input, "Enter");
+    expect(submit).toHaveBeenCalledWith("");
+  });
+
+  it("annonce l'état vide dans la région de statut, en invitant à appuyer sur Entrée", () => {
+    mount();
+    expect(status()).toBe("Saisissez des mots puis appuyez sur Entrée");
+    expect(host.querySelector(".docseeker-status")!.getAttribute("role")).toBe("status");
+  });
+
+  it("affiche seulement le dossier du PDF, le chemin complet en infobulle", () => {
+    mount();
+    update(results([doc("a", [1])]));
+    const el = host.querySelector<HTMLElement>(".docseeker-doc-path")!;
+    expect(el.textContent).toBe("/pdf/");
+    expect(el.title).toBe("/pdf/a.pdf");
+    expect(el.textContent).not.toContain("a.pdf");
+  });
+
+  it("n'interprète pas le HTML d'un chemin", () => {
+    mount();
+    const d = { ...doc("a", [1]), path: "/x/<img src=x onerror=alert(1)>/a.pdf" };
+    update(results([d]));
+    const el = host.querySelector<HTMLElement>(".docseeker-doc-path")!;
+    expect(el.textContent).toBe("/x/<img src=x onerror=alert(1)>/");
+    expect(el.querySelector("img")).toBeNull();
+  });
+
+  it("masque la ligne de chemin quand le PDF n'a pas de dossier", () => {
+    mount();
+    update(results([{ ...doc("a", [1]), path: "a.pdf" }]));
+    const el = host.querySelector<HTMLElement>(".docseeker-doc-path")!;
+    expect(el.hidden).toBe(true);
+    expect(el.textContent).toBe("");
+  });
+
+  it("compteur du titre : « 1 page » / « 2 pages » sans « correspondante »", () => {
+    mount();
+    update(results([doc("a", [1]), doc("b", [1, 2])]));
+    const counters = Array.from(host.querySelectorAll(".docseeker-doc-count")).map((c) => c.textContent);
+    expect(counters).toEqual(["— 1 page", "— 2 pages"]);
   });
 
   it("affiche les messages de statut", () => {
@@ -135,7 +233,8 @@ describe("mountSearchView", () => {
     const items = host.querySelectorAll("ul > li");
     expect(items).toHaveLength(2);
     expect(items[1]!.textContent).toContain("Titre b");
-    expect(items[1]!.textContent).toContain("/pdf/b.pdf");
+    expect(items[1]!.textContent).toContain("/pdf/");
+    expect(items[1]!.textContent).not.toContain("b.pdf");
   });
 
   it("ajoute 'résultats partiels' quand partial", () => {
@@ -206,7 +305,7 @@ describe("mountSearchView", () => {
     input.value = "chat";
     key(input, "Escape");
     expect(input.value).toBe("");
-    expect(setQuery).toHaveBeenCalledWith("");
+    expect(submit).toHaveBeenCalledWith("");
   });
 
   it("ne reconstruit pas les cartes inchangées, détache les supprimées", () => {
@@ -292,7 +391,7 @@ describe("mountSearchView", () => {
       expect(host.querySelector("ul")!.getAttribute("aria-label")).toBeTruthy();
       const h = host.querySelector("li h3")!;
       expect(h.textContent).toContain("Titre a");
-      expect(h.textContent).toMatch(/Titre a.+1 page correspondante/);
+      expect(h.textContent).toMatch(/Titre a.+1 page$/);
     });
 
     it("restitue le focus à la saisie si la carte focalisée disparaît", () => {
