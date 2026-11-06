@@ -5,6 +5,17 @@ export const SEARCH_CSS = `
 .docseeker-search { --docseeker-thumb-width: 120px; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 8px; gap: 8px; color: var(--b3-theme-on-background); background: var(--b3-theme-background); }
 .docseeker-search input[type="search"] { width: 100%; box-sizing: border-box; min-height: 32px; }
 .docseeker-search input[type="search"]:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-search-box { position: relative; display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.docseeker-search-box input[type="search"] { flex: 1 1 auto; min-width: 0; }
+.docseeker-history-toggle { flex: 0 0 auto; min-height: 32px; min-width: 32px; padding: 0 8px; }
+.docseeker-history-toggle[hidden] { display: none; }
+.docseeker-history-toggle:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-history-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; box-sizing: border-box; margin: 2px 0 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; background: var(--b3-theme-background); color: var(--b3-theme-on-background); border: 1px solid var(--b3-border-color); border-radius: var(--b3-border-radius, 4px); box-shadow: var(--b3-point-shadow, 0 2px 8px rgba(0, 0, 0, 0.2)); }
+.docseeker-history-list[hidden] { display: none; }
+.docseeker-history-option { display: flex; align-items: center; box-sizing: border-box; min-height: 32px; padding: 4px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.docseeker-history-option:hover { background: var(--b3-list-hover, var(--b3-theme-surface)); }
+.docseeker-history-option[aria-selected="true"] { background: var(--b3-list-hover, var(--b3-theme-surface)); outline: 2px solid var(--b3-theme-primary); outline-offset: -2px; }
+.docseeker-history-clear { border-top: 1px solid var(--b3-border-color); color: var(--b3-theme-on-surface); }
 .docseeker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
 .docseeker-filters { flex: 0 1 auto; min-width: 0; }
 .docseeker-filters[open] { flex: 1 1 100%; }

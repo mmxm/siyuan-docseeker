@@ -917,7 +917,7 @@ describe("mountSearchTab : indicateur d'indexation automatique", () => {
     const { h } = mount(activity());
     const root = h.host.querySelector(".docseeker-search")!;
     const kids = [...root.children];
-    const input = kids.findIndex((k) => k.tagName === "INPUT");
+    const input = kids.findIndex((k) => k.classList.contains("docseeker-search-box") && k.querySelector("input") !== null);
     const row = kids.findIndex((k) => k.querySelector(".docseeker-index-activity") !== null);
     const list = kids.findIndex((k) => k.tagName === "UL");
     expect(input).toBeLessThan(row);
@@ -1317,6 +1317,7 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     await type(h.host, "chat");
     const reads = h.read.mock.calls.length;
     const decodes = h.decodePageMatches.mock.calls.length;
+    update.mockClear(); // la requête soumise a mémorisé l'historique ; on ne compte ici que le tri
     choose(h.host, "name:desc");
     await flush();
     expect(update).toHaveBeenCalledTimes(1);
@@ -1420,8 +1421,8 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const { settings, get } = settingsFor();
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
+    await type(h.host, "chat"); // la soumission relit l'historique courant (plusieurs onglets) : exclue du comptage
     const calls = get.mock.calls.length;
-    await type(h.host, "chat");
     choose(h.host, "name:asc");
     await flush();
     expect(get.mock.calls.length).toBe(calls);
@@ -1495,7 +1496,9 @@ describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J
     expect(groupBox(h.host).checked).toBe(false);
     expect(h.host.querySelector(".docseeker-list--flat")).not.toBeNull();
     expect(firstIds(h.host).slice(0, 2)).toEqual(["b", "b"]);
-    expect(update).not.toHaveBeenCalled(); // appliquer le réglage lu ne le réécrit pas
+    // Appliquer le tri et le regroupement lus ne les réécrit pas ; seule la requête soumise avant la lecture est écrite.
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ history: ["chat"] });
     tab.dispose();
   });
 
@@ -1664,5 +1667,386 @@ describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J
     await flush();
     expect(h2.host.querySelectorAll("[aria-live]").length).toBe(before);
     tab2.dispose();
+  });
+});
+
+describe("mountSearchTab : ouverture à droite (J10 10e)", () => {
+  const lastArg = (h: Harness) => h.openPdfAtPage.mock.calls.at(-1)![0] as Record<string, unknown>;
+
+  it("clic simple : aucune position demandée", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    cards(h.host)[0]!.click();
+    await flush();
+    expect(lastArg(h)).not.toHaveProperty("position");
+    tab.dispose();
+  });
+
+  it("Alt+clic : openPdfAtPage reçoit position « right »", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    cards(h.host)[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
+    await flush();
+    expect(h.openPdfAtPage).toHaveBeenCalledTimes(1);
+    expect(lastArg(h)).toMatchObject({ path: PDF_A, page: 2, position: "right" });
+    tab.dispose();
+  });
+
+  it("Ctrl+Entrée sur une carte : position « right » ; Entrée seule : aucune", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    const card = cards(h.host)[0]!;
+    card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
+    await flush();
+    expect(lastArg(h)).toMatchObject({ position: "right" });
+    card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await flush();
+    expect(h.openPdfAtPage).toHaveBeenCalledTimes(2);
+    expect(lastArg(h)).not.toHaveProperty("position");
+    tab.dispose();
+  });
+});
+
+describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
+  const input = (host: HTMLElement) => host.querySelector<HTMLInputElement>("input")!;
+  const options = (host: HTMLElement) =>
+    [...host.querySelectorAll<HTMLElement>('[role="listbox"] [role="option"]')].map((o) => o.textContent);
+  const altDown = (host: HTMLElement): void => {
+    input(host).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
+  };
+
+  /** Réglages chargés, dont `get()` reflète les `update()` (comme le vrai magasin). */
+  function liveSettings(history: string[] = []) {
+    let state = {
+      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history,
+    } as DocSeekerSettings;
+    const update = vi.fn(async (patch: Partial<DocSeekerSettings>) => {
+      state = { ...state, ...patch };
+    });
+    return { settings: { get: () => state, update }, update };
+  }
+  const withSettings = (h: Harness, settings: NonNullable<SearchTabDeps["settings"]>): SearchTabDeps => ({ ...h.deps, settings });
+
+  it("une requête soumise est mémorisée : update({ history }) avec la plus récente en tête", async () => {
+    const h = harness();
+    const { settings, update } = liveSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "chat");
+    expect(update).toHaveBeenLastCalledWith({ history: ["chat"] });
+    await type(h.host, "chien");
+    expect(update).toHaveBeenLastCalledWith({ history: ["chien", "chat"] });
+    await type(h.host, "chat");
+    expect(update).toHaveBeenLastCalledWith({ history: ["chat", "chien"] });
+    tab.dispose();
+  });
+
+  it("une frappe sans Entrée n'est pas mémorisée", async () => {
+    const h = harness();
+    const { settings, update } = liveSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await typeOnly(h.host, "chat");
+    expect(update).not.toHaveBeenCalled();
+    tab.dispose();
+  });
+
+  it("l'historique mémorisé s'affiche au montage (Alt+Bas)", async () => {
+    const h = harness();
+    const { settings } = liveSettings(["zèbre", "yack"]);
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    altDown(h.host);
+    expect(options(h.host)).toEqual(["zèbre", "yack", "Supprimer tout l'historique"]);
+    tab.dispose();
+  });
+
+  it("sans réglages injectés : l'historique vit le temps de la session", async () => {
+    const h = harness();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    altDown(h.host);
+    expect(options(h.host)).toEqual(["chat", "Supprimer tout l'historique"]);
+    tab.dispose();
+  });
+
+  it("« Supprimer tout l'historique » : update({ history: [] })", async () => {
+    const h = harness();
+    const { settings, update } = liveSettings(["a", "b"]);
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    altDown(h.host);
+    h.host.querySelector<HTMLElement>(".docseeker-history-clear")!.click();
+    await flush();
+    expect(update).toHaveBeenLastCalledWith({ history: [] });
+    tab.dispose();
+  });
+
+  it("Maj+Suppr sur l'option active : update sans cette requête", async () => {
+    const h = harness();
+    const { settings, update } = liveSettings(["a", "b"]);
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    altDown(h.host);
+    const key = (init: KeyboardEventInit) => input(h.host).dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }));
+    key({ key: "ArrowDown" });
+    key({ key: "Delete", shiftKey: true });
+    expect(update).toHaveBeenLastCalledWith({ history: ["b"] });
+    tab.dispose();
+  });
+
+  const failingSettings = () => {
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => {
+      throw new Error("disque plein");
+    });
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] }) as DocSeekerSettings,
+      update,
+    };
+    return { settings, update };
+  };
+  const historyWarnings = (h: Harness) => h.onWarn.mock.calls.filter(([message]) => String(message).includes("istorique"));
+
+  it("échec d'écriture : onWarn, sans message clignotant dans la zone de messages, la liste reste utilisable", async () => {
+    const h = harness();
+    const { settings } = failingSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "chat");
+    await flush();
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("istorique"), expect.any(Error));
+    expect(h.host.querySelector(".docseeker-message")!.textContent).toBe("");
+    tab.dispose();
+  });
+
+  it("échec d'écriture persistant : l'avertissement n'est journalisé qu'une fois, pas à chaque soumission", async () => {
+    const h = harness();
+    const { settings, update } = failingSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "a");
+    await type(h.host, "b");
+    await type(h.host, "c");
+    expect(update).toHaveBeenCalledTimes(3); // chaque soumission tente l'écriture
+    expect(historyWarnings(h)).toHaveLength(1);
+    tab.dispose();
+  });
+
+  it("après une écriture réussie, un nouvel échec est de nouveau journalisé", async () => {
+    const h = harness();
+    let fail = true;
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => {
+      if (fail) throw new Error("disque plein");
+    });
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] }) as DocSeekerSettings,
+      update,
+    };
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "a");
+    fail = false;
+    await type(h.host, "b");
+    fail = true;
+    await type(h.host, "c");
+    expect(historyWarnings(h)).toHaveLength(2);
+    tab.dispose();
+  });
+
+  it("update qui lève de façon synchrone : onWarn, pas d'exception", async () => {
+    const h = harness();
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] }) as DocSeekerSettings,
+      update: () => {
+        throw new Error("sync");
+      },
+    };
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "chat");
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("istorique"), expect.any(Error));
+    tab.dispose();
+  });
+
+  it("requête soumise avant la fin du chargement : fusionnée avec l'historique lu, rien n'est écrasé", async () => {
+    const h = harness();
+    let state = {
+      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [],
+    } as unknown as DocSeekerSettings;
+    let resolve!: () => void;
+    const ready = new Promise<void>((res) => (resolve = res));
+    const update = vi.fn(async (patch: Partial<DocSeekerSettings>) => {
+      state = { ...state, ...patch };
+    });
+    const tab = mountSearchTab(h.host, withSettings(h, { get: () => state, update, ready }));
+    await flush();
+    await type(h.host, "chat");
+    expect(update).not.toHaveBeenCalled(); // pas d'écriture par-dessus un fichier non lu
+    altDown(h.host);
+    expect(options(h.host)).toEqual(["chat", "Supprimer tout l'historique"]);
+    state = { ...state, history: ["ancien"] };
+    resolve();
+    await flush();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ history: ["chat", "ancien"] });
+    tab.dispose();
+  });
+
+  it("chargement terminé sans requête soumise : aucune écriture, l'historique lu est affiché", async () => {
+    const h = harness();
+    let state = {
+      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [],
+    } as unknown as DocSeekerSettings;
+    let resolve!: () => void;
+    const ready = new Promise<void>((res) => (resolve = res));
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => undefined);
+    const tab = mountSearchTab(h.host, withSettings(h, { get: () => state, update, ready }));
+    await flush();
+    state = { ...state, history: ["lu"] };
+    resolve();
+    await flush();
+    altDown(h.host);
+    expect(options(h.host)).toEqual(["lu", "Supprimer tout l'historique"]);
+    expect(update).not.toHaveBeenCalled();
+    tab.dispose();
+  });
+
+  it("deux onglets : la modification se base sur l'historique courant des réglages", async () => {
+    const h = harness();
+    const { settings, update } = liveSettings(["a"]);
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await settings.update({ history: ["autre", "a"] }); // écrit par un autre onglet
+    update.mockClear();
+    await type(h.host, "chat");
+    expect(update).toHaveBeenCalledWith({ history: ["chat", "autre", "a"] });
+    tab.dispose();
+  });
+
+  /** Réglages dont la lecture est en attente ; `get()` reflète les `update()` une fois la lecture faite. */
+  function pendingSettings() {
+    let state = {
+      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [],
+    } as unknown as DocSeekerSettings;
+    let resolve!: () => void;
+    const ready = new Promise<void>((res) => (resolve = res));
+    const update = vi.fn(async (patch: Partial<DocSeekerSettings>) => {
+      state = { ...state, ...patch };
+    });
+    return {
+      settings: { get: () => state, update, ready },
+      update,
+      finish: async (stored: Partial<DocSeekerSettings>) => {
+        state = { ...state, ...stored };
+        resolve();
+        await flush();
+      },
+    };
+  }
+  const pressKey = (host: HTMLElement, init: KeyboardEventInit): void => {
+    input(host).dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }));
+  };
+
+  it("onglet fermé avant la fin de la lecture : les opérations en attente sont quand même écrites", async () => {
+    const h = harness();
+    const { settings, update, finish } = pendingSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "chat");
+    tab.dispose();
+    await finish({ history: ["ancien"] });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ history: ["chat", "ancien"] });
+  });
+
+  it("onglet fermé avant la lecture, sans opération en attente : aucune écriture", async () => {
+    const h = harness();
+    const { settings, update, finish } = pendingSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    tab.dispose();
+    await finish({ history: ["ancien"] });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("lecture des réglages en échec : journalisé, pas d'écriture sur un fichier illisible, la session garde son historique", async () => {
+    const h = harness();
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => undefined);
+    const ready = Promise.reject(new Error("fichier illisible"));
+    ready.catch(() => undefined);
+    const state = { autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] } as unknown as DocSeekerSettings;
+    const tab = mountSearchTab(h.host, withSettings(h, { get: () => state, update, ready }));
+    await flush();
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Lecture des réglages"), expect.any(Error));
+    await type(h.host, "chat");
+    await type(h.host, "chien");
+    expect(update).not.toHaveBeenCalled();
+    altDown(h.host);
+    expect(options(h.host)).toEqual(["chien", "chat", "Supprimer tout l'historique"]);
+    tab.dispose();
+  });
+
+  it("opérations d'avant la lecture rejouées dans l'ordre (add, remove, clear, add) en UNE seule écriture", async () => {
+    const h = harness();
+    const { settings, update, finish } = pendingSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "a");
+    await type(h.host, "b"); // local : [b, a]
+    altDown(h.host);
+    pressKey(h.host, { key: "ArrowDown" }); // b
+    pressKey(h.host, { key: "ArrowDown" }); // a
+    pressKey(h.host, { key: "Delete", shiftKey: true }); // remove a
+    h.host.querySelector<HTMLElement>(".docseeker-history-clear")!.click(); // clear
+    await type(h.host, "c");
+    expect(update).not.toHaveBeenCalled();
+    await finish({ history: ["ancien"] });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ history: ["c"] }); // « vider » efface aussi l'historique lu
+    tab.dispose();
+  });
+
+  it("deux onglets réels sur les mêmes réglages : A soumet « a », B soumet « b » => [b, a]", async () => {
+    const h = harness();
+    const { settings } = liveSettings();
+    const hostB = document.createElement("div");
+    document.body.append(hostB);
+    const tabA = mountSearchTab(h.host, withSettings(h, settings));
+    const tabB = mountSearchTab(hostB, withSettings(h, settings));
+    await flush();
+    await type(h.host, "a");
+    await type(hostB, "b");
+    expect(settings.get().history).toEqual(["b", "a"]);
+    altDown(h.host);
+    expect(options(h.host)).toEqual(["b", "a", "Supprimer tout l'historique"]);
+    tabA.dispose();
+    tabB.dispose();
+  });
+
+  it("focusInput() met réellement le focus sur le champ de recherche et renvoie true", async () => {
+    const h = harness();
+    document.body.append(h.host);
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    expect(document.activeElement).not.toBe(input(h.host));
+    expect(tab.focusInput()).toBe(true);
+    expect(document.activeElement).toBe(input(h.host));
+    tab.dispose();
+  });
+
+  it("focusInput() sur un onglet fermé : false, sans exception", async () => {
+    const h = harness();
+    document.body.append(h.host);
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    tab.dispose();
+    expect(tab.focusInput()).toBe(false);
   });
 });

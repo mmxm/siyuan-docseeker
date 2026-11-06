@@ -115,5 +115,16 @@
   "groupByDocument": "Regrouper par document",
   "expandAll": "Élargir",
   "collapseAll": "Réduire",
-  "rankingRefinedPages": "Pages classées par proximité et taille de police"
+  "rankingRefinedPages": "Pages classées par proximité et taille de police",
+  "historyLabel": "Historique des requêtes",
+  "historyClear": "Supprimer tout l'historique",
+  "historyShow": "Afficher l'historique des requêtes",
+  "commandOpenSearch": "Rechercher dans les PDF",
+  "commandFocusSearch": "Aller au champ de recherche PDF",
+  "traceKeys": "Tracer les touches",
+  "traceKeysRunning": "Trace active pendant 30 secondes : utilisez le clavier dans l'onglet de recherche, les lignes s'affichent sous le bouton",
+  "traceKeysDone": "Trace terminée : voir les lignes sous le bouton",
+  "traceKeysNoTab": "Aucun onglet de recherche ouvert : ouvrez-en un puis recommencez",
+  "traceKeysFailed": "Trace impossible : voir le journal",
+  "traceKeysNoKey": "Aucune touche reçue en 30 secondes : cliquez dans l'onglet de recherche visible puis recommencez"
 }

@@ -1,21 +1,19 @@
 /**
- * TO VALIDATE against a real SiYuan (spike M0) -- none of this is verified yet:
- *  1. Page numbering: `openTab({ pdf: { path, page } })` takes a 1-based page, and it
- *     matches PDF.js `data-page-number`. (Per the plan; not run.)
- *  2. When `.page[data-page-number=N]` exists: does openTab's promise resolve before,
- *     after, or independently of PDF.js creating the page elements? We do not rely on it:
- *     the overlay waits for the page via MutationObserver (timeout `timeoutMs`).
- *  3. PDF already open in a tab: does openTab focus the tab AND navigate to `page`, or
- *     only focus it? If it does not navigate, we only scroll to the first highlight.
- *  4. Several PDF tabs: hidden tabs may stay in the DOM. By default the VISIBLE
- *     `.page[data-page-number=N]` is chosen (`checkVisibility()`, else non-empty rect);
- *     the exact criterion (display:none? off-screen?) is to validate. Prefer injecting
- *     `resolvePageRoot` returning the active viewer container.
- *  5. Whether PDF.js replaces the page element (not only clears its children) on zoom
- *     or reload; only the latter is handled.
- *  6. The overlay is released automatically once the page stays out of the document for
- *     `orphanReleaseMs` (tab closed); validate that closing a tab removes the `.page`.
- *  7. The returned promise of `openTab` (Tab object) and its failure modes.
+ * Opens a PDF at a page through the plugin API's `openTab`, then draws the highlight overlay.
+ *
+ * Verified in SiYuan 3.8.9 (webapp): `openTab({ pdf: { path, page } })` takes a 1-based page that matches
+ * PDF.js `data-page-number`; the overlay waits for the `.page` element with a MutationObserver (so it does
+ * not depend on when openTab resolves); a PDF already open is navigated to the page; several search tabs work.
+ *
+ * Still to validate by hand:
+ *  1. Opening beside (`position: "right"`): the split is created and the overlay lands in the right viewer.
+ *     When the opened tab is returned by `openTab` (an object with `panelElement`), the page is looked up in
+ *     that panel only, because both viewers are then visible and may show the same page number.
+ *  2. The exact visibility criterion of hidden tabs (`checkVisibility()`, else a non-empty rect), used when
+ *     several `.page[data-page-number=N]` exist and no panel is known.
+ *  3. Whether PDF.js replaces the page element (not only clears its children) on zoom or reload; only the
+ *     latter is handled.
+ *  4. The overlay is released once the page stays out of the document for `orphanReleaseMs` (tab closed).
  */
 import {
   attachHighlights,
@@ -30,6 +28,10 @@ import type { PercentStyle } from "../core/crop";
 export interface PdfTarget {
   readonly app: unknown;
   readonly pdf: { readonly path: string; readonly page: number };
+  /** Split the current window and open beside ("right") or below ("bottom"). */
+  readonly position?: "right" | "bottom";
+  /** Open in a new tab instead of reusing an existing one. */
+  readonly openNewTab?: boolean;
 }
 
 /** Injected `openTab` from the SiYuan plugin API (kept loose for testability). */
@@ -55,6 +57,9 @@ export interface OpenPdfOptions
   /** Index in `rects` of the rectangle to center on (default 0 = the first one). */
   readonly focusIndex?: number;
   readonly root?: Document | Element;
+  /** Passed to `openTab`: open beside / below. The overlay then targets the opened tab's panel when known. */
+  readonly position?: "right" | "bottom";
+  readonly openNewTab?: boolean;
 }
 
 export class InvalidPdfPathError extends RangeError {
@@ -78,6 +83,24 @@ export function assertValidPdfPath(path: string): void {
   if (!PDF_PATH_PATTERN.test(path) || segments.includes("..") || segments.includes(".")) {
     throw new InvalidPdfPathError(path);
   }
+}
+
+const NO_PANEL_WARNING = "openTab n'a pas renvoyé de panneau exploitable : recherche globale de la page";
+
+/**
+ * `panelElement` of the Tab returned by `openTab`, when it is a connected element. The test is structural
+ * (`nodeType === 1`), not `instanceof Element`, which fails for an element of another window (detached window).
+ */
+function panelOf(opened: unknown): Element | undefined {
+  if (typeof opened !== "object" || opened === null) return undefined;
+  const panel = (opened as { panelElement?: unknown }).panelElement;
+  if (typeof panel !== "object" || panel === null) return undefined;
+  const node = panel as Element;
+  return node.nodeType === 1 && node.isConnected === true ? node : undefined;
+}
+
+function documentOfRoot(root: Document | Element): Document | null {
+  return root.nodeType === 9 ? (root as Document) : root.ownerDocument;
 }
 
 function supersededHandle(pageNumber: number): Disposer<OpenPdfReport> {
@@ -116,7 +139,7 @@ async function finish(
  * release explicitly (idempotent); it also self-releases when the page is gone for good.
  */
 export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<OpenPdfReport>> {
-  const { openTab, app, path, page, rects, focusIndex = 0, root = document, ...rest } = options;
+  const { openTab, app, path, page, rects, focusIndex = 0, root = document, position, openNewTab, ...rest } = options;
   assertValidPdfPath(path);
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError(`page must be an integer >= 1, got ${page}`);
@@ -125,16 +148,29 @@ export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<O
   current = null;
   generation += 1;
   const mine = generation;
-  await openTab({ app, pdf: { path, page } });
+  const target: PdfTarget = {
+    app,
+    pdf: { path, page },
+    ...(position !== undefined && { position }),
+    ...(openNewTab !== undefined && { openNewTab }),
+  };
+  const opened = await openTab(target);
   if (mine !== generation) return supersededHandle(page);
-  const handle = attachHighlights({ root, pageNumber: page, rects, ...rest });
+  // Side by side, both viewers are visible and may show the same page number: look in the opened tab's panel only.
+  const wantsPanel = position !== undefined && !rest.resolvePageRoot;
+  const panel = wantsPanel ? panelOf(opened) : undefined;
+  if (wantsPanel && !panel) rest.onWarn?.(NO_PANEL_WARNING);
+  const scoped = panel ? { ...rest, resolvePageRoot: () => panel } : rest;
+  // A panel living in another document (detached window): watch and look up that document, not the main one.
+  const lookupRoot = panel && panel.ownerDocument && panel.ownerDocument !== documentOfRoot(root) ? panel.ownerDocument : root;
+  const handle = attachHighlights({ root: lookupRoot, pageNumber: page, rects, ...scoped });
   // The overlay only draws sanitized rects: map the index in `rects` to the index among drawn ones.
   const focused = Number.isInteger(focusIndex) ? rects[focusIndex] : undefined;
   const drawnIndex =
     focused && sanitizeRect(focused)
       ? rects.slice(0, focusIndex).filter((r) => sanitizeRect(r) !== null).length
       : 0;
-  const lookup = { root, pageNumber: page, ...(rest.resolvePageRoot && { resolvePageRoot: rest.resolvePageRoot }) };
+  const lookup = { root: lookupRoot, pageNumber: page, ...(scoped.resolvePageRoot && { resolvePageRoot: scoped.resolvePageRoot }) };
   const ready = finish(
     handle,
     () => mine === generation,

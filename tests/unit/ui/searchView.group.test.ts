@@ -154,7 +154,7 @@ describe("regroupement : liste plate", () => {
     mount({ initialGroupByDocument: false });
     expect(items()).toHaveLength(3); // liste plate : un <li> par page
     cards()[1]!.click();
-    expect(onOpen).toHaveBeenCalledWith("b", 2, "chat");
+    expect(onOpen).toHaveBeenCalledWith("b", 2, "chat", { alternate: false });
   });
 
   it("une seule carte est tabbable (tabindex 0), navigation Flèche bas", () => {

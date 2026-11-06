@@ -298,7 +298,7 @@ describe("mountSearchView", () => {
     mount();
     update(results([doc("a", [3])]));
     cards()[0]!.click();
-    expect(onOpen).toHaveBeenCalledWith("a", 3, "chat");
+    expect(onOpen).toHaveBeenCalledWith("a", 3, "chat", { alternate: false });
     onOpen.mockClear();
     key(cards()[0]!, "Enter");
     expect(onOpen).toHaveBeenCalledTimes(1);
@@ -808,7 +808,7 @@ describe("mountSearchView", () => {
       update(results([doc("a", range(8))]));
       more()!.click();
       cards()[7]!.click();
-      expect(onOpen).toHaveBeenCalledWith("a", 8, "chat");
+      expect(onOpen).toHaveBeenCalledWith("a", 8, "chat", { alternate: false });
     });
 
     it("utilise la clé i18n showLess et un libellé par défaut", () => {
@@ -944,7 +944,7 @@ describe("filtres dans la vue", () => {
     });
     const root = host.querySelector(".docseeker-search")!;
     const kids = Array.from(root.children).map((c) => c.className.split(" ")[0]);
-    expect(kids.slice(0, 3)).toEqual(["b3-text-field", "docseeker-toolbar", "docseeker-index-row"]);
+    expect(kids.slice(0, 3)).toEqual(["docseeker-search-box", "docseeker-toolbar", "docseeker-index-row"]);
     expect(host.querySelector(".docseeker-toolbar > details.docseeker-filters")).not.toBeNull();
   });
 

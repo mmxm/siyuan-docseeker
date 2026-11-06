@@ -310,3 +310,207 @@ describe("openPdfAtPage", () => {
     expect(openTab).not.toHaveBeenCalled();
   });
 });
+
+describe("openPdfAtPage : ouverture dans un volet (position, openNewTab)", () => {
+  const setVisible = (el: Element, visible: boolean): void => {
+    Object.defineProperty(el, "checkVisibility", { value: () => visible, configurable: true });
+  };
+  const viewer = (): HTMLElement => {
+    const el = document.createElement("div");
+    root.appendChild(el);
+    return el;
+  };
+
+  it("transmet position à openTab", async () => {
+    addPage(root, 2);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue(undefined);
+    const handle = await openPdfAtPage(base(openTab, { position: "right" }));
+    await handle.ready;
+    expect(openTab).toHaveBeenCalledWith({ app: APP, pdf: { path: "assets/x.pdf", page: 2 }, position: "right" });
+  });
+
+  it("transmet openNewTab à openTab", async () => {
+    addPage(root, 2);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue(undefined);
+    const handle = await openPdfAtPage(base(openTab, { openNewTab: true }));
+    await handle.ready;
+    expect(openTab).toHaveBeenCalledWith({ app: APP, pdf: { path: "assets/x.pdf", page: 2 }, openNewTab: true });
+  });
+
+  it("sans option, n'ajoute aucune clé position / openNewTab", async () => {
+    addPage(root, 2);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue(undefined);
+    await (await openPdfAtPage(base(openTab))).ready;
+    const arg = openTab.mock.calls[0]![0] as unknown as Record<string, unknown>;
+    expect(Object.keys(arg).sort()).toEqual(["app", "pdf"]);
+  });
+
+  it("à droite, deux visualiseurs visibles montrent la même page : le calque va dans le panneau de l'onglet ouvert", async () => {
+    const left = viewer();
+    const leftPage = addPage(left, 2);
+    setVisible(leftPage, true);
+    const right = viewer();
+    const rightPage = addPage(right, 2);
+    setVisible(rightPage, true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: right });
+    const handle = await openPdfAtPage(base(openTab, { position: "right" }));
+    const report = await handle.ready;
+    expect(report.status).toBe("attached");
+    expect(rightPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+    expect(leftPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("à droite : attend la page dans le panneau de l'onglet (pas celle de l'autre volet)", async () => {
+    const left = viewer();
+    const leftPage = addPage(left, 2);
+    setVisible(leftPage, true);
+    const right = viewer();
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: right });
+    const handle = await openPdfAtPage(base(openTab, { position: "right", timeoutMs: 1000 }));
+    await flush();
+    expect(leftPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+    const rightPage = addPage(right, 2);
+    setVisible(rightPage, true);
+    const report = await handle.ready;
+    expect(report.status).toBe("attached");
+    expect(rightPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+    expect(leftPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("un resolvePageRoot fourni par l'appelant reste prioritaire sur le panneau", async () => {
+    const mine = viewer();
+    const minePage = addPage(mine, 2);
+    setVisible(minePage, true);
+    const right = viewer();
+    setVisible(addPage(right, 2), true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: right });
+    const handle = await openPdfAtPage(base(openTab, { position: "right", resolvePageRoot: () => mine }));
+    await handle.ready;
+    expect(minePage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+  });
+
+  it("sans position, la page visible est choisie comme avant (le panneau renvoyé n'est pas utilisé)", async () => {
+    const hidden = viewer();
+    setVisible(addPage(hidden, 2), false);
+    const shown = viewer();
+    const shownPage = addPage(shown, 2);
+    setVisible(shownPage, true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: hidden });
+    const handle = await openPdfAtPage(base(openTab));
+    await handle.ready;
+    expect(shownPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+  });
+
+  it("la valeur renvoyée par openTab n'est pas un onglet exploitable : repli sur la recherche visible", async () => {
+    const a = viewer();
+    const aPage = addPage(a, 2);
+    setVisible(aPage, true);
+    for (const result of [undefined, null, "x", {}, { panelElement: "x" }]) {
+      const openTab = vi.fn<OpenTabFn>().mockResolvedValue(result);
+      const handle = await openPdfAtPage(base(openTab, { position: "right" }));
+      expect((await handle.ready).status).toBe("attached");
+      handle.dispose();
+    }
+  });
+
+  const NO_PANEL = "openTab n'a pas renvoyé de panneau exploitable : recherche globale de la page";
+
+  it("position \"bottom\" : le calque va dans le panneau de l'onglet ouvert, pas dans l'autre volet", async () => {
+    const top = viewer();
+    const topPage = addPage(top, 2);
+    setVisible(topPage, true);
+    const bottom = viewer();
+    const bottomPage = addPage(bottom, 2);
+    setVisible(bottomPage, true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: bottom });
+    const handle = await openPdfAtPage(base(openTab, { position: "bottom" }));
+    expect((await handle.ready).status).toBe("attached");
+    expect(openTab).toHaveBeenCalledWith({ app: APP, pdf: { path: "assets/x.pdf", page: 2 }, position: "bottom" });
+    expect(bottomPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+    expect(topPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("position + openNewTab : les deux options sont transmises et le panneau est respecté", async () => {
+    const left = viewer();
+    const leftPage = addPage(left, 2);
+    setVisible(leftPage, true);
+    const right = viewer();
+    const rightPage = addPage(right, 2);
+    setVisible(rightPage, true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: right });
+    const handle = await openPdfAtPage(base(openTab, { position: "right", openNewTab: true }));
+    expect((await handle.ready).status).toBe("attached");
+    expect(openTab).toHaveBeenCalledWith({
+      app: APP, pdf: { path: "assets/x.pdf", page: 2 }, position: "right", openNewTab: true,
+    });
+    expect(rightPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+    expect(leftPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("panneau valide mais la page n'y apparaît jamais : timeout, jamais de calque sur l'autre volet", async () => {
+    const onWarn = vi.fn();
+    const left = viewer();
+    const leftPage = addPage(left, 2);
+    setVisible(leftPage, true);
+    const right = viewer();
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: right });
+    const handle = await openPdfAtPage(base(openTab, { position: "right", timeoutMs: 20, onWarn }));
+    const report = await handle.ready;
+    expect(report.status).toBe("timeout");
+    expect(leftPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+    expect(onWarn).not.toHaveBeenCalledWith(NO_PANEL);
+  });
+
+  it.each([undefined, null, "x", {}, { panelElement: "x" }, { panelElement: null }])(
+    "position sans panneau exploitable (%j) : avertit et se rabat sur la recherche globale",
+    async (result) => {
+      const onWarn = vi.fn();
+      const page = addPage(viewer(), 2);
+      setVisible(page, true);
+      const openTab = vi.fn<OpenTabFn>().mockResolvedValue(result);
+      const handle = await openPdfAtPage(base(openTab, { position: "right", onWarn }));
+      expect((await handle.ready).status).toBe("attached");
+      expect(onWarn).toHaveBeenCalledWith(NO_PANEL);
+    },
+  );
+
+  it("sans position, aucun avertissement de panneau même si openTab ne renvoie rien", async () => {
+    const onWarn = vi.fn();
+    addPage(root, 2);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue(undefined);
+    await (await openPdfAtPage(base(openTab, { onWarn }))).ready;
+    expect(onWarn).not.toHaveBeenCalledWith(NO_PANEL);
+  });
+
+  it("panneau détaché du document : avertit et se rabat sur la recherche globale", async () => {
+    const onWarn = vi.fn();
+    const detached = document.createElement("div"); // jamais ajouté au document
+    addPage(detached, 2);
+    const shownPage = addPage(viewer(), 2);
+    setVisible(shownPage, true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: detached });
+    const handle = await openPdfAtPage(base(openTab, { position: "right", onWarn }));
+    expect((await handle.ready).status).toBe("attached");
+    expect(onWarn).toHaveBeenCalledWith(NO_PANEL);
+    expect(shownPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+  });
+
+  it("panneau d'un autre document (fenêtre détachée) : la page y est attendue et le calque y est posé", async () => {
+    const other = document.implementation.createHTMLDocument("detached");
+    const panel = other.createElement("div");
+    other.body.appendChild(panel);
+    const mainPage = addPage(viewer(), 2);
+    setVisible(mainPage, true);
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue({ panelElement: panel });
+    const handle = await openPdfAtPage(base(openTab, { position: "right", timeoutMs: 1000 }));
+    await flush();
+    const page = other.createElement("div");
+    page.className = "page";
+    page.dataset["pageNumber"] = "2";
+    panel.appendChild(page);
+    setVisible(page, true);
+    expect((await handle.ready).status).toBe("attached");
+    expect(page.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
+    expect(mainPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+  });
+});

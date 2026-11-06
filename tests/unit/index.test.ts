@@ -12,8 +12,10 @@ const h = vi.hoisted(() => ({
   sharedDispose: vi.fn(),
   sharedCreated: 0,
   indexerDeps: undefined as { onDestroyError?: (e: unknown) => void; shouldYield?: () => boolean } | undefined,
+  commands: [] as { langKey: string; langText?: string; hotkey?: string; callback?: () => void }[],
   mounts: [] as {
     dispose: ReturnType<typeof vi.fn>;
+    focusInput: ReturnType<typeof vi.fn>;
     onWarn: (m: string, e?: unknown) => void;
     onOpenSettings?: (() => void) | undefined;
   }[],
@@ -59,6 +61,8 @@ vi.mock("siyuan", () => ({
       autoIndexDesc: "Desc auto",
       autoIndexInterval: "Fréquence de vérification",
       autoIndexIntervalDesc: "Desc freq",
+      commandOpenSearch: "Rechercher dans les PDF",
+      commandFocusSearch: "Aller au champ de recherche PDF",
     };
     setting: unknown;
     loadData = h.loadData;
@@ -72,7 +76,9 @@ vi.mock("siyuan", () => ({
     addTopBar(o: { callback: () => void }) {
       this.topBar = o;
     }
-    addCommand() {}
+    addCommand(command: (typeof h.commands)[number]) {
+      h.commands.push(command);
+    }
     removeTopBar() {}
   },
   openTab: vi.fn(),
@@ -135,7 +141,7 @@ vi.mock("../../src/searchTab", async (orig) => {
       deps: { onWarn: (m: string, e?: unknown) => void; onOpenSettings?: () => void; indexActivity?: never },
     ) => {
       h.mountDeps.push(deps);
-      const m = { dispose: vi.fn(), onWarn: deps.onWarn, onOpenSettings: deps.onOpenSettings };
+      const m = { dispose: vi.fn(), focusInput: vi.fn(() => true), onWarn: deps.onWarn, onOpenSettings: deps.onOpenSettings };
       h.mounts.push(m);
       return m;
     },
@@ -146,6 +152,7 @@ import DocSeekerPlugin from "../../src/index";
 
 const plugins: { onunload(): void }[] = [];
 afterEach(() => {
+  document.body.replaceChildren();
   // Les écouteurs de fenêtre d'un plugin non déchargé survivraient au test suivant (même window jsdom).
   for (const p of plugins.splice(0)) p.onunload();
 });
@@ -160,8 +167,10 @@ function setup() {
     topBar: { callback: () => void };
   };
   plugin.onload();
-  const render = (): TabModel => {
-    const model = { element: document.createElement("div") };
+  /** Rend un onglet dans `element` (nouveau par défaut), attaché au document comme un vrai onglet SiYuan. */
+  const render = (element: HTMLElement = document.createElement("div")): TabModel => {
+    const model = { element };
+    if (!element.isConnected) document.body.append(element);
     plugin.tab.init.call(model, model);
     return model;
   };
@@ -183,6 +192,7 @@ const flush = async (): Promise<void> => {
 
 beforeEach(() => {
   h.mounts.length = 0;
+  h.commands.length = 0;
   h.sharedStart.mockReset().mockResolvedValue(undefined);
   h.sharedDispose.mockClear();
   h.sharedCreated = 0;
@@ -541,7 +551,7 @@ describe("indexation automatique", () => {
   const settle = async (ms: number): Promise<void> => {
     await vi.advanceTimersByTimeAsync(ms);
   };
-  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true } as const;
+  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] } as const;
   const startPlugin = async (stored: unknown = "") => {
     h.loadData.mockResolvedValue(stored);
     const s = setup();
@@ -816,7 +826,7 @@ describe("indexation automatique", () => {
     expect(tabSettings.get().groupByDocument).toBe(false);
     await tabSettings.update({ sort: { key: "modified", direction: "desc" } });
     expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
-      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false,
+      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false, history: [],
     });
   });
 
@@ -836,7 +846,7 @@ describe("indexation automatique", () => {
     const pending = h.mountDeps[0]!.settings!.update({ groupByDocument: false });
     await pending;
     expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
-      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false,
+      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false, history: [],
     });
   });
 
@@ -868,5 +878,322 @@ describe("indexation automatique", () => {
     expect(h.start).toHaveBeenCalledTimes(1);
     await settle(5 * MIN);
     expect(h.start).toHaveBeenCalledTimes(2); // la période de 5 minutes n'a pas été repoussée ni doublée
+  });
+});
+
+describe("commandes (J10 10e)", () => {
+  const command = (key: string) => h.commands.find((c) => c.langKey === key);
+  /** Laisse s'écouler toute la chaîne de promesses en attente (un tour de boucle d'événements complet). */
+  const settle = async (): Promise<void> => {
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+    else await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  };
+  const hide = (el: HTMLElement): void => {
+    el.style.display = "none";
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("enregistre openSearch et focusSearch, sans raccourci par défaut, avec leurs libellés", () => {
+    setup();
+    expect(h.commands.map((c) => c.langKey).sort()).toEqual(["focusSearch", "openSearch"]);
+    for (const c of h.commands) expect(c.hotkey).toBe("");
+    expect(command("openSearch")!.langText).toBe("Rechercher dans les PDF");
+    expect(command("focusSearch")!.langText).toBe("Aller au champ de recherche PDF");
+  });
+
+  it("openSearch ouvre toujours un nouvel onglet", async () => {
+    const { openTab } = await import("siyuan");
+    const mocked = vi.mocked(openTab);
+    mocked.mockReset();
+    setup();
+    command("openSearch")!.callback!();
+    expect(mocked).toHaveBeenCalledTimes(1);
+    expect(mocked.mock.calls[0]![0]).toMatchObject({ openNewTab: true, custom: { id: "docseekerdocseeker" } });
+  });
+
+  it("focusSearch sans onglet : ouvre l'onglet puis met le focus sur son champ", async () => {
+    const { openTab } = await import("siyuan");
+    const mocked = vi.mocked(openTab);
+    mocked.mockReset();
+    const { render } = setup();
+    mocked.mockImplementation((async () => {
+      render();
+    }) as never);
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(mocked).toHaveBeenCalledTimes(1);
+    expect(mocked.mock.calls[0]![0]).toMatchObject({ openNewTab: true });
+    expect(h.mounts).toHaveLength(1);
+    expect(h.mounts[0]!.focusInput).toHaveBeenCalled();
+  });
+
+  it("focusSearch avec un onglet ouvert : le ramène devant (sans en créer un autre) et focalise son champ", async () => {
+    const { openTab } = await import("siyuan");
+    const mocked = vi.mocked(openTab);
+    mocked.mockReset().mockResolvedValue(undefined as never);
+    const { render } = setup();
+    render();
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(mocked).toHaveBeenCalledTimes(1);
+    expect(mocked.mock.calls[0]![0]).not.toHaveProperty("openNewTab");
+    expect(mocked.mock.calls[0]![0]).toMatchObject({ custom: { id: "docseekerdocseeker" } });
+    expect(h.mounts[0]!.focusInput).toHaveBeenCalled();
+  });
+
+  it("focusSearch avec plusieurs onglets : le dernier ouvert", async () => {
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const { render } = setup();
+    render();
+    render();
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(h.mounts[0]!.focusInput).not.toHaveBeenCalled();
+    expect(h.mounts[1]!.focusInput).toHaveBeenCalled();
+  });
+
+  it("un onglet fermé n'est plus ciblé : focusSearch en rouvre un", async () => {
+    const { openTab } = await import("siyuan");
+    const mocked = vi.mocked(openTab);
+    mocked.mockReset().mockResolvedValue(undefined as never);
+    const { render, destroy } = setup();
+    const model = render();
+    destroy(model);
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(mocked.mock.calls[0]![0]).toMatchObject({ openNewTab: true });
+    expect(h.mounts[0]!.focusInput).not.toHaveBeenCalled();
+  });
+
+  it("le focus est redemandé juste après (l'onglet n'est parfois affiché qu'ensuite)", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const { render } = setup();
+    render();
+    command("focusSearch")!.callback!();
+    await vi.advanceTimersByTimeAsync(0);
+    const first = h.mounts[0]!.focusInput.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.mounts[0]!.focusInput.mock.calls.length).toBe(first + 1);
+  });
+
+  it("focusSearch avec plusieurs onglets : seul l'onglet VISIBLE est visé, même s'il n'est pas le dernier", async () => {
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const { render } = setup();
+    render();
+    const second = render();
+    hide(second.element);
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(h.mounts[0]!.focusInput).toHaveBeenCalled();
+    expect(h.mounts[1]!.focusInput).not.toHaveBeenCalled();
+  });
+
+  it("render(host1) render(host2) render(host1) : focusSearch vise le nouvel onglet de host1", async () => {
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const { render } = setup();
+    const host1 = document.createElement("div");
+    const host2 = document.createElement("div");
+    render(host1);
+    render(host2);
+    render(host1);
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(h.mounts[0]!.dispose).toHaveBeenCalled(); // l'ancien onglet de host1 est libéré
+    expect(h.mounts[0]!.focusInput).not.toHaveBeenCalled();
+    expect(h.mounts[1]!.focusInput).not.toHaveBeenCalled();
+    expect(h.mounts[2]!.focusInput).toHaveBeenCalled();
+  });
+
+  it("plugin déchargé pendant que openTab est en attente : aucun focus, aucun minuteur, aucun avertissement", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    let release!: () => void;
+    vi.mocked(openTab).mockReset().mockImplementation((() => new Promise<void>((res) => (release = res))) as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { plugin, render } = setup();
+    render();
+    command("focusSearch")!.callback!();
+    plugin.onunload();
+    release();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.mounts[0]!.focusInput).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("plugin déchargé pendant le minuteur de rattrapage : pas de second focus", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const { plugin, render } = setup();
+    render();
+    command("focusSearch")!.callback!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.mounts[0]!.focusInput).toHaveBeenCalledTimes(1);
+    plugin.onunload();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.mounts[0]!.focusInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("rattrapage à 50 ms : champ toujours sans focus => avertissement « Champ de recherche non focalisé »", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { render } = setup();
+    render();
+    h.mounts[0]!.focusInput.mockReturnValue(false);
+    command("focusSearch")!.callback!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(warn).not.toHaveBeenCalled(); // le premier essai peut échouer : l'onglet n'est parfois affiché qu'ensuite
+    await vi.advanceTimersByTimeAsync(200);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Champ de recherche non focalisé"), undefined);
+  });
+
+  it("rattrapage réussi : aucun avertissement", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { render } = setup();
+    render();
+    h.mounts[0]!.focusInput.mockReturnValueOnce(false).mockReturnValue(true);
+    command("focusSearch")!.callback!();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("aucun onglet visible au rattrapage : avertissement", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { render } = setup();
+    hide(render().element);
+    command("focusSearch")!.callback!();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.mounts[0]!.focusInput).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Champ de recherche non focalisé"), undefined);
+  });
+
+  it("focusInput qui lève (vue détruite) au premier essai ou au rattrapage : tracé, sans exception non gérée", async () => {
+    vi.useFakeTimers();
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { render } = setup();
+    render();
+    h.mounts[0]!.focusInput.mockImplementation(() => {
+      throw new Error("vue détruite");
+    });
+    command("focusSearch")!.callback!();
+    await vi.advanceTimersByTimeAsync(200);
+    const traced = warn.mock.calls.filter(([m, e]) => String(m).includes("champ de recherche") && e instanceof Error);
+    expect(traced.length).toBe(2); // premier essai + rattrapage
+  });
+
+  it("openTab qui échoue : journalisé, jamais avalé, aucune exception", async () => {
+    const { openTab } = await import("siyuan");
+    vi.mocked(openTab).mockReset().mockRejectedValue(new Error("refus") as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setup();
+    command("focusSearch")!.callback!();
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("champ de recherche"), expect.any(Error));
+    vi.mocked(openTab).mockReset().mockImplementation((() => {
+      throw new Error("sync");
+    }) as never);
+    expect(() => command("focusSearch")!.callback!()).not.toThrow();
+    await settle();
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("trace des touches dans le panneau (R6)", () => {
+  const traceButton = (el: HTMLElement) => el.querySelector<HTMLButtonElement>("button.docseeker-trace-keys")!;
+  const traceLog = (el: HTMLElement) => el.querySelector<HTMLElement>(".docseeker-trace-log")!;
+  const searchRoot = (): HTMLElement => {
+    const el = document.createElement("div");
+    el.className = "docseeker-search";
+    document.body.append(el);
+    return el;
+  };
+  const key = (el: Element, k: string): void => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+  };
+
+  it("sans onglet de recherche dans le document : message, rien n'est tracé", () => {
+    setup();
+    const panel = openPanel();
+    traceButton(panel.diagnostic).click();
+    expect(panel.diagnostic.querySelector(".docseeker-trace-status")!.textContent).toBe("traceKeysNoTab");
+  });
+
+  it("avec un onglet : les touches tracées arrivent dans la zone de trace, pas dans le journal des avertissements", () => {
+    setup();
+    const root = searchRoot();
+    const panel = openPanel();
+    traceButton(panel.diagnostic).click();
+    key(root, "ArrowDown");
+    expect(traceLog(panel.diagnostic).textContent).toContain("key=ArrowDown");
+    expect(panel.log.textContent).not.toContain("key=ArrowDown");
+  });
+
+  it("après la fermeture du panneau, un ArrowUp ne produit aucune ligne et un message d'arrêt est journalisé", () => {
+    setup();
+    const root = searchRoot();
+    const panel = openPanel();
+    traceButton(panel.diagnostic).click();
+    key(root, "ArrowDown");
+    panel.close();
+    key(root, "ArrowUp");
+    expect(traceLog(panel.diagnostic).textContent).not.toContain("key=ArrowUp");
+    expect(panel.log.textContent).not.toContain("key=ArrowUp");
+    expect(panel.log.textContent).toContain("Trace des touches arrêtée (panneau fermé)");
+  });
+
+  it("deux onglets dont un caché : la trace vise l'onglet VISIBLE, même s'il n'est pas le premier du document", () => {
+    setup();
+    const shown = searchRoot();
+    const hiddenRoot = searchRoot();
+    hiddenRoot.style.display = "none";
+    const panel = openPanel();
+    traceButton(panel.diagnostic).click();
+    key(hiddenRoot, "ArrowLeft");
+    key(shown, "ArrowRight");
+    const text = traceLog(panel.diagnostic).textContent!;
+    // Les phases window/document voient toutes les touches ; seule la phase « root » dit quel onglet est suivi.
+    expect(text).toContain("root capture key=ArrowRight");
+    expect(text).not.toContain("root capture key=ArrowLeft");
+  });
+
+  it("deux onglets dont le premier est caché : le second (visible) est tracé", () => {
+    setup();
+    const hiddenRoot = searchRoot();
+    hiddenRoot.style.display = "none";
+    const shown = searchRoot();
+    const panel = openPanel();
+    traceButton(panel.diagnostic).click();
+    key(shown, "Enter");
+    key(hiddenRoot, "Escape");
+    const text = traceLog(panel.diagnostic).textContent!;
+    expect(text).toContain("root capture key=Enter");
+    expect(text).not.toContain("root capture key=Escape");
+  });
+
+  it("seul un onglet caché existe : message « aucun onglet », rien n'est tracé", () => {
+    setup();
+    searchRoot().style.display = "none";
+    const panel = openPanel();
+    traceButton(panel.diagnostic).click();
+    expect(panel.diagnostic.querySelector(".docseeker-trace-status")!.textContent).toBe("traceKeysNoTab");
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, FREQUENCY_MINUTES, SETTINGS_FILE, createSettings, normalizeSettings } from "../../src/settings";
 
 /** Valeurs par défaut des champs de présentation (tri et regroupement), ajoutés après les deux premiers réglages. */
-const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true } as const;
+const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] } as const;
 
 describe("normalizeSettings", () => {
   it("défauts : indexation automatique activée, 5 minutes", () => {
@@ -290,7 +290,7 @@ describe("réglages de présentation : tri et regroupement", () => {
     await store.update({ sort: { key: "modified", direction: "desc" } });
     expect(store.get().sort).toEqual({ key: "modified", direction: "desc" });
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true });
+    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true, history: [] });
   });
 
   it("update({ groupByDocument }) : applique, notifie, enregistre", async () => {
@@ -368,7 +368,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     gate.resolve(STORED);
     await pending;
     expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ ...STORED, sort: { key: "modified", direction: "desc" } });
+    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], sort: { key: "modified", direction: "desc" } });
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60, groupByDocument: false });
   });
 
@@ -380,7 +380,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     const p2 = store.update({ sort: { key: "path", direction: "asc" } });
     gate.resolve(STORED);
     await Promise.all([p1, p2]);
-    expect(save).toHaveBeenLastCalledWith({ ...STORED, groupByDocument: true, sort: { key: "path", direction: "asc" } });
+    expect(save).toHaveBeenLastCalledWith({ ...STORED, history: [], groupByDocument: true, sort: { key: "path", direction: "asc" } });
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60 });
   });
 
@@ -388,7 +388,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     const save = vi.fn(async (_v: unknown) => undefined);
     const store = createSettings({ load: async () => STORED, save, onWarn: vi.fn() });
     await store.update({ groupByDocument: true });
-    expect(save).toHaveBeenCalledWith({ ...STORED, groupByDocument: true });
+    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], groupByDocument: true });
   });
 
   it("une fois chargé, update() applique et notifie toujours de façon synchrone (pas d'attente inutile)", async () => {
@@ -432,5 +432,71 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     gate.resolve({ autoIndex: false, intervalMinutes: 7 }); // intervalle invalide : réécriture
     await pending;
     expect(saved.at(-1)).toMatchObject({ autoIndex: false, intervalMinutes: 15 });
+  });
+});
+
+describe("historique des requêtes (history)", () => {
+  it("défaut : liste vide", () => {
+    expect(DEFAULT_SETTINGS.history).toEqual([]);
+  });
+  it("ancien fichier sans le champ : [] SANS avertissement", () => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ autoIndex: true, intervalMinutes: 5 }, warn).history).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it("liste valide conservée dans l'ordre", () => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ history: ["b", "a"] }, warn).history).toEqual(["b", "a"]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it.each([["texte", "chat"], ["nombre", 3], ["nul", null], ["objet", {}]])("type invalide (%s) : [] ET avertissement", (_n, history) => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ history }, warn).history).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toMatch(/historique/i);
+  });
+  it("entrées invalides ou en double retirées, avec avertissement", () => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ history: ["a", 1, "", "a", " b "] }, warn).history).toEqual(["a", "b"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+  it("plus de 20 entrées : tronqué à 20, avertissement", () => {
+    const warn = vi.fn();
+    const raw = Array.from({ length: 25 }, (_, i) => `q${i}`);
+    expect(normalizeSettings({ history: raw }, warn).history).toEqual(raw.slice(0, 20));
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+  it("lecture d'un ancien fichier : ready se résout, rien n'est réécrit, aucun avertissement", async () => {
+    const save = vi.fn(async () => undefined);
+    const onWarn = vi.fn();
+    const store = createSettings({ load: async () => ({ autoIndex: false, intervalMinutes: 15 }), save, onWarn });
+    await store.ready;
+    expect(store.get().history).toEqual([]);
+    expect(onWarn).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("update({ history }) : applique, notifie, enregistre", async () => {
+    const save = vi.fn(async () => undefined);
+    const store = createSettings({ load: async () => undefined, save, onWarn: vi.fn() });
+    await store.ready;
+    const seen: string[][] = [];
+    store.subscribe(() => seen.push([...store.get().history]));
+    await store.update({ history: ["x", "y"] });
+    expect(store.get().history).toEqual(["x", "y"]);
+    expect(seen).toEqual([["x", "y"]]);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ history: ["x", "y"] }));
+  });
+  it("update({ history }) identique : aucune écriture", async () => {
+    const save = vi.fn(async () => undefined);
+    const store = createSettings({ load: async () => ({ history: ["x"] }), save, onWarn: vi.fn() });
+    await store.ready;
+    await store.update({ history: ["x"] });
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("échec d'écriture : update rejette, la valeur reste en mémoire", async () => {
+    const store = createSettings({ load: async () => undefined, save: async () => { throw new Error("disque"); }, onWarn: vi.fn() });
+    await store.ready;
+    await expect(store.update({ history: ["x"] })).rejects.toThrow("disque");
+    expect(store.get().history).toEqual(["x"]);
   });
 });

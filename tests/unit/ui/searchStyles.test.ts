@@ -256,3 +256,42 @@ describe("SEARCH_CSS", () => {
     });
   });
 });
+
+describe("SEARCH_CSS : historique des requêtes (J10 10e)", () => {
+  it("le conteneur du champ est le repère de positionnement de la liste", () => {
+    expect(rulesFor(".docseeker-search-box").join(" ")).toMatch(/position:\s*relative/);
+  });
+
+  it("la liste est posée sous le champ, ne dépasse pas la largeur, défile en interne", () => {
+    const css = rulesFor(".docseeker-history-list").join(" ");
+    expect(css).toMatch(/position:\s*absolute/);
+    expect(css).toMatch(/top:\s*100%/);
+    expect(css).toMatch(/left:\s*0/);
+    expect(css).toMatch(/right:\s*0/);
+    expect(css).toMatch(/max-height:\s*\d+px/);
+    expect(css).toMatch(/overflow-y:\s*auto/);
+    expect(css).toMatch(/z-index:\s*\d+/);
+    expect(css).not.toMatch(/(^|[^-])width:\s*\d+px/); // aucune largeur fixe (320 px)
+  });
+
+  it("la liste masquée l'est réellement", () => {
+    expect(rulesFor(".docseeker-history-list[hidden]").join(" ")).toMatch(/display:\s*none/);
+  });
+
+  it("options et bouton ont une cible de 32 px, l'option active est visible (fond + contour)", () => {
+    expect(rulesFor(".docseeker-history-option").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-history-toggle").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-history-toggle").join(" ")).toMatch(/min-width:\s*32px/);
+    const selected = rulesFor('.docseeker-history-option[aria-selected="true"]').join(" ");
+    expect(selected).toMatch(/background/);
+    expect(selected).toMatch(/outline:\s*2px solid var\(--b3-theme-primary\)/);
+  });
+
+  it("le bouton a un focus visible fort", () => {
+    expect(rulesFor(".docseeker-history-toggle:focus-visible").join(" ")).toContain(FOCUS);
+  });
+
+  it("le texte long d'une requête passe à la ligne", () => {
+    expect(rulesFor(".docseeker-history-option").join(" ")).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+});

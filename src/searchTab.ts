@@ -10,6 +10,7 @@ import { createPageMatchService } from "./search/pageMatches";
 import { createProximityRanker } from "./search/proximityRanker";
 import { DEFAULT_OPTIONS, isProposedSort, listFolders } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
+import { addToHistory, clearHistory, removeFromHistory } from "./search/searchHistory";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
@@ -63,6 +64,8 @@ export interface SearchTabDeps {
    * Réglages persistés : le tri et le regroupement y sont lus au montage et réécrits à chaque changement.
    * Si le fichier n'est pas encore lu au montage (`ready` en attente), l'onglet démarre avec les défauts puis applique
    * UNE fois les valeurs lues, sauf pour un réglage que l'utilisateur a déjà changé entre-temps.
+   * L'historique des requêtes suit la même discipline (une requête soumise avant la fin de la lecture est fusionnée
+   * avec l'historique lu, jamais écrite par-dessus) mais se lit toujours dans `get()` une fois le fichier lu.
    * Les filtres n'y vont jamais ; l'onglet ne s'abonne pas aux changements externes.
    */
   readonly settings?: {
@@ -74,6 +77,8 @@ export interface SearchTabDeps {
 
 export interface SearchTab {
   dispose(): void;
+  /** Met le focus sur le champ de recherche (commande « Aller au champ de recherche PDF »). `false` : onglet fermé ou focus refusé. */
+  focusInput(): boolean;
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -170,9 +175,50 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       fail(error);
     }
   };
+  /**
+   * Écriture de l'historique, à chaque soumission : un échec persistant (disque plein) n'est journalisé qu'une fois
+   * tant qu'il dure, et ne fait pas clignoter la zone de messages (l'historique n'est pas un réglage visible).
+   */
+  let historyWriteFailing = false;
+  const persistHistory = (history: string[]): void => {
+    const settings = deps.settings;
+    if (!settings) return;
+    const fail = (error: unknown): void => {
+      if (historyWriteFailing) return;
+      historyWriteFailing = true;
+      onWarn("Historique des requêtes non enregistré", error);
+    };
+    try {
+      settings.update({ history }).then(() => {
+        historyWriteFailing = false;
+      }, fail);
+    } catch (error) {
+      fail(error);
+    }
+  };
   /** Réglages que l'utilisateur a changés lui-même : la lecture tardive du fichier ne les écrase pas. */
   let sortTouched = false;
   let groupTouched = false;
+  // Historique des requêtes : avant la fin de la lecture du fichier, copie locale + opérations rejouées sur l'historique lu.
+  type HistoryOp = (history: readonly string[]) => string[];
+  let historyLoaded = deps.settings?.ready === undefined;
+  /** Lecture des réglages en échec : l'historique reste en mémoire pour la session, jamais écrit (le fichier est illisible). */
+  let historyReadFailed = false;
+  let localHistory: readonly string[] = [...(saved?.history ?? [])];
+  const pendingHistoryOps: HistoryOp[] = [];
+  const currentHistory = (): readonly string[] =>
+    historyLoaded && deps.settings ? (deps.settings.get().history ?? []) : localHistory;
+  const editHistory = (op: HistoryOp): void => {
+    if (disposed) return;
+    const next = op(currentHistory());
+    if (!historyLoaded) {
+      if (!historyReadFailed) pendingHistoryOps.push(op);
+      localHistory = next;
+      return;
+    }
+    if (!deps.settings) localHistory = next; // sans réglages, la copie locale est la seule source
+    persistHistory(next);
+  };
   const controllerListeners = new Set<() => void>();
   const pageMatches = createPageMatchService({
     readDsx: async (docId) => {
@@ -301,7 +347,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     }
   };
 
-  const open = async (docId: string, page: number, query: string): Promise<void> => {
+  const open = async (docId: string, page: number, query: string, alternate: boolean): Promise<void> => {
     openController?.abort();
     const mine = new AbortController();
     openController = mine;
@@ -337,6 +383,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
         page,
         rects,
         focusIndex,
+        ...(alternate ? { position: "right" as const } : {}), // Alt+clic / Ctrl+Entrée : à droite
         onWarn: (message) => onWarn(message),
       });
     } catch (error) {
@@ -370,8 +417,14 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       return () => controllerListeners.delete(listener);
     },
     thumbnails: loader,
-    onOpen: (docId, page, query) => {
-      void open(docId, page, query);
+    onOpen: (docId, page, query, opts) => {
+      void open(docId, page, query, opts?.alternate === true);
+    },
+    history: {
+      get: currentHistory,
+      add: (query) => editHistory((history) => addToHistory(history, query)),
+      remove: (query) => editHistory((history) => removeFromHistory(history, query)),
+      clear: () => editHistory(() => clearHistory()),
     },
     ...(deps.onOpenSettings ? { onOpenSettings: deps.onOpenSettings } : {}),
     getDocMeta: (docId) => {
@@ -410,8 +463,20 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   const pendingSettings = deps.settings;
   if (pendingSettings?.ready) {
     const applyLoaded = (): void => {
-      if (disposed) return;
       const loaded = pendingSettings.get();
+      try {
+        // L'historique lu devient la référence ; ce que l'utilisateur a soumis entre-temps est rejoué dessus,
+        // même si l'onglet a été fermé entre-temps (l'écriture compte, la présentation non).
+        historyLoaded = true;
+        if (pendingHistoryOps.length > 0) {
+          const merged = pendingHistoryOps.splice(0).reduce<string[]>((list, op) => op(list), [...(loaded.history ?? [])]);
+          persistHistory(merged);
+        }
+      } finally {
+        if (!disposed) applyPresentation(loaded);
+      }
+    };
+    const applyPresentation = (loaded: DocSeekerSettings): void => {
       try {
         if (!sortTouched) {
           const current = controller.getOptions();
@@ -426,7 +491,13 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
         }
       }
     };
-    pendingSettings.ready.then(applyLoaded).catch((error: unknown) => onWarn("Application des réglages mémorisés en échec", error));
+    pendingSettings.ready.then(applyLoaded, (error: unknown) => {
+      // Fichier illisible : on n'écrit rien par-dessus (les opérations en attente écraseraient peut-être l'historique réel).
+      // L'historique de la session reste utilisable en mémoire.
+      historyReadFailed = true;
+      pendingHistoryOps.length = 0;
+      onWarn("Lecture des réglages impossible : l'historique de cette session n'est pas enregistré", error);
+    }).catch((error: unknown) => onWarn("Application des réglages mémorisés en échec", error));
   }
 
 
@@ -447,6 +518,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   syncSharedError();
 
   return {
+    focusInput: () => !disposed && view.focusInput(),
     dispose() {
       if (disposed) return;
       disposed = true;

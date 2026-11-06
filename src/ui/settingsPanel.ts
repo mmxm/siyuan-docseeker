@@ -10,6 +10,10 @@ import { FREQUENCY_MINUTES, type DocSeekerSettings } from "../settings";
 import { ensureSearchStyle } from "./searchStyles";
 
 export const MESSAGE_TIMEOUT_MS = 6000;
+/** Durée de la trace des touches. */
+export const TRACE_KEYS_MS = 30_000;
+/** Plafond de la zone de trace, distinct de celui du journal des avertissements (qu'elle ne doit pas chasser). */
+export const TRACE_LOG_MAX = 200;
 let panelSeq = 0;
 
 type MessageType = "info" | "error";
@@ -67,6 +71,11 @@ export interface SettingsPanelDeps {
   /** Rafraîchit l'index de recherche partagé après un vidage. */
   readonly refreshIndex: () => Promise<void>;
   readonly runDiagnostic: () => Promise<string>;
+  /**
+   * Diagnostic clavier (R6) : démarre la trace des touches de l'onglet de recherche, envoie chaque ligne à `log`,
+   * renvoie la fonction d'arrêt, ou `undefined` s'il n'y a aucun onglet à tracer. Absent : pas de bouton.
+   */
+  readonly startKeyTrace?: (log: (line: string) => void) => (() => void) | undefined;
   readonly warnLog: {
     warn(message: string, error?: unknown): void;
     entries(): readonly string[];
@@ -340,6 +349,80 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
     }
   });
 
+  // --- Trace des touches (R6) : 30 s, les lignes vont au journal ci-dessous. Bloc d'état sans région live.
+  let traceButton: HTMLButtonElement | undefined;
+  let traceStatus: HTMLPreElement | undefined;
+  let stopTrace: (() => void) | undefined;
+  let traceLines: string[] = [];
+  let traceLog: HTMLPreElement | undefined;
+  let traceSeen = 0;
+  let traceTimer: ReturnType<typeof setTimeout> | undefined;
+  const endTrace = (): void => {
+    if (traceTimer !== undefined) clearTimeout(traceTimer);
+    traceTimer = undefined;
+    const stop = stopTrace;
+    stopTrace = undefined;
+    traceButton?.removeAttribute("aria-disabled");
+    try {
+      stop?.();
+    } catch (error) {
+      warnLog.warn("Arrêt de la trace des touches en échec", error);
+    }
+  };
+  const appendTrace = (line: string): void => {
+    if (!stopTrace || !traceLog) return; // trace arrêtée : lignes tardives ignorées
+    traceSeen += 1;
+    traceLines.push(line);
+    if (traceLines.length > TRACE_LOG_MAX) traceLines = traceLines.slice(-TRACE_LOG_MAX);
+    traceLog.hidden = false;
+    traceLog.textContent = traceLines.join("\n");
+  };
+  if (deps.startKeyTrace) {
+    const startKeyTrace = deps.startKeyTrace;
+    const status = textBlock({ live: false, label: t("traceKeys") });
+    status.className = "docseeker-trace-status";
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className = "b3-button b3-button--outline docseeker-action docseeker-trace-keys";
+    button.textContent = t("traceKeys");
+    // Zone dédiée avec son propre plafond : les lignes de trace n'entrent pas dans le journal des avertissements.
+    const traceZone = textBlock({ live: false, label: t("traceKeys") });
+    traceZone.className = "docseeker-log docseeker-trace-log";
+    traceZone.setAttribute("role", "group");
+    traceZone.tabIndex = 0;
+    traceZone.hidden = true;
+    traceLog = traceZone;
+    button.addEventListener("click", () => {
+      if (stopTrace) return; // trace déjà en cours
+      let stop: (() => void) | undefined;
+      traceLines = [];
+      traceSeen = 0;
+      traceZone.textContent = "";
+      traceZone.hidden = true;
+      try {
+        stop = startKeyTrace(appendTrace);
+      } catch (error) {
+        warnLog.warn("Trace des touches impossible", error);
+        status.textContent = t("traceKeysFailed");
+        return;
+      }
+      if (!stop) {
+        status.textContent = t("traceKeysNoTab");
+        return;
+      }
+      stopTrace = stop;
+      button.setAttribute("aria-disabled", "true");
+      status.textContent = t("traceKeysRunning");
+      traceTimer = setTimeout(() => {
+        const seen = traceSeen;
+        endTrace();
+        status.textContent = seen > 0 ? t("traceKeysDone") : t("traceKeysNoKey");
+      }, TRACE_KEYS_MS);
+    });
+    traceButton = button;
+    traceStatus = status;
+  }
+
   // --- Journal des avertissements : groupe nommé, focusable (défilement au clavier), non annoncé.
   const log = textBlock({ live: false, label: t("warnLog") });
   log.className = "docseeker-log";
@@ -412,11 +495,21 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
     autoIndexInterval: container(intervalSelect, intervalDesc),
     reindex: container(indexButton, indexStatus, indexProgress),
     clearIndex: container(clearButton, clearStatus, clearAlert),
-    diagnostic: container(diagnosticButton, diagnosticStatus, diagnosticReport),
+    diagnostic: container(
+      diagnosticButton,
+      diagnosticStatus,
+      diagnosticReport,
+      ...(traceButton && traceStatus && traceLog ? [traceButton, traceStatus, traceLog] : []),
+    ),
     log: container(log),
     dispose() {
       if (disposed) return;
       disposed = true;
+      // La boîte de réglages n'est pas modale : on aurait pu laisser la trace courir, mais elle serait alors
+      // invisible et sans arrêt possible. Elle s'arrête donc à la fermeture, et le journal le dit.
+      const wasTracing = stopTrace !== undefined;
+      endTrace();
+      if (wasTracing) warnLog.warn("Trace des touches arrêtée (panneau fermé)");
       unsubscribeIndexer();
       unsubscribeLog();
       unsubscribeClearing();

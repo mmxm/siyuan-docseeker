@@ -1,3 +1,4 @@
+import { normalizeHistory } from "./search/searchHistory";
 import { DEFAULT_SORT, isRecord, sortFromValue, type SortSpec } from "./search/resultOptions";
 
 /**
@@ -15,6 +16,8 @@ export interface DocSeekerSettings {
   readonly sort: SortSpec;
   /** Résultats regroupés par document (vrai) ou liste plate de pages. */
   readonly groupByDocument: boolean;
+  /** Requêtes soumises, la plus récente en tête (20 au plus). */
+  readonly history: readonly string[];
 }
 
 export const DEFAULT_SETTINGS: DocSeekerSettings = {
@@ -22,6 +25,7 @@ export const DEFAULT_SETTINGS: DocSeekerSettings = {
   intervalMinutes: 5,
   sort: DEFAULT_SORT,
   groupByDocument: true,
+  history: [],
 };
 
 type Warn = (message: string, error?: unknown) => void;
@@ -33,7 +37,7 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
     onWarn("Réglages illisibles : valeurs par défaut utilisées (indexation automatique activée, vérification toutes les 5 minutes)");
     return DEFAULT_SETTINGS;
   }
-  const { autoIndex, intervalMinutes, sort, groupByDocument } = raw;
+  const { autoIndex, intervalMinutes, sort, groupByDocument, history } = raw;
   let nextAuto = DEFAULT_SETTINGS.autoIndex;
   if (autoIndex !== undefined) {
     if (typeof autoIndex === "boolean") nextAuto = autoIndex;
@@ -65,7 +69,16 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
     if (typeof groupByDocument === "boolean") nextGroup = groupByDocument;
     else onWarn("Réglage « regrouper par document » invalide : défaut utilisé (activé)");
   }
-  return { autoIndex: nextAuto, intervalMinutes: nextInterval, sort: nextSort, groupByDocument: nextGroup };
+  // Champ absent (ancien fichier) : liste vide sans avertissement ; sinon toute correction est signalée.
+  const nextHistory = normalizeHistory(history);
+  if (!nextHistory.valid) onWarn("Réglage « historique des requêtes » invalide ou corrigé : entrées valides conservées");
+  return {
+    autoIndex: nextAuto,
+    intervalMinutes: nextInterval,
+    sort: nextSort,
+    groupByDocument: nextGroup,
+    history: nextHistory.history,
+  };
 }
 
 export interface SettingsDeps {

@@ -14,6 +14,8 @@ const NEW_KEYS = [
   "sortBy", "sortRelevanceDesc", "sortRelevanceAsc", "sortModifiedAsc", "sortModifiedDesc", "sortNameAsc", "sortNameDesc",
   "sortPathAsc", "sortMatchesDesc", "groupByDocument", "expandAll", "collapseAll", "rankingRefinedPages",
   "flatMoreOne", "flatMoreMany", "settingNotSaved",
+  "historyLabel", "historyClear", "historyShow", "commandOpenSearch", "commandFocusSearch",
+  "traceKeys", "traceKeysRunning", "traceKeysDone", "traceKeysNoTab", "traceKeysFailed", "traceKeysNoKey",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
 
@@ -123,6 +125,13 @@ describe("i18n/fr_FR.json", () => {
     for (const key of NEW_KEYS.filter((k) => k.startsWith("filter") || k.startsWith("hiddenBy") || k.startsWith("noResultFilters"))) {
       expect(DEFAULT_STRINGS[key], key).toBe(fr[key]);
     }
+  });
+
+  it.each(["historyLabel", "historyClear", "historyShow"])("%s : valeur non vide, identique dans la vue et fr_FR.json", async (key) => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    expect(fr[key]?.trim()).toBeTruthy();
+    expect(DEFAULT_STRINGS[key]?.trim()).toBeTruthy();
+    expect(DEFAULT_STRINGS[key]).toBe(fr[key]);
   });
 
   it("libellés du tri et du regroupement : ceux de la recherche native de SiYuan quand ils existent", () => {

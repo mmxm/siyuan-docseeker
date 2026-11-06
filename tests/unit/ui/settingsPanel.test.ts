@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   createClearingFlag,
   createSettingsPanel,
@@ -822,5 +822,195 @@ describe("settingsPanel : cycle de vie", () => {
     expect(h.listeners.size).toBe(0);
     expect(h.warnListeners.size).toBe(0);
     expect(h.clearing.listenerCount()).toBe(0);
+  });
+});
+
+describe("settingsPanel : trace des touches (R6)", () => {
+  const TRACE_STRINGS: Record<string, string> = {
+    traceKeys: "Tracer les touches",
+    traceKeysRunning: "Trace active",
+    traceKeysDone: "Trace terminée",
+    traceKeysNoTab: "Aucun onglet de recherche",
+    traceKeysFailed: "Trace impossible",
+    traceKeysNoKey: "Aucune touche reçue",
+  };
+  const traceLog = (el: HTMLElement) => el.querySelector<HTMLElement>(".docseeker-trace-log")!;
+  const traceButton = (el: HTMLElement) => el.querySelector<HTMLButtonElement>("button.docseeker-trace-keys");
+  const traceStatus = (el: HTMLElement) => el.querySelector<HTMLElement>(".docseeker-trace-status")!;
+
+  function withTrace(startKeyTrace: NonNullable<SettingsPanelDeps["startKeyTrace"]>) {
+    return createSettingsPanel({ ...h.deps, t: (key) => TRACE_STRINGS[key] ?? STRINGS[key] ?? key, startKeyTrace });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sans startKeyTrace : aucun bouton", () => {
+    const panel = createSettingsPanel(h.deps);
+    expect(traceButton(panel.diagnostic)).toBeNull();
+  });
+
+  it("le bouton « Tracer les touches » suit le bouton du diagnostic (le premier bouton reste le diagnostic)", () => {
+    const panel = withTrace(() => () => undefined);
+    expect(btn(panel.diagnostic).classList.contains("docseeker-diagnostic")).toBe(true);
+    expect(traceButton(panel.diagnostic)!.textContent).toBe("Tracer les touches");
+  });
+
+  it("un clic active la trace 30 s : les lignes vont dans la zone dédiée (pas au journal des avertissements), puis elle s'arrête seule", () => {
+    const stop = vi.fn();
+    let log: (line: string) => void = () => undefined;
+    const start = vi.fn((l: (line: string) => void) => {
+      log = l;
+      return stop;
+    });
+    const panel = withTrace(start);
+    traceButton(panel.diagnostic)!.click();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(traceStatus(panel.diagnostic).textContent).toBe("Trace active");
+    log("12:00:00.000 window capture key=ArrowDown");
+    expect(traceLog(panel.diagnostic).textContent).toContain("12:00:00.000 window capture key=ArrowDown");
+    expect(h.lines.join("\n")).not.toContain("ArrowDown");
+    expect(h.warn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(29_999);
+    expect(stop).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(traceStatus(panel.diagnostic).textContent).toBe("Trace terminée");
+  });
+
+  it("la trace a son propre plafond : 300 lignes ne chassent aucun vrai avertissement du journal", () => {
+    let log: (line: string) => void = () => undefined;
+    const panel = withTrace((l) => {
+      log = l;
+      return () => undefined;
+    });
+    h.warn("12:00:00 vrai avertissement");
+    traceButton(panel.diagnostic)!.click();
+    for (let i = 0; i < 300; i += 1) log(`ligne ${i}`);
+    expect(h.lines).toEqual(["12:00:00 vrai avertissement"]);
+    const shown = traceLog(panel.diagnostic).textContent!.split("\n");
+    expect(shown).toHaveLength(200);
+    expect(shown[0]).toBe("ligne 100");
+    expect(shown.at(-1)).toBe("ligne 299");
+    expect(panel.log.textContent).toContain("vrai avertissement");
+  });
+
+  it("30 s sans aucune touche vue : message « aucune touche reçue »", () => {
+    const panel = withTrace(() => () => undefined);
+    traceButton(panel.diagnostic)!.click();
+    vi.advanceTimersByTime(30_000);
+    expect(traceStatus(panel.diagnostic).textContent).toBe("Aucune touche reçue");
+  });
+
+  it("30 s avec au moins une touche vue : « Trace terminée »", () => {
+    let log: (line: string) => void = () => undefined;
+    const panel = withTrace((l) => {
+      log = l;
+      return () => undefined;
+    });
+    traceButton(panel.diagnostic)!.click();
+    log("12:00:00.000 window capture key=Enter");
+    vi.advanceTimersByTime(30_000);
+    expect(traceStatus(panel.diagnostic).textContent).toBe("Trace terminée");
+  });
+
+  it("une nouvelle trace repart d'une zone vide", () => {
+    let log: (line: string) => void = () => undefined;
+    const panel = withTrace((l) => {
+      log = l;
+      return () => undefined;
+    });
+    const b = traceButton(panel.diagnostic)!;
+    b.click();
+    log("ancienne");
+    vi.advanceTimersByTime(30_000);
+    b.click();
+    expect(traceLog(panel.diagnostic).textContent).not.toContain("ancienne");
+  });
+
+  it("fermeture du panneau pendant la trace : arrêtée, avec un message d'arrêt dans le journal", () => {
+    const stop = vi.fn();
+    const panel = withTrace(() => stop);
+    traceButton(panel.diagnostic)!.click();
+    panel.dispose();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(h.lines).toContain("Trace des touches arrêtée (panneau fermé)");
+  });
+
+  it("fermeture du panneau sans trace en cours (ou déjà terminée) : pas de message d'arrêt", () => {
+    const panel = withTrace(() => () => undefined);
+    traceButton(panel.diagnostic)!.click();
+    vi.advanceTimersByTime(30_000);
+    panel.dispose();
+    expect(h.lines.join("\n")).not.toContain("arrêtée");
+    const other = withTrace(() => () => undefined);
+    other.dispose();
+    expect(h.lines.join("\n")).not.toContain("arrêtée");
+  });
+
+  it("une ligne reçue après l'arrêt est ignorée", () => {
+    let log: (line: string) => void = () => undefined;
+    const panel = withTrace((l) => {
+      log = l;
+      return () => undefined;
+    });
+    traceButton(panel.diagnostic)!.click();
+    vi.advanceTimersByTime(30_000);
+    log("tardive");
+    expect(traceLog(panel.diagnostic).textContent).not.toContain("tardive");
+  });
+
+  it("un second clic pendant la trace n'en lance pas une autre ; après la fin, on peut recommencer", () => {
+    const start = vi.fn(() => () => undefined);
+    const panel = withTrace(start);
+    const b = traceButton(panel.diagnostic)!;
+    b.click();
+    b.click();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(b.getAttribute("aria-disabled")).toBe("true");
+    vi.advanceTimersByTime(30_000);
+    expect(b.hasAttribute("aria-disabled")).toBe(false);
+    b.click();
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it("aucun onglet de recherche ouvert (startKeyTrace renvoie undefined) : message, aucun minuteur", () => {
+    const panel = withTrace(() => undefined);
+    traceButton(panel.diagnostic)!.click();
+    expect(traceStatus(panel.diagnostic).textContent).toBe("Aucun onglet de recherche");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(traceButton(panel.diagnostic)!.hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("startKeyTrace qui lève : journalisé, état d'échec, bouton réutilisable", () => {
+    const panel = withTrace(() => {
+      throw new Error("boum");
+    });
+    traceButton(panel.diagnostic)!.click();
+    expect(h.warn).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
+    expect(traceStatus(panel.diagnostic).textContent).toBe("Trace impossible");
+    expect(traceButton(panel.diagnostic)!.hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("dispose pendant la trace : arrêtée, minuteur annulé", () => {
+    const stop = vi.fn();
+    const panel = withTrace(() => stop);
+    traceButton(panel.diagnostic)!.click();
+    panel.dispose();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(60_000);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("le bloc d'état n'est pas une région live", () => {
+    const panel = withTrace(() => () => undefined);
+    const status = traceStatus(panel.diagnostic);
+    expect(status.hasAttribute("aria-live")).toBe(false);
+    expect(status.getAttribute("role")).toBeNull();
   });
 });

@@ -5,6 +5,15 @@
 import type { IndexActivitySnapshot } from "../indexer/indexActivity";
 import type { ResultDoc, SearchViewModel } from "../search/searchController";
 import { countActiveFilters, type SearchOptions } from "../search/resultOptions";
+import {
+  docBoundaryIndex,
+  navigableIndices,
+  nextCardIndex,
+  nextHistoryIndex,
+  resolveHistoryKey,
+  resolveKey,
+  type Rect,
+} from "./keyboardNav";
 import { containingFolder } from "./pathLabel";
 import { ensureSearchStyle } from "./searchStyles";
 import { mountSearchToolbar, type SearchToolbar } from "./searchToolbar";
@@ -27,7 +36,18 @@ export interface SearchViewDeps {
   readonly controller: { submit(q: string): void; getViewModel(): SearchViewModel };
   readonly subscribe: (listener: () => void) => () => void;
   readonly thumbnails: ThumbnailAttacher;
-  onOpen(docId: string, page: number, query: string): void;
+  /** `alternate` : ouvrir à droite (Alt+clic, Ctrl/Cmd+Entrée). */
+  onOpen(docId: string, page: number, query: string, opts?: { alternate: boolean }): void;
+  /** Mesure d'une carte pour les flèches Haut/Bas (défaut : `getBoundingClientRect`) ; injectable pour les tests. */
+  readonly measure?: (el: HTMLElement) => Rect;
+  /** Historique des requêtes soumises : absent, le champ reste un simple champ de recherche. */
+  readonly history?: {
+    /** Lue à chaque ouverture de la liste (la plus récente en tête). */
+    get(): readonly string[];
+    add(query: string): void;
+    remove(query: string): void;
+    clear(): void;
+  };
   /** Ouvre le panneau de paramètres du plugin (où se lance l'indexation). */
   onOpenSettings?(): void;
   getDocMeta(docId: string): { pdfSize: number; pdfModifiedMs: number } | undefined;
@@ -53,7 +73,8 @@ export interface SearchViewDeps {
 
 export interface SearchView {
   dispose(): void;
-  focusInput(): void;
+  /** `true` si le champ a bien reçu le focus (faux : vue détruite, champ masqué ou détaché). */
+  focusInput(): boolean;
   /** Change le regroupement sans notifier `onGroupByDocumentChange` (réglage mémorisé lu après le montage). */
   setGroupByDocument(groupByDocument: boolean): void;
   /** Resynchronise la barre d'outils (tri, filtres) avec les options courantes, sans attendre un rendu de résultats. */
@@ -150,6 +171,9 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   expandAll: "Élargir",
   collapseAll: "Réduire",
   rankingRefinedPages: "Pages classées par proximité et taille de police",
+  historyLabel: "Historique des requêtes",
+  historyClear: "Supprimer tout l'historique",
+  historyShow: "Afficher l'historique des requêtes",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -176,6 +200,10 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   input.placeholder = tr("searchPlaceholder");
   input.setAttribute("aria-label", tr("searchLabel"));
   input.setAttribute("enterkeyhint", "search");
+  // Conteneur du champ : repère de la liste d'historique (positionnée sous le champ).
+  const searchBox = doc.createElement("div");
+  searchBox.className = "docseeker-search-box";
+  searchBox.appendChild(input);
 
   // Deux régions live présentes dès le montage (sinon certains lecteurs d'écran n'annoncent rien).
   const statusEl = doc.createElement("div");
@@ -244,7 +272,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   flatNote.hidden = true;
   flatFooter.append(flatMore, flatNote);
 
-  root.append(input, ...(toolbarEl ? [toolbarEl] : []), ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list, flatFooter);
+  root.append(searchBox, ...(toolbarEl ? [toolbarEl] : []), ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list, flatFooter);
   host.appendChild(root);
   const opts = deps.options;
   // Fonctions liées explicitement : pas de spread de méthodes (qui perdrait `this` d'un objet à classe).
@@ -318,6 +346,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   const focusCard = (card: HTMLButtonElement): void => {
     for (const c of allCards()) c.tabIndex = c === card ? 0 : -1;
     card.focus();
+    card.scrollIntoView?.({ block: "nearest" });
   };
 
   /** Garantit une seule carte tabbable (roving tabindex) après ajout ou retrait de cartes. */
@@ -788,22 +817,197 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   };
   input.addEventListener("search", submitIfCleared);
   input.addEventListener("input", submitIfCleared);
-  // Taper ne lance rien : la recherche part à Entrée (hors composition IME).
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      if (e.isComposing) return;
-      e.preventDefault();
-      deps.controller.submit(input.value);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      input.value = "";
-      deps.controller.submit("");
-    } else if (e.key === "ArrowDown") {
-      const first = allCards()[0];
-      if (first) {
+  // --- Historique des requêtes : combobox éditable (le focus reste dans le champ, option active par aria-activedescendant).
+  const historyDeps = deps.history;
+  let historyOpen = false;
+  let historyActive = -1;
+  let historyQueries: readonly string[] = [];
+  let historyList: HTMLUListElement | undefined;
+  const historyOptions = (): HTMLElement[] =>
+    historyList ? Array.from(historyList.querySelectorAll<HTMLElement>('[role="option"]')) : [];
+
+  const setHistoryActive = (index: number): void => {
+    historyActive = index;
+    const options = historyOptions();
+    options.forEach((o, i) => o.setAttribute("aria-selected", String(i === index)));
+    const current = options[index];
+    if (current) {
+      input.setAttribute("aria-activedescendant", current.id);
+      current.scrollIntoView?.({ block: "nearest" });
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  };
+
+  const closeHistory = (): void => {
+    if (!historyOpen || !historyList) return;
+    historyOpen = false;
+    historyList.hidden = true;
+    historyList.replaceChildren();
+    input.setAttribute("aria-expanded", "false");
+    setHistoryActive(-1);
+  };
+
+  /** Reconstruit les options d'après l'historique courant ; faux (et fermée) s'il est vide. */
+  const fillHistory = (): boolean => {
+    if (!historyDeps || !historyList) return false;
+    historyQueries = [...historyDeps.get()];
+    if (historyQueries.length === 0) return false;
+    const makeOption = (text: string, className: string): HTMLLIElement => {
+      const li = doc.createElement("li");
+      li.id = nextUiId("docseeker-history-option");
+      li.className = className;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", "false");
+      li.textContent = text;
+      return li;
+    };
+    const options = historyQueries.map((q) => makeOption(q, "docseeker-history-option"));
+    options.push(makeOption(tr("historyClear"), "docseeker-history-option docseeker-history-clear"));
+    historyList.replaceChildren(...options);
+    return true;
+  };
+
+  const openHistory = (): boolean => {
+    if (disposed || !historyList || !fillHistory()) return false;
+    historyOpen = true;
+    historyList.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    setHistoryActive(-1);
+    return true;
+  };
+
+  /** Lance une recherche et la mémorise (les requêtes vides ne le sont pas). Seule voie de soumission au clavier ou à la souris. */
+  const submitQuery = (query: string): void => {
+    deps.controller.submit(query);
+    if (query.trim() !== "") historyDeps?.add(query);
+  };
+
+  const chooseHistory = (index: number): void => {
+    const query = historyQueries[index];
+    closeHistory();
+    if (query === undefined) {
+      historyDeps?.clear(); // dernière option : « Supprimer tout l'historique »
+      return;
+    }
+    input.value = query;
+    submitQuery(query);
+    input.focus();
+  };
+
+  /** Vrai si la touche a été traitée par la liste ouverte. */
+  const handleHistoryKey = (e: KeyboardEvent): boolean => {
+    const action = resolveHistoryKey(e);
+    switch (action.type) {
+      case "move":
         e.preventDefault();
-        focusCard(first);
+        setHistoryActive(nextHistoryIndex(historyActive, historyQueries.length, action.direction));
+        return true;
+      case "choose":
+        e.preventDefault();
+        if (historyActive >= 0) chooseHistory(historyActive);
+        else {
+          closeHistory();
+          submitQuery(input.value);
+        }
+        return true;
+      case "close":
+        if (action.consume) e.preventDefault();
+        closeHistory();
+        return true;
+      case "removeActive": {
+        const query = historyQueries[historyActive];
+        if (query === undefined) return false; // « aucune » ou « Supprimer tout » : rien à retirer
+        e.preventDefault();
+        historyDeps?.remove(query);
+        if (fillHistory()) setHistoryActive(-1);
+        else closeHistory();
+        return true;
       }
+      default:
+        return false;
+    }
+  };
+
+  let removeHistoryListeners: (() => void) | undefined;
+  if (historyDeps) {
+    const list = doc.createElement("ul");
+    list.className = "docseeker-history-list";
+    list.id = nextUiId("docseeker-history");
+    list.hidden = true;
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", tr("historyLabel"));
+    historyList = list;
+    const toggle = doc.createElement("button");
+    toggle.type = "button";
+    toggle.tabIndex = -1; // la souris seulement : au clavier, Alt+Bas
+    toggle.className = "b3-button b3-button--outline docseeker-history-toggle";
+    toggle.textContent = "▾";
+    toggle.title = tr("historyShow");
+    toggle.setAttribute("aria-label", tr("historyShow"));
+    toggle.setAttribute("aria-controls", list.id);
+    searchBox.append(toggle, list);
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-haspopup", "listbox");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-expanded", "false");
+    input.setAttribute("aria-controls", list.id);
+
+    // Garde le focus dans le champ pendant un clic sur le bouton ou une option.
+    const keepFocus = (e: Event): void => e.preventDefault();
+    toggle.addEventListener("mousedown", keepFocus);
+    list.addEventListener("mousedown", keepFocus);
+    toggle.addEventListener("click", () => {
+      if (historyOpen) closeHistory();
+      else openHistory();
+      input.focus();
+    });
+    list.addEventListener("click", (e) => {
+      const option = (e.target as Element).closest<HTMLElement>('[role="option"]');
+      if (!option) return;
+      const index = historyOptions().indexOf(option);
+      if (index >= 0) chooseHistory(index);
+    });
+    const onOutside = (e: Event): void => {
+      if (historyOpen && !searchBox.contains(e.target as Node)) closeHistory();
+    };
+    doc.addEventListener("mousedown", onOutside, true);
+    doc.addEventListener("click", onOutside, true);
+    removeHistoryListeners = () => {
+      doc.removeEventListener("mousedown", onOutside, true);
+      doc.removeEventListener("click", onOutside, true);
+    };
+  }
+  input.addEventListener("input", closeHistory); // la liste n'est pas filtrée : taper la ferme
+
+  // Taper ne lance rien : la recherche part à Entrée (hors composition IME). Les touches sont décidées par
+  // `resolveKey` ; `preventDefault` n'est appelé que si l'action a eu lieu.
+  input.addEventListener("keydown", (e) => {
+    if (historyOpen && handleHistoryKey(e)) return;
+    const action = resolveKey(e, "input");
+    switch (action.type) {
+      case "submit":
+        e.preventDefault();
+        submitQuery(input.value);
+        break;
+      case "clear":
+        e.preventDefault();
+        input.value = "";
+        deps.controller.submit("");
+        break;
+      case "move": {
+        const first = allCards()[0];
+        if (first) {
+          e.preventDefault();
+          focusCard(first);
+        }
+        break;
+      }
+      case "openHistory":
+        if (!historyOpen && openHistory()) e.preventDefault();
+        break;
+      default:
+        break;
     }
   });
 
@@ -841,40 +1045,76 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (!root.contains(doc.activeElement) || doc.activeElement === doc.body || doc.activeElement === resetButton) input.focus();
   });
 
+  const measure = deps.measure ?? ((el: HTMLElement): Rect => el.getBoundingClientRect());
+  const openCard = (card: HTMLButtonElement, alternate: boolean): void => {
+    const current = deps.controller.getViewModel();
+    deps.onOpen(
+      card.dataset["docId"] ?? "",
+      Number(card.dataset["page"]),
+      current.kind === "results" ? current.query : input.value,
+      { alternate },
+    );
+  };
+
   list.addEventListener("click", (e) => {
     const card = (e.target as Element).closest<HTMLButtonElement>("button.docseeker-card");
     if (!card) return;
-    const query = deps.controller.getViewModel();
-    deps.onOpen(card.dataset["docId"] ?? "", Number(card.dataset["page"]), query.kind === "results" ? query.query : input.value);
+    openCard(card, e.altKey); // Alt+clic : à droite, comme dans SiYuan
   });
   list.addEventListener("keydown", (e) => {
     const card = (e.target as Element).closest<HTMLButtonElement>("button.docseeker-card");
     if (!card) return;
-    if (e.key === "Enter") {
+    const action = resolveKey(e, "card");
+    if (action.type === "consume") {
+      e.preventDefault(); // Maj+Entrée : rien à ouvrir, mais pas de clic natif non plus
+    } else if (action.type === "open") {
       e.preventDefault();
-      card.click();
-    } else if (e.key === "Home" || e.key === "End") {
+      openCard(card, action.alternate);
+    } else if (action.type === "backToInput") {
       e.preventDefault();
-      const cards = allCards();
-      const target = e.key === "Home" ? cards[0] : cards[cards.length - 1];
-      if (target) focusCard(target);
-    } else if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      e.preventDefault();
-      const cards = allCards();
+      input.focus(); // sans vider la requête
+    } else if (action.type === "move") {
+      const every = allCards();
+      const rects = every.map(measure);
+      // Hors Haut/Bas, on se déplace parmi les cartes visibles (les masquées sont sautées).
+      const cards = navigableIndices(rects, every.indexOf(card)).map((k) => every[k]!);
       const i = cards.indexOf(card);
-      if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-        const next = cards[i + 1];
-        if (next) focusCard(next);
-      } else if (i > 0) {
-        focusCard(cards[i - 1]!);
-      } else if (e.key === "ArrowUp") {
+      let target: HTMLButtonElement | undefined;
+      let toInput = false;
+      switch (action.direction) {
+        case "left":
+          target = cards[i - 1];
+          break;
+        case "right":
+          target = cards[i + 1];
+          break;
+        case "first":
+          target = cards[0];
+          break;
+        case "last":
+          target = cards[cards.length - 1];
+          break;
+        case "up":
+        case "down": {
+          const at = nextCardIndex(rects, every.indexOf(card), action.direction);
+          if (at !== undefined) target = every[at];
+          else toInput = action.direction === "up"; // première ligne : le champ ; dernière ligne : rien
+          break;
+        }
+        case "prevDoc":
+        case "nextDoc": {
+          const at = docBoundaryIndex(cards.map((c) => c.dataset["docId"] ?? ""), i, action.direction === "prevDoc" ? "prev" : "next");
+          if (at !== undefined) target = cards[at];
+          break;
+        }
+      }
+      if (target) {
+        e.preventDefault();
+        focusCard(target);
+      } else if (toInput) {
+        e.preventDefault();
         input.focus();
       }
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      input.value = "";
-      deps.controller.submit("");
-      input.focus();
     }
   });
 
@@ -964,7 +1204,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   }
 
   return {
-    focusInput: () => input.focus(),
+    focusInput: () => {
+      if (disposed) return false;
+      input.focus();
+      return doc.activeElement === input;
+    },
     setGroupByDocument(next) {
       if (disposed || next === groupByDocument) return;
       groupByDocument = next;
@@ -979,6 +1223,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       if (disposed) return;
       disposed = true;
       unsubscribe();
+      removeHistoryListeners?.();
       cleanupActivity?.();
       toolbar?.dispose();
       clearList();

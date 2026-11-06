@@ -1,5 +1,6 @@
 import { Plugin, Setting, confirm, openTab, showMessage } from "siyuan";
 import { createKernelApi } from "./siyuan/kernelApi";
+import { traceKeys } from "./diagnostic/traceKeys";
 import { formatReport, runM0Diagnostic, type PdfjsLike } from "./diagnostic/m0";
 import { createAutoSync, type AutoSync, type AutoSyncConfig } from "./indexer/autoSync";
 import { createIndexActivity, type IndexActivity } from "./indexer/indexActivity";
@@ -10,8 +11,9 @@ import { discoverPdfs } from "./siyuan/discovery";
 import { createPetalStore, type PetalStore } from "./siyuan/petalStore";
 import { decodeIndexForSearch } from "./core/codec/decode";
 import { createSharedIndex, type SharedIndex } from "./search/sharedIndex";
-import { createWarnLog, mountSearchTab } from "./searchTab";
+import { createWarnLog, mountSearchTab, type SearchTab } from "./searchTab";
 import { ensureSearchStyle } from "./ui/searchStyles";
+import { isShown } from "./ui/visibility";
 import { createClearingFlag, createSettingsPanel, type SettingsPanel } from "./ui/settingsPanel";
 import type { OpenTabFn } from "./siyuan/openPdf";
 import type { RenderableDocument } from "./siyuan/pdfRenderer";
@@ -21,6 +23,9 @@ const TOP_BAR_ID = "docseeker-top-bar";
 const PETAL_ROOT = "/data/storage/petal";
 const ICON_NAME = "iconSearch";
 const COMMAND_OPEN_KEY = "openSearch";
+const COMMAND_FOCUS_KEY = "focusSearch";
+/** Le focus est redemandé peu après l'ouverture : l'onglet n'est pas toujours affiché quand `openTab` se résout. */
+const FOCUS_RETRY_MS = 50;
 
 /** Une saisie plus récente que cela retarde la synchronisation automatique (extraction dans le thread principal). */
 const TYPING_QUIET_MS = 3000;
@@ -83,10 +88,18 @@ export default class DocSeekerPlugin extends Plugin {
       callback: () => this.openSearchTab(),
     });
 
+    // Aucun raccourci par défaut (hotkey "") : l'utilisateur choisit le sien dans les réglages de SiYuan.
     this.addCommand({
       langKey: COMMAND_OPEN_KEY,
+      langText: this.t("commandOpenSearch"),
       hotkey: "",
       callback: () => this.openSearchTab(),
+    });
+    this.addCommand({
+      langKey: COMMAND_FOCUS_KEY,
+      langText: this.t("commandFocusSearch"),
+      hotkey: "",
+      callback: () => this.focusSearch(),
     });
   }
 
@@ -176,6 +189,8 @@ export default class DocSeekerPlugin extends Plugin {
   private sharedIndex: SharedIndex | null = null;
   private petalStore: PetalStore | null = null;
   private readonly tabCleanups = new Map<Element, Array<() => void>>();
+  /** Onglets de recherche ouverts, dans l'ordre d'ouverture (le dernier est la cible de « Aller au champ de recherche »). */
+  private readonly searchTabs = new Map<Element, SearchTab>();
   private readonly warnLog = createWarnLog();
   private panel: SettingsPanel | null = null;
   private autoSync: AutoSync | null = null;
@@ -205,6 +220,7 @@ export default class DocSeekerPlugin extends Plugin {
   }
 
   private disposeTab(host: Element): void {
+    this.searchTabs.delete(host);
     const cleanups = this.tabCleanups.get(host);
     this.tabCleanups.delete(host);
     for (const cleanup of cleanups ?? []) {
@@ -254,6 +270,12 @@ export default class DocSeekerPlugin extends Plugin {
       },
       refreshIndex: () => sharedIndex.refreshNow(),
       runDiagnostic: () => this.runDiagnostic(),
+      // Diagnostic clavier : trace les touches de l'onglet de recherche VISIBLE (le dernier, comme focusSearch).
+      startKeyTrace: (log) => {
+        const roots = [...document.querySelectorAll<HTMLElement>(".docseeker-search")].filter(isShown);
+        const root = roots.at(-1);
+        return root ? traceKeys(root, log) : undefined;
+      },
       warnLog: this.warnLog,
       showMessage: (message, timeoutMs, type) => showMessage(message, timeoutMs, type),
       confirm: (title, text, onConfirm, onCancel) =>
@@ -276,6 +298,47 @@ export default class DocSeekerPlugin extends Plugin {
       },
       openNewTab: true, // sans cela SiYuan refocalise l'onglet de recherche déjà ouvert (id fixe)
     });
+  }
+
+  /**
+   * Commande « Aller au champ de recherche PDF » : ramène devant le dernier onglet de recherche ouvert (SiYuan
+   * refocalise l'onglet existant quand `openNewTab` est absent) ou en ouvre un, puis focalise son champ.
+   */
+  private focusSearch(): void {
+    const hasTab = this.searchTabs.size > 0;
+    const fail = (error: unknown): void => this.warnLog.warn("Accès au champ de recherche impossible", error);
+    /** Focalise le champ du dernier onglet VISIBLE ; faux si aucun onglet n'est affiché ou si le focus est refusé. */
+    const focus = (): boolean => {
+      const visible = [...this.searchTabs].filter(([host]) => isShown(host));
+      const target = visible.at(-1)?.[1];
+      return target !== undefined && target.focusInput();
+    };
+    const attempt = (final: boolean): void => {
+      try {
+        if (!focus() && final) this.warnLog.warn("Champ de recherche non focalisé");
+      } catch (error) {
+        fail(error);
+      }
+    };
+    try {
+      void Promise.resolve(
+        openTab({
+          app: this.app,
+          custom: { id: `${this.name}${TAB_TYPE}`, icon: ICON_NAME, title: this.t("tabTitle") },
+          ...(hasTab ? {} : { openNewTab: true }),
+        }),
+      )
+        .then(() => {
+          if (this.unloaded) return;
+          attempt(false); // l'onglet n'est parfois affiché qu'ensuite : l'échec n'est signalé qu'au rattrapage
+          setTimeout(() => {
+            if (!this.unloaded) attempt(true);
+          }, FOCUS_RETRY_MS);
+        })
+        .catch(fail);
+    } catch (error) {
+      fail(error);
+    }
   }
 
   private renderTab(host: Element): void {
@@ -316,6 +379,7 @@ export default class DocSeekerPlugin extends Plugin {
       onWarn: (message, error) => this.warnLog.warn(message, error),
       t: (key) => this.t(key),
     });
+    this.searchTabs.set(host, searchTab);
     cleanups.push(() => searchTab.dispose());
   }
 
