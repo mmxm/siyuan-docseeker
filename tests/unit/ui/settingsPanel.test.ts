@@ -265,7 +265,7 @@ describe("settingsPanel : Réindexer", () => {
 });
 
 describe("settingsPanel : passes automatiques silencieuses", () => {
-  const zero = { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0 };
+  const zero = { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, migrated: 0, cancelled: false, incomplete: 0 };
 
   it("started puis idle à zéro, hors clic sur Réindexer : aucun message d'état", () => {
     const panel = createSettingsPanel(h.deps);
@@ -429,7 +429,7 @@ describe("settingsPanel : état « en cours » et passe silencieuse", () => {
     h.isIndexing.mockReturnValue(true);
     const panel = createSettingsPanel(h.deps);
     expect(statusOf(panel.reindex).textContent).toBe(STRINGS.indexRunning);
-    emit(h, { type: "idle", summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0 } });
+    emit(h, { type: "idle", summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, migrated: 0, cancelled: false, incomplete: 0 } });
     expect(statusOf(panel.reindex).textContent).toBe("");
     panel.dispose();
   });
@@ -505,16 +505,26 @@ describe("settingsPanel : reconstruction après vidage", () => {
 
 describe("describeEvent", () => {
   it("décrit chaque type d'événement, avec les accords au singulier", () => {
-    const many = { indexed: 2, skippedScanned: 2, failed: 3, removed: 4, cancelled: true, incomplete: 0 };
+    const many = { indexed: 2, skippedScanned: 2, failed: 3, removed: 4, migrated: 0, cancelled: true, incomplete: 0 };
     expect(describeEvent({ type: "idle", summary: many })).toBe(
       "Terminé : 2 indexés, 2 sans texte, 3 échecs, 4 supprimés (annulé)",
     );
-    const one = { indexed: 1, skippedScanned: 0, failed: 1, removed: 1, cancelled: false, incomplete: 0 };
+    const one = { indexed: 1, skippedScanned: 0, failed: 1, removed: 1, migrated: 0, cancelled: false, incomplete: 0 };
     expect(describeEvent({ type: "idle", summary: one })).toBe("Terminé : 1 indexé, 0 sans texte, 1 échec, 1 supprimé");
     expect(describeEvent({ type: "indexed", path: "p", pages: 1 })).toBe("Indexé : p (1 page)");
     expect(describeEvent({ type: "failed", path: "p", message: "m" })).toBe("Échec : p : m");
     expect(describeEvent({ type: "skipped-scanned", path: "p" })).toBe("PDF sans texte ignoré : p");
+    expect(describeEvent({ type: "plan", toIndex: 3, migrating: 2, complete: true })).toBe("Mise à jour de l'index : 2 PDF à migrer");
     expect(describeEvent({ type: "removed", path: "p" })).toBe("Index supprimé : p");
+  });
+
+  it("le bilan de fin de passe montre les PDF migrés, et seulement s'il y en a", () => {
+    const base = { indexed: 3, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0 };
+    expect(describeEvent({ type: "idle", summary: { ...base, migrated: 2 } })).toBe(
+      "Terminé : 3 indexés, 0 sans texte, 0 échecs, 0 supprimés, dont 2 migrés (ancien index mis à jour)",
+    );
+    expect(describeEvent({ type: "idle", summary: { ...base, migrated: 1 } })).toContain("dont 1 migré (");
+    expect(describeEvent({ type: "idle", summary: { ...base, migrated: 0 } })).not.toContain("migré");
   });
 });
 

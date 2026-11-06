@@ -22,7 +22,11 @@ export interface PageMatchServiceOptions {
 
 export interface PageMatchService {
   getPageMatches(docId: string, page: number, query: string, signal?: AbortSignal): Promise<PageMatch>;
-  /** Plusieurs pages en une lecture du .dsx et un seul décodage ; remplit le cache page par page. */
+  /**
+   * Plusieurs pages en une lecture du .dsx et un seul décodage. Réutilise les pages déjà en cache ou en vol, mais
+   * NE stocke PAS ses résultats : le re-classement mesure jusqu'à 60 documents x 5 pages (300 entrées), ce qui
+   * évincerait les pages affichées du LRU (200 entrées) ; le ranker garde lui-même ses mesures (petites).
+   */
   getPagesMatches(
     docId: string,
     pages: readonly number[],
@@ -147,20 +151,11 @@ export function createPageMatchService(options: PageMatchServiceOptions): PageMa
     return promise;
   }
 
-  /** Un décodage pour toutes les pages demandées ; chaque page est enregistrée comme appel en vol. */
+  /** Un décodage pour toutes les pages demandées ; chaque page est enregistrée comme appel en vol (sans cache). */
   function computeMany(docId: string, pages: readonly number[], query: string, normalized: string): Map<number, Promise<PageMatch>> {
-    const generation = generationOf(docId);
-    const batch = loadFile(docId)
-      .then((bytes) => decodePages(bytes, pages, makeTermMatcher(query), undefined, makeTermIndexer(query)))
-      .then((matches) => {
-        if (generationOf(docId) === generation) {
-          for (const page of pages) {
-            const match = matches.get(page);
-            if (match) storeResult(resultKey(docId, page, normalized), match);
-          }
-        }
-        return matches;
-      });
+    const batch = loadFile(docId).then((bytes) =>
+      decodePages(bytes, pages, makeTermMatcher(query), undefined, makeTermIndexer(query)),
+    );
     const out = new Map<number, Promise<PageMatch>>();
     for (const page of pages) {
       const key = resultKey(docId, page, normalized);
@@ -190,7 +185,7 @@ export function createPageMatchService(options: PageMatchServiceOptions): PageMa
         const key = resultKey(docId, page, normalized);
         const cached = results.get(key);
         if (cached) {
-          storeResult(key, cached);
+          storeResult(key, cached); // page affichée : on rafraîchit sa récence
           found.set(page, Promise.resolve(cached));
           continue;
         }

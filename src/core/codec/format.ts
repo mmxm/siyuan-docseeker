@@ -1,5 +1,5 @@
 /**
- * Format binaire `.dsx` (un index par PDF), version de format 1.
+ * Format binaire `.dsx` (un index par PDF), version de format 2 (le décodeur lit aussi la version 1).
  * Tous les entiers fixes sont little-endian. `varint` = LEB128 non signé canonique
  * (7 bits par octet, poids faible d'abord, bit 7 = suite ; pas d'octet final nul superflu ;
  * valeur <= 2^53-1).
@@ -36,13 +36,27 @@
  *                   croissantes, base 1, <= P), varint tf, tf varint de deltas d'ordinaux.
  *   3 boîtes      : P u32 (longueurs des blobs), puis P blobs deflate-raw (chacun
  *                   <= MAX_INFLATED_BLOB_BYTES une fois décompressé, décodable seul) contenant
+ *                   [v2 seulement : varint largeur de page, varint hauteur de page, en dixièmes de
+ *                   point, chacun dans 1..MAX_PAGE_DIMENSION_PT*10, soit 1 à 3 octets chacun],
  *                   varint n, puis n boîtes de 4 u16 (x, y, largeur, hauteur) en
  *                   fractions de 65535 ; la somme des longueurs doit égaler la section.
+ *
+ * Versions : la v1 n'a pas de taille de page (le décodeur applique alors le repli A4,
+ * ASSUMED_PAGE_WIDTH_PT x ASSUMED_PAGE_HEIGHT_PT) ; la v2 ajoute la taille de page (PDF.js, viewport
+ * d'échelle 1, rotation appliquée) en tête de chaque blob de boîtes, pour convertir les fractions de page
+ * en points (bonus de police, proximité). Versions rejetées explicitement : > 2 -> UnsupportedVersionError
+ * (fichier d'une version future) ; 0 -> CorruptDataError (aucune version du plugin ne l'a jamais écrite).
+ * L'encodeur écrit toujours la v2.
  */
+
+import { ASSUMED_PAGE_HEIGHT_PT, ASSUMED_PAGE_WIDTH_PT } from "../constants";
 
 export const DSX_MAGIC = "DSX1";
 export const DSX_MAGIC_BYTES: Readonly<Uint8Array> = new Uint8Array([0x44, 0x53, 0x58, 0x31]);
-export const DSX_FORMAT_VERSION = 1;
+/** Version écrite par l'encodeur (v2 : tailles de page). */
+export const DSX_FORMAT_VERSION = 2;
+/** Première version dont le blob de boîtes contient la taille de page. */
+export const DSX_PAGE_SIZE_FORMAT_VERSION = 2;
 
 export const MAGIC_LENGTH = 4;
 export const UINT16_MAX = 0xffff;
@@ -52,6 +66,22 @@ export const SOURCE_PATH_LENGTH_BYTES = 2;
 export const MAX_SOURCE_PATH_BYTES = UINT16_MAX;
 export const UINT32_MAX = 0xffff_ffff;
 export const DSX_MIN_FORMAT_VERSION = 1;
+/** Taille de page stockée en dixièmes de point. */
+export const PAGE_SIZE_UNITS_PER_PT = 10;
+/** Plafond d'une dimension de page, en points (la spécification PDF plafonne à 14 400 ; marge pour UserUnit). */
+export const MAX_PAGE_DIMENSION_PT = 20_000;
+/** Plafond d'une dimension de page en dixièmes de point (valeur stockée). */
+export const MAX_PAGE_DIMENSION_UNITS = MAX_PAGE_DIMENSION_PT * PAGE_SIZE_UNITS_PER_PT;
+
+/** Points -> dixièmes de point (arrondi). SEULE définition de l'arrondi au dixième : encodeur, décodeur, extraction. */
+export function pageDimensionToUnits(points: number): number {
+  return Math.round(points * PAGE_SIZE_UNITS_PER_PT);
+}
+
+/** Dixièmes de point -> points. */
+export function unitsToPageDimension(units: number): number {
+  return units / PAGE_SIZE_UNITS_PER_PT;
+}
 
 /** Taille maximale d'une section 0 à 2 décompressée (64 Mio ; un PDF de 5 000 pages en occupe quelques Mio). */
 export const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
@@ -112,6 +142,18 @@ export interface WordBox {
   readonly height: number;
 }
 
+/** Taille d'une page en points (PDF.js, viewport d'échelle 1), au dixième de point. */
+export interface PageSize {
+  readonly widthPt: number;
+  readonly heightPt: number;
+}
+
+/** Taille de page des fichiers v1 (qui n'en stockent pas) et des pages aberrantes : A4. SEULE définition. */
+export const FALLBACK_PAGE_SIZE: PageSize = Object.freeze({
+  widthPt: ASSUMED_PAGE_WIDTH_PT,
+  heightPt: ASSUMED_PAGE_HEIGHT_PT,
+});
+
 export interface Posting {
   /** Numéro de page, base 1. */
   readonly page: number;
@@ -138,6 +180,11 @@ export interface DocumentIndex {
   readonly terms: readonly TermEntry[];
   /** Une liste de boîtes par page (mêmes longueur que pageTermCounts). */
   readonly pageBoxes: readonly (readonly WordBox[])[];
+  /**
+   * Une taille par page (mêmes longueur que pageTermCounts). Obligatoire à l'encodage (v2). À la lecture d'un
+   * fichier v1, chaque entrée est le repli A4 (ASSUMED_PAGE_WIDTH_PT x ASSUMED_PAGE_HEIGHT_PT).
+   */
+  readonly pageSizes: readonly PageSize[];
 }
 
 export class DsxFormatError extends Error {
@@ -156,7 +203,7 @@ export class InvalidMagicError extends DsxFormatError {
 export class UnsupportedVersionError extends DsxFormatError {
   constructor(found: number) {
     super(
-      `Unsupported .dsx format version ${found} (this build supports up to version ${DSX_FORMAT_VERSION})`,
+      `Unsupported .dsx format version ${found} (this build reads versions ${DSX_MIN_FORMAT_VERSION} to ${DSX_FORMAT_VERSION})`,
     );
   }
 }

@@ -9,7 +9,7 @@ Recherche plein texte dans les PDF de votre espace SiYuan. Les résultats s'affi
 - **Recherche plein texte** dans les PDF du dossier `data/assets` (sous-dossiers inclus).
 - **Vignettes surlignées** : pour chaque page trouvée, un extrait de la page cadré sur la zone qui contient le plus de mots de la requête, avec les mots surlignés.
 - **Ouverture à la bonne page** : un clic ouvre le PDF dans le visualiseur de SiYuan, à la page trouvée, centré sur la zone, avec un calque de surlignage. Fonctionne aussi quand le PDF est déjà ouvert.
-- **Classement par proximité des mots** : pour une requête de plusieurs mots, les pages où les mots sont proches (sur la même ligne) remontent. Le classement reste proche de celui de DocSeeker, l'application d'origine, sans lui être identique.
+- **Classement par proximité des mots et taille de police** : pour une requête de plusieurs mots, les pages où les mots sont proches (sur la même ligne) remontent. Les passages écrits en gros caractères (titres) remontent aussi, y compris pour une requête d'un seul mot. Le classement reste proche de celui de DocSeeker, l'application d'origine, sans lui être identique.
 - **Pages dépliables** : chaque document n'affiche d'abord que quelques pages. « et N autres pages » en déplie 10 de plus à chaque clic (200 pages au maximum par document).
 
 ## Installation
@@ -49,7 +49,8 @@ Avant de pouvoir chercher, les PDF doivent être indexés.
 
 Comportement à connaître :
 
-- L'indexation est **automatique** (réglable dans les paramètres du plugin) : quelques secondes après le démarrage, au retour sur la fenêtre (au plus une fois toutes les 30 secondes), puis toutes les 5, 15 ou 60 minutes. Les PDF ajoutés ou modifiés sont indexés, les PDF supprimés sont retirés de l'index, les PDF inchangés ne sont pas relus. Elle attend que vous ayez fini de taper ou de défiler. **Réindexer** force une vérification immédiate.
+- L'indexation est **automatique** (réglable dans les paramètres du plugin) : quelques secondes après le démarrage, au retour sur la fenêtre (au plus une fois toutes les 30 secondes), puis toutes les 5, 15 ou 60 minutes. Les PDF ajoutés ou modifiés sont indexés, les PDF supprimés sont retirés de l'index, les PDF inchangés ne sont pas relus (sauf une fois, après une mise à jour du format d'index, voir ci-dessous). Elle attend que vous ayez fini de taper ou de défiler. **Réindexer** force une vérification immédiate.
+- **Mise à jour du format** : les index créés par la version précédente du plugin sont mis à jour automatiquement, une fois, PDF par PDF (le statut indique « Mise à jour de l'index »). Pendant la mise à jour, la recherche reste possible avec l'ancien index. Sur une grande bibliothèque, cette mise à jour peut prendre longtemps : sa durée n'a pas été mesurée.
 - Un PDF qui échoue (corrompu, vide) est retenté à intervalles espacés ; l'onglet de recherche signale les échecs et les dossiers non lisibles, le détail est dans le journal des paramètres.
 - Si l'indexation s'interrompt (fermeture de SiYuan, par exemple), la prochaine réindexation reprend là où elle s'était arrêtée.
 - **Durée indicative** : environ 191 s pour 44 PDF, mesurés avec Node sur un disque local. Dans le navigateur, c'est plus long. Ces chiffres sont donnés à titre indicatif.
@@ -61,7 +62,7 @@ Comportement à connaître :
 - **Préfixe sur le dernier mot** : `diab` trouve « diabète », « diabétique », etc. Seul le dernier mot est traité ainsi.
 - **Accents et casse ignorés** : « diabete » trouve « Diabète ». La ponctuation est également ignorée.
 - Les résultats sont regroupés par document. Un clic sur une vignette ouvre le PDF à la page correspondante.
-- Une fois le classement par proximité calculé, le statut indique « Classement affiné par proximité des mots ».
+- Une fois le classement par proximité et taille de police calculé, le statut indique « Classement affiné par proximité des mots et taille de police ».
 - L'interface est en français uniquement.
 
 ## Limites connues
@@ -69,7 +70,8 @@ Comportement à connaître :
 - **Cible : webapp SiYuan sur ordinateur**, testée avec SiYuan 3.8.9. Le mobile n'est pas pris en charge. L'application de bureau est déclarée dans le manifeste mais n'a pas été testée.
 - **PDF sans texte ignorés** : un PDF scanné (image sans couche de texte) n'est pas indexé. Il est signalé dans l'onglet. Il n'y a pas d'OCR.
 - **Pas de sous-chaîne** : la recherche porte sur des mots entiers, avec préfixe sur le dernier mot. « pco » ne trouve pas « BPCO ».
-- **Classement proche de DocSeeker, pas identique** : la taille de police n'est pas prise en compte (ni dans le classement, ni dans le tri des occurrences). Les expressions entre guillemets ne sont pas gérées.
+- **Classement proche de DocSeeker, pas identique** : la taille de police est approchée par la hauteur des mots telle que PDF.js la fournit. Sur 3 PDF seulement, cette hauteur s'est révélée environ 6 à 12 % plus grande que celle que donne PyMuPDF, le moteur d'extraction de DocSeeker ; cet écart n'est pas corrigé. Seules les 5 meilleures pages de chaque document sont mesurées pour le classement. Les expressions entre guillemets ne sont pas gérées.
+- **Version précédente du plugin** : la version 0.2.0 ne sait pas lire les index mis à jour. Ne pas utiliser les deux versions sur le même dossier de SiYuan.
 - **Périmètre** : seuls les PDF de `data/assets` sont indexés, pas les documents SiYuan.
 
 ## Confidentialité

@@ -80,7 +80,7 @@ async function makePdfjs(): Promise<PdfjsLoader> {
 }
 
 /** Magasin disque limité à DSX_OUT ; le manifeste du pipeline reste en mémoire (un PDF par passe). */
-function makeStore(): Pick<PetalStore, "read" | "write" | "remove"> {
+function makeStore(): Pick<PetalStore, "read" | "write" | "remove" | "list"> {
   const memory = new Map<string, Uint8Array>();
   const isManifest = (name: string): boolean => name === "manifest.json";
   return {
@@ -92,6 +92,9 @@ function makeStore(): Pick<PetalStore, "read" | "write" | "remove"> {
     async write(name, bytes) {
       if (isManifest(name)) memory.set(name, bytes);
       else writeFileSync(join(DSX_OUT, name), bytes);
+    },
+    async list() {
+      return [...memory.keys()];
     },
     async remove() {
       return false; // jamais de suppression dans le dossier de travail
@@ -118,6 +121,7 @@ async function indexCorpus(entries: readonly PdfEntry[]): Promise<void> {
       store: makeStore(),
       loadPdf,
       now: Date.now,
+      onWarn: (message) => console.warn(message),
       concurrency: 1,
     });
     indexer.onEvent((event) => {

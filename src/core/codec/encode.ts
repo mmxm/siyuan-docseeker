@@ -5,6 +5,8 @@ import {
   DSX_MAGIC_BYTES,
   HEADER_OFFSETS,
   MAX_EXTRACTOR_VERSION_BYTES,
+  MAX_PAGE_DIMENSION_PT,
+  MAX_PAGE_DIMENSION_UNITS,
   MAX_SOURCE_PATH_BYTES,
   SECTION_ENTRY_BYTES,
   SOURCE_PATH_LENGTH_BYTES,
@@ -14,6 +16,8 @@ import {
   compareUtf8,
   mapInBatches,
   type DocumentIndex,
+  pageDimensionToUnits,
+  type PageSize,
   type TermEntry,
   type WordBox,
 } from "./format";
@@ -136,8 +140,29 @@ function quantizeBox(box: WordBox, where: string): readonly [number, number, num
   return [qx, qy, Math.min(q(box.width), UINT16_MAX - qx), Math.min(q(box.height), UINT16_MAX - qy)];
 }
 
-function encodeBoxes(boxes: readonly WordBox[], page: number): Uint8Array {
-  const writer = new ByteWriter(boxes.length * BYTES_PER_BOX + VARINT_MAX_BYTES);
+/** Dimension en dixièmes de point : entier de 1 à MAX_PAGE_DIMENSION_UNITS (RangeError sinon). */
+function pageDimensionUnits(name: string, value: number, page: number): number {
+  const units = pageDimensionToUnits(value);
+  if (!Number.isFinite(value) || units < 1 || units > MAX_PAGE_DIMENSION_UNITS) {
+    throw new RangeError(
+      `pageSizes[${page - 1}].${name} = ${value} must be in 0.1..${MAX_PAGE_DIMENSION_PT} points (page ${page})`,
+    );
+  }
+  return units;
+}
+
+/** Vérifie qu'une entrée de `pageSizes` est un objet (pas de cast : un trou ou un null nomme sa page). */
+function checkedPageSize(size: unknown, page: number): PageSize {
+  if (typeof size !== "object" || size === null) {
+    throw new RangeError(`pageSizes[${page - 1}] = ${String(size)} must be a { widthPt, heightPt } object (page ${page})`);
+  }
+  return size as PageSize;
+}
+
+function encodeBoxes(boxes: readonly WordBox[], size: PageSize, page: number): Uint8Array {
+  const writer = new ByteWriter(boxes.length * BYTES_PER_BOX + 3 * VARINT_MAX_BYTES);
+  writer.varint(pageDimensionUnits("widthPt", size.widthPt, page));
+  writer.varint(pageDimensionUnits("heightPt", size.heightPt, page));
   writer.varint(boxes.length);
   const cell = new Uint8Array(BYTES_PER_BOX);
   const view = new DataView(cell.buffer);
@@ -209,9 +234,12 @@ function encodeTermSections(index: DocumentIndex): { dictionary: Uint8Array; pos
   return { dictionary: dictionary.finish(), postings: postings.finish() };
 }
 
-async function encodeBoxesSection(pageBoxes: readonly (readonly WordBox[])[]): Promise<Uint8Array> {
+async function encodeBoxesSection(
+  pageBoxes: readonly (readonly WordBox[])[],
+  pageSizes: readonly PageSize[],
+): Promise<Uint8Array> {
   const blobs = await mapInBatches(pageBoxes, STREAM_CONCURRENCY, (boxes, i) =>
-    deflateRaw(encodeBoxes(boxes, i + 1)),
+    deflateRaw(encodeBoxes(boxes, checkedPageSize(pageSizes[i], i + 1), i + 1)),
   );
   return concat([...blobs.map((blob) => uint32Bytes("pageBlobLength", blob.length)), ...blobs]);
 }
@@ -269,6 +297,9 @@ export async function encodeIndex(index: DocumentIndex): Promise<Uint8Array> {
   if (index.pageBoxes.length !== index.pageTermCounts.length) {
     throw new Error("pageBoxes and pageTermCounts must have the same number of pages");
   }
+  if (!Array.isArray(index.pageSizes) || index.pageSizes.length !== index.pageTermCounts.length) {
+    throw new Error("pageSizes is required and must have the same number of pages as pageTermCounts");
+  }
   validateMetadata(index);
   const lengths = new ByteWriter();
   index.pageTermCounts.forEach((count) => lengths.varint(count));
@@ -277,7 +308,7 @@ export async function encodeIndex(index: DocumentIndex): Promise<Uint8Array> {
     await deflateRaw(lengths.finish()),
     await deflateRaw(dictionary),
     await deflateRaw(postings),
-    await encodeBoxesSection(index.pageBoxes),
+    await encodeBoxesSection(index.pageBoxes, index.pageSizes),
   ];
   return concat([encodeHeader(index, sections), ...sections]);
 }

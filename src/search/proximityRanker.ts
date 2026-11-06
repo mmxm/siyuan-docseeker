@@ -1,18 +1,33 @@
 /**
- * Reclassement par proximité des mots (bonus multi-mots de DocSeeker) : orchestre, pour une requête à au moins
- * deux mots, la mesure de la proximité sur les premières pages de chaque document, par fenêtres de
+ * Reclassement de DocSeeker (proximité des mots et taille de police) : orchestre, pour toute requête (un mot
+ * compris : le bonus de police s'applique aussi), la mesure sur les premières pages de chaque document, par fenêtres de
  * RERANK_WINDOW documents. La fenêtre 1 est rendue en premier ; les suivantes (jusqu'à RERANK_MAX_DOCS
  * documents) sont calculées en tâche de fond et notifiées via `onWindow`. Aucune dépendance au DOM.
  */
 import type { PageMatch } from "../core/codec/decode";
 import { PROXIMITY_PAGES, RERANK_WINDOW } from "../core/constants";
 import { tokenize } from "../core/normalize";
-import { groupOccurrences, multiTermBonus, orderTopPages, rerankWindows } from "./proximity";
+import {
+  fontBonus,
+  groupOccurrences,
+  multiTermBonus,
+  orderTopPages,
+  pageStats,
+  rerankWindows,
+  type PageStats,
+} from "./proximity";
 
 /** Nombre maximal de documents reclassés (fenêtres successives de RERANK_WINDOW). */
 export const RERANK_MAX_DOCS = 60;
-/** Documents mesurés en parallèle (le service garde peu de fichiers .dsx en mémoire). */
-const DOC_CONCURRENCY = 2;
+/** Documents mesurés en parallèle : 1, le décodage est du CPU sur un seul fil (le parallélisme n'apporte rien). */
+const DOC_CONCURRENCY = 1;
+
+/** Cède la main au fil principal (scheduler.yield si disponible, sinon une macro-tâche). */
+function defaultYieldToMain(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof scheduler?.yield === "function") return scheduler.yield();
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
 
 export interface RankableDoc {
   readonly docId: string;
@@ -28,7 +43,7 @@ export interface ProximityResult<T extends RankableDoc = RankableDoc> {
   readonly docs: readonly T[];
   /** Ordre des pages (toutes celles mesurées du document) par docId. Absent : ordre BM25 d'origine. */
   readonly pagesOrderByDoc: ReadonlyMap<string, readonly number[]>;
-  /** Bonus multi-mots par docId (0 si la mesure a échoué). Absent : document non mesuré. */
+  /** Bonus (multi-mots + police) par docId (0 si la mesure a échoué). Absent : document non mesuré. */
   readonly bonusByDoc: ReadonlyMap<string, number>;
   /** Documents dont la mesure a échoué (bonus 0, ordre BM25 conservé) : à ne pas compter comme mesurés. */
   readonly failedDocIds: ReadonlySet<string>;
@@ -62,6 +77,8 @@ export interface ProximityRankerDeps {
     query: string,
     signal?: AbortSignal,
   ) => Promise<ReadonlyMap<number, PageMatch>>;
+  /** Cède la main au fil principal entre deux documents mesurés (injectable : tests déterministes). */
+  readonly yieldToMain?: () => Promise<void>;
   /** Appelé une fois par re-classement pour ses échecs de mesure, et pour toute autre anomalie (jamais silencieux). */
   readonly onWarn?: (message: string, error?: unknown) => void;
 }
@@ -77,7 +94,12 @@ function abortError(): Error {
   return error;
 }
 
-/** Mesure la proximité d'un document : bonus multi-mots et ordre de ses pages. */
+/**
+ * Mesure la proximité d'un document : bonus multi-mots et ordre de ses pages.
+ * Périmètre : les PROXIMITY_PAGES (5) premières pages BM25 du document seulement. Divergence documentée avec le
+ * moteur Rust, qui mesure toutes les occurrences du document (le bonus de police ou de proximité d'une page
+ * au-delà de la 5e meilleure n'est pas vu ici).
+ */
 async function measureDoc(
   doc: RankableDoc,
   query: string,
@@ -86,7 +108,9 @@ async function measureDoc(
   signal: AbortSignal | undefined,
 ): Promise<DocProximity> {
   const pages = doc.pages.slice(0, PROXIMITY_PAGES);
-  const distinctByPage = new Map<number, number>();
+  const statsByPage = new Map<number, PageStats>();
+  let bestFontPt = 0;
+  let maxDistinct = 0;
   if (signal?.aborted) throw abortError();
   const matches = await deps.getPagesMatches(
     doc.docId,
@@ -99,13 +123,15 @@ async function measureDoc(
     if (!match) throw new Error(`Page ${page} of ${doc.docId} missing from the decoded pages`);
     const termIndexes = match.termIndexes;
     if (!termIndexes) throw new Error(`Page ${page} of ${doc.docId} carries no term indexes`);
-    const occurrences = groupOccurrences(match.boxes, match.ordinals, termIndexes);
-    distinctByPage.set(page, Math.max(0, ...occurrences.map((o) => o.distinct)));
+    const occurrences = groupOccurrences(match.boxes, match.ordinals, termIndexes, match.pageSize);
+    const stats = pageStats(occurrences);
+    statsByPage.set(page, stats);
+    maxDistinct = Math.max(maxDistinct, stats.distinct);
+    for (const o of occurrences) bestFontPt = Math.max(bestFontPt, o.fontSizePt);
   }
-  const maxDistinct = Math.max(0, ...distinctByPage.values());
   return {
-    bonus: multiTermBonus(maxDistinct, termCount),
-    pagesOrder: orderTopPages(pages, distinctByPage).map((p) => p.page),
+    bonus: multiTermBonus(maxDistinct, termCount) + fontBonus(bestFontPt),
+    pagesOrder: orderTopPages(pages, statsByPage).map((p) => p.page),
   };
 }
 
@@ -130,7 +156,7 @@ export function createProximityRanker(deps: ProximityRankerDeps): ProximityRanke
       bonusByDoc: new Map<string, number>(),
       failedDocIds: new Set<string>(),
     };
-    if (words.length < 2 || docs.length === 0) return { ...empty, done: Promise.resolve() };
+    if (words.length < 1 || docs.length === 0) return { ...empty, done: Promise.resolve() };
     if (signal?.aborted) throw abortError();
 
     const queryKey = words.join(" ");
@@ -145,13 +171,23 @@ export function createProximityRanker(deps: ProximityRankerDeps): ProximityRanke
     const failures: { docId: string; error: unknown }[] = [];
     const failedDocIds = new Set<string>();
     const limit = Math.min(docs.length, RERANK_MAX_DOCS);
+    const yieldToMain = deps.yieldToMain ?? defaultYieldToMain;
+    let measuredCount = 0;
 
     async function measureOne(doc: T): Promise<void> {
       const key = JSON.stringify([doc.docId, doc.pages.slice(0, PROXIMITY_PAGES).map((p) => p.page)]);
       let measured = activeCache.get(key);
       if (!measured) {
-        const generation = generationOf(doc.docId);
         try {
+          // Entre deux décodages : laisse l'interface respirer (pas avant le premier, pas pour un résultat en cache).
+          // Dans le try : un rejet de yieldToMain est un échec de mesure de CE document, sans perdre les suivants.
+          // `measuredCount` (partagé) n'est correct que pour DOC_CONCURRENCY === 1 : avec plusieurs workers, le
+          // « premier » document ne serait plus forcément le premier à décoder.
+          if (measuredCount++ > 0) {
+            await yieldToMain();
+            if (signal?.aborted) throw abortError();
+          }
+          const generation = generationOf(doc.docId);
           measured = await measureDoc(doc, query, words.length, deps, signal);
           if (generationOf(doc.docId) === generation) activeCache.set(key, measured);
         } catch (error) {

@@ -12,6 +12,7 @@ import {
   STREAM_CONCURRENCY,
   mapInBatches,
   type DocumentIndex,
+  type PageSize,
   type WordBox,
 } from "../../src/core/codec/format";
 
@@ -20,6 +21,7 @@ const ZERO_CHUNK_BYTES = 1 << 20;
 const FAKE_PAGE_COUNT = 2 ** 32;
 
 function makeIndex(overrides: Partial<DocumentIndex> = {}): DocumentIndex {
+  const pageTermCounts = overrides.pageTermCounts ?? [];
   return {
     normalizerVersion: 1,
     extractorVersion: "x",
@@ -29,6 +31,7 @@ function makeIndex(overrides: Partial<DocumentIndex> = {}): DocumentIndex {
     pageTermCounts: [],
     terms: [],
     pageBoxes: [],
+    pageSizes: overrides.pageSizes ?? Array.from({ length: pageTermCounts.length }, () => ({ widthPt: 595, heightPt: 842 })),
     ...overrides,
   };
 }
@@ -348,7 +351,8 @@ describe("encodeur : débordements et valeurs invalides", () => {
   it("lève une RangeError pour un nombre de pages hors u32", async () => {
     const fake = { length: FAKE_PAGE_COUNT } as unknown as readonly number[];
     const fakeBoxes = { length: FAKE_PAGE_COUNT } as unknown as readonly (readonly WordBox[])[];
-    const error = await encodeIndex(makeIndex({ pageTermCounts: fake, pageBoxes: fakeBoxes })).then(
+    const fakeSizes = { length: FAKE_PAGE_COUNT } as unknown as readonly PageSize[];
+    const error = await encodeIndex(makeIndex({ pageTermCounts: fake, pageBoxes: fakeBoxes, pageSizes: fakeSizes })).then(
       () => undefined,
       (e: unknown) => e,
     );

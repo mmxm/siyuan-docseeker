@@ -30,6 +30,9 @@ class FakeStore {
   failWrite: ((name: string) => boolean) | undefined;
   failRead: Error | undefined;
   failRemove = false;
+  async list(): Promise<string[]> {
+    return [...this.files.keys()].sort();
+  }
   async read(name: string): Promise<Uint8Array | null> {
     if (this.failRead) throw this.failRead;
     return this.files.get(name) ?? null;
@@ -96,6 +99,7 @@ function setup(entries: PdfEntry[], opts: { complete?: boolean; pdfs?: Record<st
       return p;
     },
     now: () => 1_700_000_000_000,
+    onWarn: () => undefined,
   };
   const indexer = createIndexer(deps);
   indexer.onEvent((e) => events.push(e));
@@ -119,7 +123,7 @@ describe("createIndexer - nominal", () => {
     const summary = await indexer.start();
 
     expect(summary).toEqual({
-      indexed: 2, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0, incompleteDetails: [], failures: [],
+      indexed: 2, skippedScanned: 0, failed: 0, removed: 0, migrated: 0, cancelled: false, incomplete: 0, incompleteDetails: [], failures: [],
     });
     expect([...store.files.keys()].sort()).toEqual([dsxName(a), dsxName(b), MANIFEST_FILE_NAME].sort());
     expect(store.manifestPaths().sort()).toEqual(["assets/a.pdf", "assets/b.pdf"]);
@@ -341,6 +345,7 @@ describe("createIndexer - failures", () => {
   it("reports a discovery failure as a failed event then idle", async () => {
     const store = new FakeStore();
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => {
         throw new Error("root unreadable");
       },
@@ -517,6 +522,7 @@ describe("createIndexer - cancellation (risk 4)", () => {
     const gate = deferred();
     const store = new FakeStore();
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => {
         await gate.promise;
         return discovery([entry("assets/a.pdf")]);
@@ -547,6 +553,7 @@ describe("createIndexer - cancellation (risk 4)", () => {
     store.removes.length = 0;
     const gate = deferred();
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => {
         await gate.promise;
         return discovery([a]);
@@ -621,6 +628,7 @@ describe("createIndexer - listeners", () => {
     const errors: unknown[] = [];
     const store = new FakeStore();
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => discovery([entry("assets/a.pdf")]),
       store,
       loadPdf: async () => new FakePdf(),
@@ -702,6 +710,7 @@ describe("createIndexer - parcours incomplet (J9)", () => {
     const store = new FakeStore();
     const loaded: string[] = [];
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => discovery([bad]),
       store,
       loadPdf: async (path) => {
@@ -760,6 +769,7 @@ describe("createIndexer - retrait progressif des PDF en échec permanent", () =>
     let clock = 1_000_000;
     const loaded: string[] = [];
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => discovery(entries),
       store,
       loadPdf: async (path) => {
@@ -825,6 +835,7 @@ describe("createIndexer - retrait progressif des PDF en échec permanent", () =>
     const store = new FakeStore();
     const loaded: string[] = [];
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => discovery(entries),
       store,
       loadPdf: async (path) => {
@@ -869,6 +880,7 @@ describe("createIndexer - pause pendant l'activité de l'utilisateur", () => {
     const loaded: string[] = [];
     const store = new FakeStore();
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => discovery(entries),
       store,
       loadPdf: async (path) => {
@@ -923,6 +935,7 @@ describe("createIndexer - pause pendant l'activité de l'utilisateur", () => {
     const warnings: unknown[] = [];
     const store = new FakeStore();
     const indexer = createIndexer({
+      onWarn: () => undefined,
       discover: async () => discovery([entry("assets/a.pdf")]),
       store,
       loadPdf: async () => new FakePdf(),

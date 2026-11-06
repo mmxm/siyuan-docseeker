@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sectionLocation } from "./helpers/dsxLayout";
 import { encodeIndex } from "../../src/core/codec/encode";
 import { decodeIndex, decodePageMatches } from "../../src/core/codec/decode";
 import {
@@ -28,6 +29,7 @@ function makeIndex(): DocumentIndex {
       { term: "gamma", postings: [{ page: 2, termFrequency: 1, wordOrdinals: [1] }] },
     ],
     pageBoxes: [boxesFor(6, 0), boxesFor(4, 100), boxesFor(1, 200)],
+    pageSizes: [{ widthPt: 612, heightPt: 792 }, { widthPt: 595.3, heightPt: 841.9 }, { widthPt: 842, heightPt: 595 }],
   };
 }
 
@@ -94,8 +96,12 @@ describe("decodePageMatches", () => {
   });
 
   it("handles a document without terms or pages content", async () => {
-    const empty: DocumentIndex = { ...makeIndex(), pageTermCounts: [0], terms: [], pageBoxes: [[]] };
-    expect(await decodePageMatches(await encodeIndex(empty), 1, () => true)).toEqual({ boxes: [], ordinals: [] });
+    const empty: DocumentIndex = { ...makeIndex(), pageTermCounts: [0], terms: [], pageBoxes: [[]], pageSizes: [{ widthPt: 595, heightPt: 842 }] };
+    expect(await decodePageMatches(await encodeIndex(empty), 1, () => true)).toEqual({
+      boxes: [],
+      ordinals: [],
+      pageSize: { widthPt: 595, heightPt: 842 },
+    });
   });
 
   it.each([0, 4, -1, 1.5, Number.NaN])("rejects page %s out of [1, 3]", async (page) => {
@@ -115,7 +121,10 @@ describe("decodePageMatches", () => {
   it("rejects a flipped byte in the compressed sections", async () => {
     const bytes = await encodeIndex(makeIndex());
     let failures = 0;
-    for (let i = bytes.length - 40; i < bytes.length; i++) {
+    // Toute la section des boîtes (dérivée de la table de l'en-tête) : table des longueurs et blobs de chaque page.
+    const boxes = sectionLocation(bytes, 3);
+    expect(boxes.offset + boxes.length).toBe(bytes.length);
+    for (let i = boxes.offset; i < bytes.length; i++) {
       const bad = bytes.slice();
       bad[i] = (bad[i] ?? 0) ^ 0xff;
       try {

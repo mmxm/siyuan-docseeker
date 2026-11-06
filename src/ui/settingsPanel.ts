@@ -96,6 +96,8 @@ export function describeEvent(event: IndexerEvent): string {
   switch (event.type) {
     case "started":
       return "Indexation démarrée";
+    case "plan":
+      return `Mise à jour de l'index : ${event.migrating} PDF à migrer`;
     case "progress":
       return `${event.path} : page ${event.page}/${event.total}`;
     case "indexed":
@@ -113,6 +115,8 @@ export function describeEvent(event: IndexerEvent): string {
         `${s.skippedScanned} sans texte`,
         plural(s.failed, "échec", "échecs"),
         plural(s.removed, "supprimé", "supprimés"),
+        // migrated est déjà compris dans indexed / skippedScanned : « dont »
+        ...(s.migrated > 0 ? [`dont ${plural(s.migrated, "migré", "migrés")} (ancien index mis à jour)`] : []),
       ];
       return `Terminé : ${parts.join(", ")}${s.cancelled ? " (annulé)" : ""}`;
     }

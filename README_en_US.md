@@ -9,7 +9,7 @@ Full-text search inside the PDFs of your SiYuan workspace. Results are shown as 
 - **Full-text search** in the PDFs of the `data/assets` folder (sub-folders included).
 - **Highlighted thumbnails**: for each matching page, an extract of the page cropped around the area that contains the most words of the query, with the words highlighted.
 - **Opens on the right page**: a click opens the PDF in SiYuan's viewer, on the matching page, centred on the area, with a highlight overlay. This also works when the PDF is already open.
-- **Ranking by word proximity**: for a query of several words, pages where the words are close together (on the same line) move up. The ranking stays close to that of DocSeeker, the original application, but is not identical to it.
+- **Ranking by word proximity and font size**: for a query of several words, pages where the words are close together (on the same line) move up. Passages set in large type (headings) move up too, including for a single-word query. The ranking stays close to that of DocSeeker, the original application, but is not identical to it.
 - **Expandable pages**: each document first shows a few pages. "and N other pages" reveals 10 more at each click (200 pages at most per document).
 
 ## Installation
@@ -49,7 +49,8 @@ PDFs must be indexed before you can search them.
 
 Things to know:
 
-- Indexing is **automatic** (configurable in the plugin settings): a few seconds after startup, when the window regains focus (at most once every 30 seconds), then every 5, 15 or 60 minutes. Added or modified PDFs are indexed, deleted PDFs are removed from the index, unchanged PDFs are not read again. It waits while you type or scroll. **Reindex** forces an immediate check.
+- Indexing is **automatic** (configurable in the plugin settings): a few seconds after startup, when the window regains focus (at most once every 30 seconds), then every 5, 15 or 60 minutes. Added or modified PDFs are indexed, deleted PDFs are removed from the index, unchanged PDFs are not read again (except once, after an update of the index format, see below). It waits while you type or scroll. **Reindex** forces an immediate check.
+- **Index format update**: indexes created by the previous version of the plugin are updated automatically, once, PDF by PDF (the status reads "Updating the index"). During the update, search still works with the old index. On a large library, this update can take a long time: its duration has not been measured.
 - A PDF that fails (corrupt, empty) is retried at increasing intervals; the search tab reports failures and unreadable folders, and the details are in the settings log.
 - If indexing stops early (for example when SiYuan is closed), the next run resumes where it stopped.
 - **Indicative duration**: about 191 s for 44 PDFs, measured with Node on a local disk. In the browser it takes longer. These figures are given for information only.
@@ -61,7 +62,7 @@ Things to know:
 - **Prefix on the last word**: `diab` finds "diabète", "diabétique", and so on. Only the last word is treated this way.
 - **Accents and case are ignored**: "diabete" finds "Diabète". Punctuation is ignored too.
 - Results are grouped by document. A click on a thumbnail opens the PDF on the matching page.
-- Once the proximity ranking has been computed, the status reads "Ranking refined by word proximity".
+- Once the proximity and font-size ranking has been computed, the status reads "Ranking refined by word proximity and font size".
 - The interface is in French only.
 
 ## Known limitations
@@ -69,7 +70,8 @@ Things to know:
 - **Target: the SiYuan webapp on a computer**, tested with SiYuan 3.8.9. Mobile is not supported. The desktop application is declared in the manifest but has not been tested.
 - **PDFs without text are skipped**: a scanned PDF (an image with no text layer) is not indexed and is reported in the tab. There is no OCR.
 - **No substring search**: search works on whole words, with a prefix on the last word only. "pco" does not find "BPCO".
-- **Ranking close to DocSeeker, not identical**: font size is not taken into account (neither in the ranking nor in the sorting of occurrences). Quoted phrases are not supported.
+- **Ranking close to DocSeeker, not identical**: font size is approximated by the height of the words as PDF.js reports it. On 3 PDFs only, this height turned out to be about 6 to 12% larger than the one PyMuPDF gives (PyMuPDF is the extraction engine of DocSeeker); this gap is not corrected. Only the 5 best pages of each document are measured for the ranking. Quoted phrases are not supported.
+- **Previous version of the plugin**: version 0.2.0 cannot read the updated indexes. Do not use both versions on the same SiYuan folder.
 - **Scope**: only PDFs in `data/assets` are indexed, not SiYuan documents.
 
 ## Privacy

@@ -13,9 +13,26 @@
  * - Mots coupés en fin de ligne (« informa- » / « tion ») : NON rejoints en v1 (deux mots distincts).
  *   Aucun mot ne chevauche deux items. L'ordre des items est conservé (pas de reconstruction de lecture).
  * - Clamp : chaque boîte est ramenée dans [0,1] (x, y, puis largeur/hauteur limitées au bord de la page).
+ * - Taille de page : `viewWidth` x `viewHeight` (viewport PDF.js d'échelle 1, rotation appliquée), arrondie au
+ *   dixième de point ; une page absente de l'extraction prend le repli A4 (595 x 842).
+ * - Page aberrante (une dimension hors 0,1..20 000 pt après arrondi) : sa taille STOCKÉE prend le repli A4 et
+ *   `options.onWarn` reçoit un message qui nomme la page ; le PDF reste indexé (les boîtes sont des fractions de
+ *   la vraie vue, donc valides). Une exception de `onWarn` remonte à l'appelant. Une taille nulle, négative ou non finie reste une ExtractionInputError : aucune
+ *   boîte ne peut être calculée.
  * - Rectangle en espace vue = boîte englobante alignée sur les axes (texte tourné/incliné compris).
  */
-import { compareUtf8, type DocumentIndex, type Posting, type TermEntry, type WordBox } from "./codec/format";
+import {
+  FALLBACK_PAGE_SIZE,
+  MAX_PAGE_DIMENSION_UNITS,
+  compareUtf8,
+  pageDimensionToUnits,
+  unitsToPageDimension,
+  type DocumentIndex,
+  type PageSize,
+  type Posting,
+  type TermEntry,
+  type WordBox,
+} from "./codec/format";
 import { tokenize } from "./normalize";
 
 export interface TextItemLike {
@@ -150,6 +167,7 @@ function toFractionBox(r: ViewRect, viewWidth: number, viewHeight: number): Word
 interface PageTokens {
   readonly tokens: string[];
   readonly boxes: WordBox[];
+  readonly size: PageSize;
 }
 
 function validatePage(page: ExtractedPage): void {
@@ -157,6 +175,32 @@ function validatePage(page: ExtractedPage): void {
   if (!(page.viewWidth > 0) || !(page.viewHeight > 0) || !Number.isFinite(page.viewWidth + page.viewHeight)) {
     throw new ExtractionInputError(`page ${page.pageNumber}: viewWidth/viewHeight must be positive and finite`);
   }
+}
+
+const isStorableDimension = (value: number): boolean => {
+  const units = pageDimensionToUnits(value);
+  return units >= 1 && units <= MAX_PAGE_DIMENSION_UNITS;
+};
+
+/** Options d'extraction. */
+export interface BuildOptions {
+  /** Reçoit un message par anomalie non bloquante (page aberrante). Une exception du rappel est ignorée. */
+  readonly onWarn?: (message: string) => void;
+}
+
+const roundToUnit = (v: number): number => unitsToPageDimension(pageDimensionToUnits(v));
+
+/** Taille de page stockée : arrondie au dixième de point, ou repli A4 (avec avertissement) si aberrante. */
+function storedPageSize(page: ExtractedPage, onWarn: BuildOptions["onWarn"]): PageSize {
+  if (isStorableDimension(page.viewWidth) && isStorableDimension(page.viewHeight)) {
+    return { widthPt: roundToUnit(page.viewWidth), heightPt: roundToUnit(page.viewHeight) };
+  }
+  // Une exception du rappel remonte à l'appelant (l'indexeur protège le sien) : pas d'erreur avalée ici.
+  onWarn?.(
+    `page ${page.pageNumber}: taille ${page.viewWidth} x ${page.viewHeight} pt hors de 0,1..${unitsToPageDimension(MAX_PAGE_DIMENSION_UNITS)} pt, ` +
+      `repli sur A4 (${FALLBACK_PAGE_SIZE.widthPt} x ${FALLBACK_PAGE_SIZE.heightPt} pt)`,
+  );
+  return FALLBACK_PAGE_SIZE;
 }
 
 /**
@@ -197,9 +241,9 @@ function wordRuns(str: string): readonly WordRun[] {
 }
 
 /** Jetons (un par entrée) et boîtes (une par jeton) d'une page, dans l'ordre des items. */
-function extractPage(page: ExtractedPage): PageTokens {
+function extractPage(page: ExtractedPage, onWarn: BuildOptions["onWarn"]): PageTokens {
   validatePage(page);
-  const out: PageTokens = { tokens: [], boxes: [] };
+  const out: PageTokens = { tokens: [], boxes: [], size: storedPageSize(page, onWarn) };
   for (const item of page.items) {
     const frame = buildFrame(item, page.viewportTransform);
     const length = item.str.length;
@@ -223,7 +267,11 @@ function validateMeta(meta: DocumentMeta): void {
   }
 }
 
-function indexPages(meta: DocumentMeta, pages: readonly ExtractedPage[]): Omit<DocumentIndex, "terms"> & {
+function indexPages(
+  meta: DocumentMeta,
+  pages: readonly ExtractedPage[],
+  onWarn: BuildOptions["onWarn"],
+): Omit<DocumentIndex, "terms"> & {
   terms: Map<string, { page: number; ordinals: number[] }[]>;
 } {
   const perPage: (PageTokens | undefined)[] = new Array<PageTokens | undefined>(meta.pageCount);
@@ -233,15 +281,17 @@ function indexPages(meta: DocumentMeta, pages: readonly ExtractedPage[]): Omit<D
       throw new ExtractionInputError(`pageNumber ${n} out of range 1..${meta.pageCount}`);
     }
     if (perPage[n - 1] !== undefined) throw new ExtractionInputError(`duplicate pageNumber ${n}`);
-    perPage[n - 1] = extractPage(page);
+    perPage[n - 1] = extractPage(page, onWarn);
   }
   const terms = new Map<string, { page: number; ordinals: number[] }[]>();
   const pageTermCounts: number[] = [];
   const pageBoxes: (readonly WordBox[])[] = [];
+  const pageSizes: PageSize[] = [];
   for (let i = 0; i < meta.pageCount; i++) {
-    const data = perPage[i] ?? { tokens: [], boxes: [] };
+    const data = perPage[i] ?? { tokens: [], boxes: [], size: FALLBACK_PAGE_SIZE };
     pageTermCounts.push(data.tokens.length);
     pageBoxes.push(data.boxes);
+    pageSizes.push(data.size);
     data.tokens.forEach((token, ordinal) => {
       const list = terms.get(token) ?? [];
       terms.set(token, list);
@@ -250,13 +300,17 @@ function indexPages(meta: DocumentMeta, pages: readonly ExtractedPage[]): Omit<D
       else list.push({ page: i + 1, ordinals: [ordinal] });
     });
   }
-  return { ...meta, pageTermCounts, pageBoxes, terms };
+  return { ...meta, pageTermCounts, pageBoxes, pageSizes, terms };
 }
 
 /** Construit l'index d'un document. Les pages absentes de `pages` sont vides. */
-export function buildDocumentIndex(meta: DocumentMeta, pages: readonly ExtractedPage[]): DocumentIndex {
+export function buildDocumentIndex(
+  meta: DocumentMeta,
+  pages: readonly ExtractedPage[],
+  options: BuildOptions = {},
+): DocumentIndex {
   validateMeta(meta);
-  const built = indexPages(meta, pages);
+  const built = indexPages(meta, pages, options.onWarn);
   const sorted = [...built.terms]
     .map(([term, list]) => ({ term, bytes: TEXT_ENCODER.encode(term), list }))
     .sort((a, b) => compareUtf8(a.bytes, b.bytes));
@@ -275,6 +329,7 @@ export function buildDocumentIndex(meta: DocumentMeta, pages: readonly Extracted
     pageTermCounts: built.pageTermCounts,
     terms,
     pageBoxes: built.pageBoxes,
+    pageSizes: built.pageSizes,
   };
 }
 

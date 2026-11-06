@@ -84,6 +84,8 @@ describe("décodeur indépendant", () => {
       pageTermCounts: [3],
       terms: [{ term: "a", postings: [{ page: 1, termFrequency: 1, wordOrdinals: [5] }] }],
       pageBoxes: [[{ x: 0, y: 0, width: 1, height: 32768 / 65535 }]],
+      // Fichier v1 : pas de taille de page stockée, repli A4.
+      pageSizes: [{ widthPt: 595, heightPt: 842 }],
     });
   });
 

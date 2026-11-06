@@ -3,7 +3,6 @@
  * soumission explicite (`submit`), jamais à la frappe ; exécute la requête sur l'index de la source et produit un view-model.
  */
 import { groupByDocument, searchPages, type Bm25Index } from "../core/bm25";
-import { tokenize } from "../core/normalize";
 import type { ProximityResult } from "./proximityRanker";
 import { isSearchable, titleBonuses } from "./queryMatch";
 
@@ -73,7 +72,7 @@ export interface SearchControllerOptions {
   readonly onWarn?: (message: string, error?: unknown) => void;
   /** Fenêtre de coalescence des notifications du store pendant le chargement (défaut 150 ms). */
   readonly loadingRefreshMs?: number;
-  /** Re-classement par proximité des requêtes à au moins deux mots ; absent : ordre BM25 seul. */
+  /** Re-classement (proximité et police) de toute requête ; absent : ordre BM25 seul. */
   readonly rerank?: RerankPort;
 }
 
@@ -161,8 +160,6 @@ function applyRanking(base: Extract<SearchViewModel, { kind: "results" }>, ranke
   if (!measured || !changed) return base;
   return { ...base, docs, ranking: "proximity" };
 }
-
-const wantsRerank = (query: string): boolean => new Set(tokenize(query)).size >= 2;
 
 export function createSearchController(options: SearchControllerOptions): SearchController {
   const {
@@ -289,7 +286,9 @@ export function createSearchController(options: SearchControllerOptions): Search
       onWarn?.("search failed", error);
     }
     if (disposed || mine !== requestNumber) return;
-    if (rerank && vm.kind === "results" && wantsRerank(vm.query)) {
+    // Pendant le chargement l'index change toutes les ~150 ms : un re-classement serait relancé (et son décodage
+    // refait) à chaque fenêtre. On publie le BM25 partiel ; la fin du chargement relance le re-classement une fois.
+    if (rerank && vm.kind === "results" && !vm.partial) {
       startRerank(vm, mine, rerank);
       return;
     }
@@ -334,7 +333,7 @@ export function createSearchController(options: SearchControllerOptions): Search
       run();
     },
     invalidate() {
-      if (disposed || !rerank || !wantsRerank(query)) return;
+      if (disposed || !rerank || !isSearchable(query)) return;
       // Les mesures en vol portent sur l'ancien contenu : jamais de snapshot périmé publié.
       abortInFlight();
       unpublished = undefined;

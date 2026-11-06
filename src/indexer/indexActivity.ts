@@ -6,6 +6,10 @@
  * - Les événements `progress` (un par page) ne notifient que si le N/M change.
  * - À la fin : « failed » si des échecs ; sinon « partial » si le parcours était incomplet (jamais « à jour »
  *   dans ce cas) ; sinon « done » si du travail a eu lieu ; sinon « idle ».
+ * - Migration : l'événement `plan` (émis seulement s'il y a des PDF à migrer) marque la passe « migrating » quand
+ *   TOUS ses PDF sont des migrations (index anciens relus, rien de nouveau) : les résultats ne sont alors pas
+ *   incomplets, l'interface affiche « Mise à jour de l'index » au lieu de « des résultats peuvent manquer ».
+ *   Jamais si le parcours était incomplet (`plan.complete === false`) : des résultats peuvent alors vraiment manquer.
  * - Un PDF déjà en échec à la passe précédente (y compris sauté par le retrait progressif) qui émet de nouveau
  *   des `progress` n'est pas du travail nouveau : l'état reste « failed » (pas de clignotement).
  */
@@ -22,6 +26,11 @@ export interface IndexActivitySnapshot {
   readonly incomplete: number;
   /** Vrai si l'échec porte sur la découverte ou le manifeste plutôt que sur des PDF. */
   readonly discovery: boolean;
+  /**
+   * Présent (vrai) seulement pendant une passe en cours qui ne fait que migrer d'anciens index : tous les
+   * documents sont déjà interrogeables, aucun résultat ne manque.
+   */
+  readonly migrating?: boolean;
 }
 
 export interface IndexActivityDeps {
@@ -42,6 +51,8 @@ const IDLE: IndexActivitySnapshot = { phase: "idle", done: 0, total: 0, failed: 
 export function createIndexActivity(deps: IndexActivityDeps): IndexActivity {
   let snapshot = IDLE;
   let worked = false;
+  /** Vrai si la passe en cours ne contient que des migrations (événement `plan`). */
+  let migrationOnly = false;
   /** Échecs « chemin : message » du dernier bilan : ces PDF ne comptent pas comme du travail nouveau. */
   let lastFailures: readonly string[] = [];
   const persistent = (path: string): boolean => lastFailures.some((line) => line.startsWith(`${path} : `));
@@ -54,7 +65,8 @@ export function createIndexActivity(deps: IndexActivityDeps): IndexActivity {
       next.total === snapshot.total &&
       next.failed === snapshot.failed &&
       next.incomplete === snapshot.incomplete &&
-      next.discovery === snapshot.discovery
+      next.discovery === snapshot.discovery &&
+      next.migrating === snapshot.migrating
     ) {
       return;
     }
@@ -76,13 +88,26 @@ export function createIndexActivity(deps: IndexActivityDeps): IndexActivity {
       deps.onWarn?.("Progression de l'indexation indisponible", error);
     }
     worked = true;
-    set({ phase: "running", done: progress?.done ?? 0, total: progress?.total ?? 0, failed: 0, incomplete: 0, discovery: false });
+    set({
+      phase: "running",
+      done: progress?.done ?? 0,
+      total: progress?.total ?? 0,
+      failed: 0,
+      incomplete: 0,
+      discovery: false,
+      ...(migrationOnly ? { migrating: true } : {}),
+    });
   };
 
   const unsubscribe = deps.indexer.onEvent((event) => {
     switch (event.type) {
       case "started":
         worked = false;
+        migrationOnly = false;
+        return;
+      case "plan":
+        // Parcours incomplet : des PDF absents du parcours peuvent manquer, on ne masque pas l'avertissement.
+        migrationOnly = event.complete && event.migrating > 0 && event.migrating === event.toIndex;
         return;
       case "progress":
         if (!persistent(event.path)) running();
@@ -98,6 +123,7 @@ export function createIndexActivity(deps: IndexActivityDeps): IndexActivity {
         const { failed, incomplete, cancelled } = event.summary;
         const didWork = worked;
         worked = false;
+        migrationOnly = false;
         if (!cancelled) lastFailures = event.summary.failures ?? [];
         if (failed > 0) {
           const discovery = (event.summary.failures ?? []).some(

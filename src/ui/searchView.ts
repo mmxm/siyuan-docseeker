@@ -82,8 +82,9 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   failedMany: "{n} index illisibles : réindexez depuis les paramètres (détails dans le journal)",
   cardLabel: "{title}, p. {page}",
   cardPage: "p. {page}",
-  rankingRefined: "Classement affiné par proximité des mots",
+  rankingRefined: "Classement affiné par proximité des mots et taille de police",
   autoIndexRunning: "Indexation en cours",
+  autoIndexMigrating: "Mise à jour de l'index",
   autoIndexCount: "{done}/{total} PDF",
   autoIndexUpToDate: "Index à jour",
   autoIndexFailed: "{n} PDF en échec : voir le journal dans les paramètres",
@@ -399,7 +400,14 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
 
   const withFailed = (text: string, failedCount: number): string =>
     failedCount > 0 ? `${text}. ${count(failedCount, "failedOne", "failedMany")}` : text;
-  const isIndexingNow = (): boolean => deps.indexActivity?.getSnapshot().phase === "running";
+  /**
+   * Vrai pendant une indexation qui peut laisser des documents hors de l'index. Faux pendant une simple
+   * migration d'anciens index (tous les documents restent interrogeables).
+   */
+  const isIndexingNow = (): boolean => {
+    const snap = deps.indexActivity?.getSnapshot();
+    return snap?.phase === "running" && snap.migrating !== true;
+  };
   /** Pendant l'indexation, les résultats (ou leur absence) peuvent être incomplets. */
   const withIndexing = (text: string): string => (isIndexingNow() ? `${text}. ${tr("indexingMayMiss")}` : text);
 
@@ -557,7 +565,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       stopHide();
       switch (snap.phase) {
         case "running":
-          show(tr("autoIndexRunning"), snap.total > 0 ? tr("autoIndexCount", { done: snap.done, total: snap.total }) : "", false);
+          show(
+            tr(snap.migrating === true ? "autoIndexMigrating" : "autoIndexRunning"),
+            snap.total > 0 ? tr("autoIndexCount", { done: snap.done, total: snap.total }) : "",
+            false,
+          );
           break;
         case "done":
           show(tr("autoIndexUpToDate"), "", false);
@@ -576,7 +588,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         default:
           show("", "", false);
       }
-      const running = snap.phase === "running";
+      const running = isIndexingNow();
       if (running !== lastRunning) {
         lastRunning = running;
         render(); // l'avis « des résultats peuvent manquer » apparaît ou disparaît, sans relancer la requête

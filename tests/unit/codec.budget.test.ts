@@ -246,6 +246,7 @@ function syntheticIndex(pages: number, wordsPerPage: number): DocumentIndex {
     pageTermCounts: Array.from({ length: pages }, () => wordsPerPage),
     terms,
     pageBoxes,
+    pageSizes: pageBoxes.map(() => ({ widthPt: 595, heightPt: 842 })),
   };
 }
 

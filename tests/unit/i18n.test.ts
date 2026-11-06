@@ -6,7 +6,7 @@ const fr = JSON.parse(readFileSync("i18n/fr_FR.json", "utf8")) as Record<string,
 const NEW_KEYS = [
   "autoIndexRunning", "autoIndexCount", "autoIndexUpToDate", "autoIndexFailed", "autoIndexDiscoveryFailed",
   "autoIndexPartialOne", "autoIndexPartialMany", "indexingMayMiss", "clearDoneRebuilding", "clearDoneWillRebuild",
-  "settingsSaveFailed", "autoIndexIntervalDisabledHint",
+  "settingsSaveFailed", "autoIndexIntervalDisabledHint", "autoIndexMigrating",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
 
@@ -75,6 +75,7 @@ describe("i18n/fr_FR.json", () => {
   it("les textes de l'indicateur ont leurs variables et les pluriels par clés One/Many", () => {
     expect(fr.autoIndexCount).toBe("{done}/{total} PDF");
     expect(fr.autoIndexRunning).toBe("Indexation en cours");
+    expect(fr.autoIndexMigrating).toBe("Mise à jour de l'index");
     expect(fr.autoIndexFailed).toContain("{n}");
     expect(fr.autoIndexPartialOne).toContain("{n}");
     expect(fr.autoIndexPartialMany).toContain("{n}");

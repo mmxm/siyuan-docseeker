@@ -6,7 +6,9 @@ import {
   DSX_FORMAT_VERSION,
   DSX_MAGIC_BYTES,
   DSX_MIN_FORMAT_VERSION,
+  DSX_PAGE_SIZE_FORMAT_VERSION,
   DsxFormatError,
+  FALLBACK_PAGE_SIZE,
   HEADER_OFFSETS,
   BLOB_RATIO_GRACE_BYTES,
   SECTION_RATIO_GRACE_BYTES,
@@ -16,6 +18,8 @@ import {
   MAX_INFLATED_BLOB_BYTES,
   MAX_INFLATED_BYTES,
   MAX_INFLATION_RATIO,
+  MAX_PAGE_DIMENSION_PT,
+  MAX_PAGE_DIMENSION_UNITS,
   MAX_PAGES,
   MAX_TERMS,
   MAX_TOTAL_BOXES,
@@ -29,10 +33,12 @@ import {
   TruncatedFileError,
   UINT16_MAX,
   toUint32Lengths,
+  unitsToPageDimension,
   UnsupportedVersionError,
   compareUtf8,
   mapInBatches,
   type DocumentIndex,
+  type PageSize,
   type SearchIndexData,
   type CompactPostings,
   type Posting,
@@ -98,6 +104,7 @@ interface SectionRange {
 }
 
 interface ParsedHeader {
+  readonly formatVersion: number;
   readonly normalizerVersion: number;
   readonly extractorVersion: string;
   readonly sourcePath: string;
@@ -245,6 +252,7 @@ function parseHeader(bytes: Uint8Array): ParsedHeader {
   const boxes = sections[SECTION.boxes];
   if (boxes && boxes.length < pageCount * UINT32_BYTES) throw new TruncatedFileError("incomplete page box table");
   return {
+    formatVersion: version,
     normalizerVersion: view.getUint16(HEADER_OFFSETS.normalizerVersion, true),
     extractorVersion: strings.extractorVersion,
     sourcePath: strings.sourcePath,
@@ -517,9 +525,28 @@ function pagesMatchSink(
   };
 }
 
-/** Valide la structure d'un blob de boîtes sans rien matérialiser ; renvoie le nombre et les octets bruts. */
-function parseBoxBlob(raw: Uint8Array, budget: DecodeBudget): { count: number; data: Uint8Array } {
+/** Lit une dimension de page (varint en dixièmes de point) : entrée non fiable, 1..MAX_PAGE_DIMENSION_UNITS. */
+function readPageDimension(reader: Reader, name: string): number {
+  const units = reader.varint();
+  if (units === 0) throw new CorruptDataError(`page ${name} is zero`);
+  if (units > MAX_PAGE_DIMENSION_UNITS) {
+    throw new BudgetExceededError(`page ${name} ${unitsToPageDimension(units)} pt exceeds the limit of ${MAX_PAGE_DIMENSION_PT} pt`);
+  }
+  return unitsToPageDimension(units);
+}
+
+/** Valide la structure d'un blob de boîtes sans rien matérialiser ; renvoie la taille de page, le nombre et les octets bruts. */
+function parseBoxBlob(
+  raw: Uint8Array,
+  budget: DecodeBudget,
+  formatVersion: number,
+): { size: PageSize; count: number; data: Uint8Array } {
   const reader = new Reader(raw);
+  let size = FALLBACK_PAGE_SIZE;
+  if (formatVersion >= DSX_PAGE_SIZE_FORMAT_VERSION) {
+    const widthPt = readPageDimension(reader, "width");
+    size = { widthPt, heightPt: readPageDimension(reader, "height") };
+  }
   const count = reader.varint();
   if (count > MAX_BOXES_PER_PAGE) {
     throw new BudgetExceededError(`${count} boxes on one page exceed the limit of ${MAX_BOXES_PER_PAGE}`);
@@ -528,11 +555,11 @@ function parseBoxBlob(raw: Uint8Array, budget: DecodeBudget): { count: number; d
   budget.addBoxes(count);
   const data = reader.take(count * BYTES_PER_BOX);
   reader.assertEnd("page box blob");
-  return { count, data };
+  return { size, count, data };
 }
 
-function decodeBoxes(raw: Uint8Array, budget: DecodeBudget): WordBox[] {
-  const { count, data } = parseBoxBlob(raw, budget);
+function decodeBoxes(raw: Uint8Array, budget: DecodeBudget, formatVersion: number): { boxes: WordBox[]; size: PageSize } {
+  const { size, count, data } = parseBoxBlob(raw, budget, formatVersion);
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const boxes: WordBox[] = [];
   for (let i = 0; i < count; i++) {
@@ -544,7 +571,7 @@ function decodeBoxes(raw: Uint8Array, budget: DecodeBudget): WordBox[] {
       height: view.getUint16(base + 6, true) / UINT16_MAX,
     });
   }
-  return boxes;
+  return { boxes, size };
 }
 
 /**
@@ -587,7 +614,7 @@ export async function decodePageBoxes(bytes: Uint8Array, pageNumber: number): Pr
   const budget = new DecodeBudget();
   const section = sectionBytes(bytes, header.sections[SECTION.boxes]);
   const offsets = pageBlobOffsets(section, header.pageCount);
-  return decodeBoxes(await inflatePageBlob(section, offsets, pageNumber - 1, budget), budget);
+  return decodeBoxes(await inflatePageBlob(section, offsets, pageNumber - 1, budget), budget, header.formatVersion).boxes;
 }
 
 interface DecodedCore<L, R> {
@@ -648,8 +675,8 @@ export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
     objectSink(),
     (lengths) => lengths,
   );
-  const pageBoxes = await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) =>
-    decodeBoxes(await inflatePageBlob(boxesSection, offsets, i, budget), budget),
+  const pages = await mapInBatches(pageIndexes(offsets), STREAM_CONCURRENCY, async (i) =>
+    decodeBoxes(await inflatePageBlob(boxesSection, offsets, i, budget), budget, header.formatVersion),
   );
   return {
     normalizerVersion: header.normalizerVersion,
@@ -659,7 +686,8 @@ export async function decodeIndex(bytes: Uint8Array): Promise<DocumentIndex> {
     pdfModifiedMs: header.pdfModifiedMs,
     pageTermCounts,
     terms: postings,
-    pageBoxes,
+    pageBoxes: pages.map((page) => page.boxes),
+    pageSizes: pages.map((page) => page.size),
   };
 }
 
@@ -694,6 +722,8 @@ export interface PageMatch {
   readonly boxes: readonly WordBox[];
   /** Ordinaux des jetons correspondant aux termes voulus : triés, sans doublon, indices dans `boxes`. */
   readonly ordinals: readonly number[];
+  /** Taille de la page en points (repli A4 pour un fichier v1, qui n'en stocke pas). */
+  readonly pageSize: PageSize;
   /**
    * Index du mot de la requête satisfait par chaque ordinal (parallèle à `ordinals`).
    * Absent quand aucun indexeur de termes n'est fourni.
@@ -723,7 +753,7 @@ export async function decodePagesMatches(
   for (const page of pages) assertPageInRange(page, pageCount);
   const unique = [...new Set(pages)];
   const budget = new DecodeBudget(limits);
-  const { postings: matched, boxesSection, offsets } = await decodeCore(
+  const { header, postings: matched, boxesSection, offsets } = await decodeCore(
     bytes,
     budget,
     pagesMatchSink(new Set(unique), wanted, termIndexOf),
@@ -731,13 +761,17 @@ export async function decodePagesMatches(
   );
   const result = new Map<number, PageMatch>();
   for (const page of unique) {
-    const boxes = decodeBoxes(await inflatePageBlob(boxesSection, offsets, page - 1, budget), budget);
+    const { boxes, size: pageSize } = decodeBoxes(
+      await inflatePageBlob(boxesSection, offsets, page - 1, budget),
+      budget,
+      header.formatVersion,
+    );
     const { ordinals, termIndexes } = matched.get(page) as PageOrdinals;
     const last = ordinals[ordinals.length - 1];
     if (last !== undefined && last >= boxes.length) {
       throw new CorruptDataError(`word ordinal ${last} beyond the ${boxes.length} boxes of page ${page}`);
     }
-    result.set(page, termIndexes ? { boxes, ordinals, termIndexes } : { boxes, ordinals });
+    result.set(page, termIndexes ? { boxes, ordinals, pageSize, termIndexes } : { boxes, ordinals, pageSize });
   }
   return result;
 }

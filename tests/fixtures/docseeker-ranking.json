@@ -5864,6 +5864,2695 @@
      }
     ]
    }
+  },
+  {
+   "name": "police-seuil-arrondi",
+   "description": "Hauteurs 9,96 / 10 / 10,04 (arrondies a 10,0 : aucun bonus) puis 10,06 et 10,14 (arrondies a 10,1 : bonus 2,5). Le bonus s'applique a la taille ARRONDIE.",
+   "query": "contrat",
+   "terms": [
+    "contrat"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Seuil 9.96",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011828979,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011828979,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "Seuil 10",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 3,
+     "title": "Seuil 10.04",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.01192399,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.01192399,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 4,
+     "title": "Seuil 10.06",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011947743,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011947743,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 5,
+     "title": "Seuil 10.14",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.012042755,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.012042755,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "0a0cb2d7",
+    "results": [
+     {
+      "id": 4,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 10.1,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.0599993
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.0599993
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 507.5,
+      "title": "Seuil 10.06",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 5,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 10.1,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.139999404
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.139999404
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 507.5,
+      "title": "Seuil 10.14",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 505,
+      "title": "Seuil 10",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 3,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.039999274
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.039999274
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 505,
+      "title": "Seuil 10.04",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          69.960000012
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         69.960000012
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 505,
+      "title": "Seuil 9.96",
+      "totalOccurrences": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "police-plafond",
+   "description": "Hauteurs 25,9 (397,5), 26 (400, atteint), 40 et 100 pt (plafonnes a 400).",
+   "query": "contrat",
+   "terms": [
+    "contrat"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Plafond 25.9",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.030760095,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.030760095,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "Plafond 26",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.03087886,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.03087886,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 3,
+     "title": "Plafond 40",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.047505938,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.047505938,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 4,
+     "title": "Plafond 100",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.118764846,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.118764846,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "0a0cb2d7",
+    "results": [
+     {
+      "id": 4,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 100,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          160.00000002599998
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         160.00000002599998
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 905,
+      "title": "Plafond 100",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 26,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          85.99999981399999
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         85.99999981399999
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 905,
+      "title": "Plafond 26",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 3,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 40,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          99.99999949
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         99.99999949
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 905,
+      "title": "Plafond 40",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 25.9,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          85.899999684
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         85.899999684
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 902.5,
+      "title": "Plafond 25.9",
+      "totalOccurrences": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "police-sur-requete-un-mot",
+   "description": "Un seul terme : A (meilleur bm25, police 9 pt) est depasse par B (bm25 un peu moins bon, 14 pt : +100) puis C (20 pt : +250, bm25 le plus faible).",
+   "query": "contrat",
+   "terms": [
+    "contrat"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "A petit",
+     "docRelevanceScore": 605,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -6,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.010688836,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.010688836,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "B moyen",
+     "docRelevanceScore": 545,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5.4,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.016627078,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.016627078,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 3,
+     "title": "C grand",
+     "docRelevanceScore": 475,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -4.7,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.023752969,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.023752969,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "0a0cb2d7",
+    "results": [
+     {
+      "id": 3,
+      "occurrences": [
+       {
+        "bm25": -4.7,
+        "distinctTerms": 1,
+        "fontSize": 20,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          79.999999592
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         79.999999592
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 725,
+      "title": "C grand",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5.4,
+        "distinctTerms": 1,
+        "fontSize": 14,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          73.99999937
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         73.99999937
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 645,
+      "title": "B moyen",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -6,
+        "distinctTerms": 1,
+        "fontSize": 9,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          68.99999960599999
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         68.99999960599999
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 605,
+      "title": "A petit",
+      "totalOccurrences": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "police-mot-isole-deux-termes",
+   "description": "Deux termes : le doc A a 'travail' et 'contrat' sur deux lignes distinctes, en 30 pt (pas de bonus multi-mots, bonus de police 400). Le doc B a les deux mots adjacents en 9 pt (+5000).",
+   "query": "contrat travail",
+   "terms": [
+    "contrat",
+    "travail"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "A isole",
+     "docRelevanceScore": 605,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -6,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.035629454,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.035629454,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.084033613,
+         "y": 0.106888361,
+         "width": 0.070588235,
+         "height": 0.035629454,
+         "line": 1
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "B adjacents",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.010688836,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.010688836,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.201680672,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.010688836,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "6c066e83",
+    "results": [
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 2,
+        "fontSize": 9,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          68.99999960599999
+         ],
+         [
+          119.99999984,
+          59.999999694,
+          161.999999665,
+          68.99999960599999
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         161.999999665,
+         68.99999960599999
+        ],
+        "text": "contrat travail"
+       }
+      ],
+      "relevanceScore": 5505,
+      "title": "B adjacents",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -6,
+        "distinctTerms": 1,
+        "fontSize": 30,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          89.99999996199999
+         ]
+        ],
+        "matchedTerms": [
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         89.99999996199999
+        ],
+        "text": "travail"
+       },
+       {
+        "bm25": -6,
+        "distinctTerms": 1,
+        "fontSize": 30,
+        "highlightRects": [
+         [
+          49.999999735,
+          89.999999962,
+          91.99999956,
+          120.00000023
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 1,
+        "page": 1,
+        "rect": [
+         49.999999735,
+         89.999999962,
+         91.99999956,
+         120.00000023
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 1005,
+      "title": "A isole",
+      "totalOccurrences": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "police-max-du-groupe",
+   "description": "Occurrence a deux mots adjacents de hauteurs 10 et 20 pt : la police du groupe est 20 (bonus 250 en plus de +5000), pas la moyenne ni le premier mot. Doc B : 10 et 12.",
+   "query": "contrat travail",
+   "terms": [
+    "contrat",
+    "travail"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "A groupe",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "contrat",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.168067227,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.023752969,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "B groupe",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "contrat",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.168067227,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.014251781,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "6c066e83",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 2,
+        "fontSize": 20,
+        "highlightRects": [
+         [
+          49.999999735,
+          59.999999694,
+          91.99999956,
+          70.000000064
+         ],
+         [
+          100.000000065,
+          59.999999694,
+          141.99999989,
+          79.999999592
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         49.999999735,
+         59.999999694,
+         141.99999989,
+         79.999999592
+        ],
+        "text": "contrat travail"
+       }
+      ],
+      "relevanceScore": 5755,
+      "title": "A groupe",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 2,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          49.999999735,
+          59.999999694,
+          91.99999956,
+          70.000000064
+         ],
+         [
+          100.000000065,
+          59.999999694,
+          141.99999989,
+          71.999999296
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         49.999999735,
+         59.999999694,
+         141.99999989,
+         71.999999296
+        ],
+        "text": "contrat travail"
+       }
+      ],
+      "relevanceScore": 5555,
+      "title": "B groupe",
+      "totalOccurrences": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "police-egalite-arrondie",
+   "description": "Page 1 : 11,96 pt (arrondie a 12,0) et bm25 -5 ; page 2 : 12,04 pt (arrondie a 12,0) et bm25 -2. Police egale apres arrondi : la page 1 (meilleur bm25) passe devant, alors que la police brute avantagerait la page 2.",
+   "query": "contrat",
+   "terms": [
+    "contrat"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Egalite",
+     "docRelevanceScore": 510,
+     "matchingPagesCount": 2,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.014204276,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.014204276,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 2,
+       "bm25": -2,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.014299287,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.014299287,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "0a0cb2d7",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          71.960000086
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         71.960000086
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -2,
+        "distinctTerms": 1,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          72.03999934800001
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 2,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         72.03999934800001
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 560,
+      "title": "Egalite",
+      "totalOccurrences": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "tri-distinct-avant-police",
+   "description": "Page 1 : deux mots distincts en 9 pt ; page 2 : un seul mot en 40 pt ; page 3 : un seul mot en 20 pt. Ordre attendu : 1, 2, 3 (distincts d'abord, puis police).",
+   "query": "contrat travail",
+   "terms": [
+    "contrat",
+    "travail"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Distinct",
+     "docRelevanceScore": 915,
+     "matchingPagesCount": 3,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -2,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.010688836,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.010688836,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.201680672,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.010688836,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 2,
+       "bm25": -9,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.047505938,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.047505938,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 3,
+       "bm25": -9,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.023752969,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.023752969,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "6c066e83",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -2,
+        "distinctTerms": 2,
+        "fontSize": 9,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          68.99999960599999
+         ],
+         [
+          119.99999984,
+          59.999999694,
+          161.999999665,
+          68.99999960599999
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         161.999999665,
+         68.99999960599999
+        ],
+        "text": "contrat travail"
+       },
+       {
+        "bm25": -9,
+        "distinctTerms": 1,
+        "fontSize": 40,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          99.99999949
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 2,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         99.99999949
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -9,
+        "distinctTerms": 1,
+        "fontSize": 20,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          79.999999592
+         ]
+        ],
+        "matchedTerms": [
+         "travail"
+        ],
+        "occId": 0,
+        "page": 3,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         79.999999592
+        ],
+        "text": "travail"
+       }
+      ],
+      "relevanceScore": 6315,
+      "title": "Distinct",
+      "totalOccurrences": 3
+     }
+    ]
+   }
+  },
+  {
+   "name": "tri-police-avant-bm25",
+   "description": "Meme nombre de mots distincts : page 2 (bm25 -1, 16 pt) et page 3 (bm25 -5, 16 pt) devant la page 1 (bm25 -9, 10 pt) ; a police egale le meilleur bm25 gagne (3 avant 2), puis la page.",
+   "query": "contrat",
+   "terms": [
+    "contrat"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Police bm25",
+     "docRelevanceScore": 920,
+     "matchingPagesCount": 4,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -9,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 2,
+       "bm25": -1,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.019002375,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.019002375,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 3,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.019002375,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.019002375,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 4,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.019002375,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.019002375,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "0a0cb2d7",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 16,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          75.999999444
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 3,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         75.999999444
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 16,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          75.999999444
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 4,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         75.999999444
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -1,
+        "distinctTerms": 1,
+        "fontSize": 16,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          75.999999444
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 2,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         75.999999444
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -9,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 1070,
+      "title": "Police bm25",
+      "totalOccurrences": 4
+     }
+    ]
+   }
+  },
+  {
+   "name": "tri-meilleure-occurrence-par-page",
+   "description": "Page 1 : une occurrence a deux mots en 12 pt + un 'contrat' isole en 30 pt ; page 2 : deux mots en 14 pt ; page 3 : un mot en 40 pt. Une page vaut sa MEILLEURE occurrence (distincts puis police) : ordre 2, 1, 3 ; le 30 pt de la page 1 ne la fait pas remonter.",
+   "query": "contrat travail",
+   "terms": [
+    "contrat",
+    "travail"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Meilleure occurrence",
+     "docRelevanceScore": 415,
+     "matchingPagesCount": 3,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -4,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.014251781,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.014251781,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.201680672,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.014251781,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.084033613,
+         "y": 0.142517815,
+         "width": 0.070588235,
+         "height": 0.035629454,
+         "line": 1
+        }
+       ]
+      },
+      {
+       "page": 2,
+       "bm25": -4,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.016627078,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.016627078,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.201680672,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.016627078,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 3,
+       "bm25": -4,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.047505938,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.047505938,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "6c066e83",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -4,
+        "distinctTerms": 2,
+        "fontSize": 14,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          73.99999937
+         ],
+         [
+          119.99999984,
+          59.999999694,
+          161.999999665,
+          73.99999937
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 2,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         161.999999665,
+         73.99999937
+        ],
+        "text": "contrat travail"
+       },
+       {
+        "bm25": -4,
+        "distinctTerms": 2,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          71.999999296
+         ],
+         [
+          119.99999984,
+          59.999999694,
+          161.999999665,
+          71.999999296
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         161.999999665,
+         71.999999296
+        ],
+        "text": "contrat travail"
+       },
+       {
+        "bm25": -4,
+        "distinctTerms": 1,
+        "fontSize": 40,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          99.99999949
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 3,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         99.99999949
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -4,
+        "distinctTerms": 1,
+        "fontSize": 30,
+        "highlightRects": [
+         [
+          49.999999735,
+          120.00000023,
+          91.99999956,
+          150.000000498
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 1,
+        "page": 1,
+        "rect": [
+         49.999999735,
+         120.00000023,
+         91.99999956,
+         150.000000498
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 5815,
+      "title": "Meilleure occurrence",
+      "totalOccurrences": 4
+     }
+    ]
+   }
+  },
+  {
+   "name": "police-hors-5-pages",
+   "description": "Le doc A a 6 pages ; la 6e (bm25 le plus faible) est en 40 pt mais le SQL (page_rank <= 5) ne la transmet pas : pas de bonus de police. Le doc B (score de base 810 < 930) a une 2e page en 20 pt dans ses 5 meilleures : +250, il passe devant A.",
+   "query": "contrat",
+   "terms": [
+    "contrat"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "A six pages",
+     "docRelevanceScore": 930,
+     "matchingPagesCount": 6,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -9,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 2,
+       "bm25": -8,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 3,
+       "bm25": -7,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 4,
+       "bm25": -6,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 5,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 6,
+       "bm25": -1,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.047505938,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.047505938,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "B grande police",
+     "docRelevanceScore": 810,
+     "matchingPagesCount": 2,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -8,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.011876485,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.011876485,
+         "line": 0
+        }
+       ]
+      },
+      {
+       "page": 2,
+       "bm25": -2,
+       "words": [
+        {
+         "text": "le",
+         "x": 0.084033613,
+         "y": 0.071258907,
+         "width": 0.020168067,
+         "height": 0.023752969,
+         "line": 0
+        },
+        {
+         "text": "contrat",
+         "x": 0.117647059,
+         "y": 0.071258907,
+         "width": 0.070588235,
+         "height": 0.023752969,
+         "line": 0
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "0a0cb2d7",
+    "results": [
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -2,
+        "distinctTerms": 1,
+        "fontSize": 20,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          79.999999592
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 2,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         79.999999592
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -8,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 1060,
+      "title": "B grande police",
+      "totalOccurrences": 2
+     },
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -9,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -8,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 2,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -7,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 3,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -6,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 4,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 10,
+        "highlightRects": [
+         [
+          70.000000105,
+          59.999999694,
+          111.99999993,
+          70.000000064
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 5,
+        "rect": [
+         70.000000105,
+         59.999999694,
+         111.99999993,
+         70.000000064
+        ],
+        "text": "contrat"
+       }
+      ],
+      "relevanceScore": 930,
+      "title": "A six pages",
+      "totalOccurrences": 6
+     }
+    ]
+   }
+  },
+  {
+   "name": "page-letter",
+   "description": "Pages Letter 612 x 792 pt, 'contrat travail' a 24,5 pt (joints, +5000) ou 25,5 pt (separes : sur 612 pt, 25,5 pt = 0,0417 de page, soit 24,8 pt si on suppose 595 pt). Police 12 pt sur 792 pt (12,8 pt si on suppose 842 pt).",
+   "query": "contrat travail",
+   "terms": [
+    "contrat",
+    "travail"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Letter joints",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "contrat",
+         "x": 0.081699346,
+         "y": 0.075757576,
+         "width": 0.068627451,
+         "height": 0.015151515,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.190359477,
+         "y": 0.075757576,
+         "width": 0.068627451,
+         "height": 0.015151515,
+         "line": 0
+        }
+       ],
+       "size": {
+        "widthPt": 612,
+        "heightPt": 792
+       }
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "Letter separes",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "contrat",
+         "x": 0.081699346,
+         "y": 0.075757576,
+         "width": 0.068627451,
+         "height": 0.015151515,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.191993464,
+         "y": 0.075757576,
+         "width": 0.068627451,
+         "height": 0.015151515,
+         "line": 0
+        }
+       ],
+       "size": {
+        "widthPt": 612,
+        "heightPt": 792
+       }
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "6c066e83",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 2,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          49.999999752,
+          60.000000191999995,
+          91.999999764,
+          72.00000007199999
+         ],
+         [
+          116.499999924,
+          60.000000191999995,
+          158.499999936,
+          72.00000007199999
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         49.999999752,
+         60.000000191999995,
+         158.499999936,
+         72.00000007199999
+        ],
+        "text": "contrat travail"
+       }
+      ],
+      "relevanceScore": 5555,
+      "title": "Letter joints",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          49.999999752,
+          60.000000191999995,
+          91.999999764,
+          72.00000007199999
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         49.999999752,
+         60.000000191999995,
+         91.999999764,
+         72.00000007199999
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          117.499999968,
+          60.000000191999995,
+          159.49999998,
+          72.00000007199999
+         ]
+        ],
+        "matchedTerms": [
+         "travail"
+        ],
+        "occId": 1,
+        "page": 1,
+        "rect": [
+         117.499999968,
+         60.000000191999995,
+         159.49999998,
+         72.00000007199999
+        ],
+        "text": "travail"
+       }
+      ],
+      "relevanceScore": 555,
+      "title": "Letter separes",
+      "totalOccurrences": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "page-paysage",
+   "description": "Pages paysage 842 x 595 pt, 'contrat travail' a 24 pt (joints, +5000) ou 26 pt (separes : sur 842 pt, 26 pt = 0,0309 de page, soit 18,4 pt si on suppose 595 pt). Police 12 pt sur 595 pt (17 pt si on suppose 842 pt).",
+   "query": "contrat travail",
+   "terms": [
+    "contrat",
+    "travail"
+   ],
+   "documents": [
+    {
+     "docId": 1,
+     "title": "Paysage joints",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "contrat",
+         "x": 0.059382423,
+         "y": 0.100840336,
+         "width": 0.049881235,
+         "height": 0.020168067,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.137767221,
+         "y": 0.100840336,
+         "width": 0.049881235,
+         "height": 0.020168067,
+         "line": 0
+        }
+       ],
+       "size": {
+        "widthPt": 842,
+        "heightPt": 595
+       }
+      }
+     ]
+    },
+    {
+     "docId": 2,
+     "title": "Paysage separes",
+     "docRelevanceScore": 505,
+     "matchingPagesCount": 1,
+     "pages": [
+      {
+       "page": 1,
+       "bm25": -5,
+       "words": [
+        {
+         "text": "contrat",
+         "x": 0.059382423,
+         "y": 0.100840336,
+         "width": 0.049881235,
+         "height": 0.020168067,
+         "line": 0
+        },
+        {
+         "text": "travail",
+         "x": 0.140142518,
+         "y": 0.100840336,
+         "width": 0.049881235,
+         "height": 0.020168067,
+         "line": 0
+        }
+       ],
+       "size": {
+        "widthPt": 842,
+        "heightPt": 595
+       }
+      }
+     ]
+    }
+   ],
+   "windowedOutDocIds": [],
+   "expected": {
+    "queryHash": "6c066e83",
+    "results": [
+     {
+      "id": 1,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 2,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          50.000000166,
+          59.99999992,
+          92.000000036,
+          71.999999785
+         ],
+         [
+          116.000000082,
+          59.99999992,
+          157.999999952,
+          71.999999785
+         ]
+        ],
+        "matchedTerms": [
+         "contrat",
+         "travail"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         50.000000166,
+         59.99999992,
+         157.999999952,
+         71.999999785
+        ],
+        "text": "contrat travail"
+       }
+      ],
+      "relevanceScore": 5555,
+      "title": "Paysage joints",
+      "totalOccurrences": 1
+     },
+     {
+      "id": 2,
+      "occurrences": [
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          50.000000166,
+          59.99999992,
+          92.000000036,
+          71.999999785
+         ]
+        ],
+        "matchedTerms": [
+         "contrat"
+        ],
+        "occId": 0,
+        "page": 1,
+        "rect": [
+         50.000000166,
+         59.99999992,
+         92.000000036,
+         71.999999785
+        ],
+        "text": "contrat"
+       },
+       {
+        "bm25": -5,
+        "distinctTerms": 1,
+        "fontSize": 12,
+        "highlightRects": [
+         [
+          118.000000156,
+          59.99999992,
+          160.00000002599998,
+          71.999999785
+         ]
+        ],
+        "matchedTerms": [
+         "travail"
+        ],
+        "occId": 1,
+        "page": 1,
+        "rect": [
+         118.000000156,
+         59.99999992,
+         160.00000002599998,
+         71.999999785
+        ],
+        "text": "travail"
+       }
+      ],
+      "relevanceScore": 555,
+      "title": "Paysage separes",
+      "totalOccurrences": 2
+     }
+    ]
+   }
   }
  ]
 }

@@ -57,6 +57,7 @@ function makeDocumentIndex(pages: readonly string[]): DocumentIndex {
     pageTermCounts,
     terms,
     pageBoxes: pages.map(() => []),
+    pageSizes: pages.map(() => ({ widthPt: 595, heightPt: 842 })),
   };
 }
 
@@ -246,6 +247,7 @@ describe("performance de la fusion", () => {
       pageTermCounts: Array.from({ length: PAGES }, () => WORDS_PER_PAGE),
       terms,
       pageBoxes: [],
+      pageSizes: [],
     };
   }
 

@@ -10,6 +10,11 @@
 - Nouveau panneau de paramètres du plugin : Réindexer, Vider l'index (avec confirmation), Diagnostic technique et journal des avertissements. La section « Avancé » de l'onglet disparaît ; l'onglet propose « Ouvrir les paramètres ».
 - La recherche se lance uniquement avec Entrée (plus de recherche à la frappe).
 - Les résultats n'affichent plus que le dossier contenant le PDF ; le compteur indique « N pages ».
+- Classement affiné par la taille de police : les passages écrits en gros caractères (titres) remontent. La taille est approchée par la hauteur des mots telle que PDF.js la fournit. Ce critère s'applique aussi aux requêtes d'un seul mot. Seules les 5 meilleures pages de chaque document sont mesurées.
+- Format d'index `.dsx` version 2 (taille des pages). Les index créés par la version précédente sont mis à jour automatiquement, une fois, PDF par PDF : l'ancien index reste utilisable pendant la mise à jour (statut « Mise à jour de l'index »). Cette mise à jour relit donc chaque PDF une fois ; son coût sur une grosse bibliothèque n'est pas mesuré.
+- Une page aux dimensions aberrantes est ramenée au format A4 avec un avertissement dans le journal ; le PDF reste indexé.
+- Attention : un `.dsx` version 2 n'est pas lisible par la version 0.2.0 du plugin, à ne pas faire cohabiter sur le même dossier de SiYuan.
+- Classement de référence : fixture régénérée avec le moteur Rust de DocSeeker (29 scénarios).
 
 ## 0.2.0 — 2026-11-05
 

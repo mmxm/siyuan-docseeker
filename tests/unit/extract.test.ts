@@ -138,6 +138,100 @@ describe("buildDocumentIndex", () => {
     expect(idx.terms[0]?.postings[0]?.page).toBe(3);
   });
 
+  it("reports one page size per page, in points, rounded to 0.1", () => {
+    const meta = { ...META, pageCount: 2 };
+    const idx = buildDocumentIndex(meta, [
+      { ...page([item("a")], 2), viewWidth: 841.89, viewHeight: 595.276 },
+      { ...page([item("b")], 1), viewWidth: 612, viewHeight: 792 },
+    ]);
+    expect(idx.pageSizes).toEqual([
+      { widthPt: 612, heightPt: 792 },
+      { widthPt: 841.9, heightPt: 595.3 },
+    ]);
+  });
+
+  it("uses the A4 fallback for pages absent from the extraction", () => {
+    const meta = { ...META, pageCount: 3 };
+    const idx = buildDocumentIndex(meta, [page([item("mot")], 2)]);
+    expect(idx.pageSizes).toEqual([
+      { widthPt: 595, heightPt: 842 },
+      { widthPt: W, heightPt: H },
+      { widthPt: 595, heightPt: 842 },
+    ]);
+  });
+
+  it("round-trips page sizes through the v2 codec", async () => {
+    const idx = buildDocumentIndex(META, [{ ...page([item("a")]), viewWidth: 595.3, viewHeight: 841.9 }]);
+    const back = await decodeIndex(await encodeIndex(idx));
+    expect(back.pageSizes).toEqual([{ widthPt: 595.3, heightPt: 841.9 }]);
+  });
+
+  it("rejects non-positive or non-finite page sizes (boxes cannot be computed)", () => {
+    expect(() => buildDocumentIndex(META, [{ ...page([]), viewWidth: 0 }])).toThrow(ExtractionInputError);
+    expect(() => buildDocumentIndex(META, [{ ...page([]), viewHeight: -1 }])).toThrow(ExtractionInputError);
+    expect(() => buildDocumentIndex(META, [{ ...page([]), viewHeight: Infinity }])).toThrow(ExtractionInputError);
+    expect(() => buildDocumentIndex(META, [{ ...page([]), viewWidth: Number.NaN }])).toThrow(ExtractionInputError);
+  });
+
+  describe("pages aberrantes (taille hors 0.1..20000 pt) : repli A4 et avertissement", () => {
+    const aberrant: readonly [string, Partial<ExtractedPage>][] = [
+      ["largeur 0.01", { viewWidth: 0.01 }],
+      ["hauteur 20001", { viewHeight: 20001 }],
+      ["largeur 100000", { viewWidth: 100000 }],
+    ];
+
+    it.each(aberrant)("%s : la page prend le repli A4, l'avertissement nomme la page, le PDF est indexé", (_n, over) => {
+      const warnings: string[] = [];
+      const meta = { ...META, pageCount: 2 };
+      const idx = buildDocumentIndex(
+        meta,
+        [{ ...page([item("mot")], 2), ...over }, page([item("ok")], 1)],
+        { onWarn: (message) => warnings.push(message) },
+      );
+      expect(idx.pageSizes).toEqual([
+        { widthPt: W, heightPt: H },
+        { widthPt: 595, heightPt: 842 },
+      ]);
+      expect(idx.terms.map((t) => t.term)).toEqual(["mot", "ok"]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/page 2/);
+      expect(warnings[0]).toMatch(/A4|595/);
+    });
+
+    it("les boîtes restent des fractions valides de la vraie vue, et l'index s'encode", async () => {
+      const idx = buildDocumentIndex(META, [{ ...page([item("mot")]), viewWidth: 30000 }], { onWarn: () => undefined });
+      for (const b of idx.pageBoxes[0] ?? []) {
+        expect(b.x + b.width).toBeLessThanOrEqual(1);
+      }
+      const back = await decodeIndex(await encodeIndex(idx));
+      expect(back.pageSizes).toEqual([{ widthPt: 595, heightPt: 842 }]);
+    });
+
+    it("sans onWarn : pas d'exception, repli quand même", () => {
+      const idx = buildDocumentIndex(META, [{ ...page([item("mot")]), viewWidth: 30000 }]);
+      expect(idx.pageSizes).toEqual([{ widthPt: 595, heightPt: 842 }]);
+    });
+
+    it("les bornes exactes (0.1 et 20000) ne sont pas aberrantes", () => {
+      const warnings: string[] = [];
+      const idx = buildDocumentIndex(META, [{ ...page([]), viewWidth: 20000, viewHeight: 0.1 }], {
+        onWarn: (m) => warnings.push(m),
+      });
+      expect(idx.pageSizes).toEqual([{ widthPt: 20000, heightPt: 0.1 }]);
+      expect(warnings).toEqual([]);
+    });
+
+    it("un onWarn qui lève n'est pas avalé : l'exception remonte à l'appelant (l'indexeur la protège)", () => {
+      expect(() =>
+        buildDocumentIndex(META, [{ ...page([item("mot")]), viewWidth: 30000 }], {
+          onWarn: () => {
+            throw new Error("boom");
+          },
+        }),
+      ).toThrow("boom");
+    });
+  });
+
   it("orders terms by UTF-8 bytes and postings by page then ordinal", () => {
     const meta = { ...META, pageCount: 2 };
     const idx = buildDocumentIndex(meta, [

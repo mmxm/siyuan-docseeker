@@ -15,6 +15,7 @@ const QUANTUM = 1 / 65535;
 const MAX_JSON_RATIO_INVERSE = 4;
 
 function makeIndex(overrides: Partial<DocumentIndex> = {}): DocumentIndex {
+  const pageTermCounts = overrides.pageTermCounts ?? [];
   return {
     normalizerVersion: 1,
     extractorVersion: "4.0.379",
@@ -24,6 +25,7 @@ function makeIndex(overrides: Partial<DocumentIndex> = {}): DocumentIndex {
     pageTermCounts: [],
     terms: [],
     pageBoxes: [],
+    pageSizes: pageTermCounts.map(() => ({ widthPt: 595, heightPt: 842 })),
     ...overrides,
   };
 }
@@ -280,7 +282,7 @@ describe("lazy page box decoding", () => {
 describe("stabilité du format et compression", () => {
   it("stabilité du format : octets figés pour un petit exemple (à régénérer volontairement)", async () => {
     const bytes = await encodeIndex(smallIndex());
-    expect(toHex(bytes.slice(0, 8))).toBe("44535831" + "0100" + "0100");
+    expect(toHex(bytes.slice(0, 8))).toBe("44535831" + "0200" + "0100");
     expect(toHex(bytes)).toBe(EXPECTED_SMALL_HEX);
   });
 
@@ -303,4 +305,4 @@ describe("stabilité du format et compression", () => {
 });
 
 const EXPECTED_SMALL_HEX =
-  "4453583101000100030000000000000087d6324100008056febc784207342e302e3337390e006173736574732f646f632e7064665400000005000000590000001d000000760000000f000000850000003000000063666002006366604dcc29c84864646060494a2d49646261604d4fcccd4d64e40200636462606264646462646066640400110000000300000010000000636600810606073006c2fffb41acfff500630000639a25696c7cd6272ded3f1030000100";
+  "4453583102000100030000000000000087d6324100008056febc784207342e302e3337390e006173736574732f646f632e7064665400000005000000590000001d000000760000000f000000850000003d00000063666002006366604dcc29c84864646060494a2d49646261604d4fcccd4d64e40200636462606264646462646066640400160000000700000014000000dba7f7c4919901041a181cc01808ffef07b1fed70300dba7f7c4910100dba7f7c4916996a4b1f1599fb4b4ff40c0000400";

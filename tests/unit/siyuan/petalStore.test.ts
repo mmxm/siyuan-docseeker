@@ -590,6 +590,26 @@ describe("petalStore : clear (vider l'index)", () => {
     expect(report.failed).toEqual([]);
   });
 
+  it("supprime les sauvegardes de manifeste rejeté (datées ou non) et leurs .tmp, rien d'autre", async () => {
+    const kernel = createFake();
+    const names = [
+      "manifest.rejected.json",
+      "manifest.rejected-1700000000000.json",
+      "manifest.rejected-1700000000000.json.id3.tmp",
+      "manifest.rejected.json.id4.tmp",
+      "manifest.json",
+    ];
+    for (const n of names) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    kernel.files.set(`${IDX}/manifest.rejected-abc.json`, bytesOf(1));
+    kernel.files.set(`${IDX}/manifest.rejected.txt`, bytesOf(1));
+    const report = await storeOf(kernel).clear();
+    expect([...report.removed].sort()).toEqual([...names].sort());
+    expect(report.removed[0]).toBe("manifest.json");
+    expect(report.removed.indexOf("manifest.json")).toBeLessThan(report.removed.indexOf("manifest.rejected.json"));
+    expect([...kernel.files.keys()].sort()).toEqual([`${IDX}/manifest.rejected-abc.json`, `${IDX}/manifest.rejected.txt`]);
+    expect(report.failed).toEqual([]);
+  });
+
   it("ne touche à aucun autre fichier du dossier (nom inconnu, nom invalide, sous-dossier)", async () => {
     const kernel = createFake(["with space.dsx", "../evil.dsx"]);
     kernel.files.set(`${IDX}/notes.txt`, bytesOf(1));

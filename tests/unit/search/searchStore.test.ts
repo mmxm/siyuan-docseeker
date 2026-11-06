@@ -284,6 +284,17 @@ describe("createSearchStore", () => {
     expect(s.getPhase()).toBe("ready");
   });
 
+  it("la fin du chargement émet une dernière notification en phase ready (c'est elle qui relance le contrôleur)", async () => {
+    const h = harness(["a", "b"]);
+    const s = createSearchStore(h.deps);
+    const phases: string[] = [];
+    s.subscribe(() => phases.push(s.getPhase()));
+    await s.load();
+    expect(phases.at(-1)).toBe("ready");
+    expect(phases.filter((p) => p === "ready")).toHaveLength(1); // une seule : un seul re-classement côté contrôleur
+    expect(phases.slice(0, -1).every((p) => p === "loading")).toBe(true);
+  });
+
   describe("refresh(options)", () => {
     it("keeps the phase ready (no visible loading) during a refresh of a loaded store", async () => {
       const h = harness(["a"]);

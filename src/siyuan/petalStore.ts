@@ -81,8 +81,12 @@ const BAK_SUFFIX = ".bak";
 const MAX_NAME_LENGTH = 200;
 const ALLOWED_NAME = /^[A-Za-z0-9._-]+$/;
 const MS_PER_SECOND = 1000;
-/** Fichiers du plugin que `clear()` peut supprimer : `.dsx` et manifeste, avec leurs `.bak` ou `.<id>.tmp`. */
-const CLEARABLE = /^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\.dsx|manifest\.json)(?:\.bak|\.[A-Za-z0-9_-]+\.tmp)?$/;
+/**
+ * Fichiers du plugin que `clear()` peut supprimer : `.dsx`, manifeste et sauvegardes de manifeste rejeté
+ * (`manifest.rejected.json`, `manifest.rejected-<horodatage-ms>.json`, elles contiennent des chemins de PDF),
+ * avec leurs `.bak` ou `.<id>.tmp`. Le manifeste est vidé d'abord, les sauvegardes avec les autres groupes ensuite.
+ */
+const CLEARABLE = /^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\.dsx|manifest\.json|manifest\.rejected(?:-\d+)?\.json)(?:\.bak|\.[A-Za-z0-9_-]+\.tmp)?$/;
 const MANIFEST_NAME = "manifest.json";
 const TRANSIENT_TAIL = /(?:\.bak|\.[A-Za-z0-9_-]+\.tmp)$/;
 

@@ -26,6 +26,7 @@ function makeIndex(): DocumentIndex {
     pageTermCounts: pageLengths,
     terms,
     pageBoxes: pageLengths.map((len, p) => Array.from({ length: len }, (_, i) => box(i + p * 13))),
+    pageSizes: pageLengths.map(() => ({ widthPt: 595, heightPt: 842 })),
   };
 }
 
@@ -57,7 +58,12 @@ describe("decodePagesMatches", () => {
   it("handles a page without text and a filter that retains nothing", async () => {
     const bytes = await encodeIndex(makeIndex());
     const many = await decodePagesMatches(bytes, [6, 1], () => false, undefined, indexOf);
-    expect(many.get(6)).toEqual({ boxes: [], ordinals: [], termIndexes: [] });
+    expect(many.get(6)).toEqual({
+      boxes: [],
+      ordinals: [],
+      termIndexes: [],
+      pageSize: { widthPt: 595, heightPt: 842 },
+    });
     expect(many.get(1)).toEqual(await decodePageMatches(bytes, 1, () => false, undefined, indexOf));
   });
 

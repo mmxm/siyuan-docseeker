@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { encodeIndex } from "../../src/core/codec/encode";
 import { decodeIndex } from "../../src/core/codec/decode";
-import { DsxFormatError, compareUtf8, type DocumentIndex, type TermEntry, type WordBox } from "../../src/core/codec/format";
+import { DsxFormatError, MAX_PAGE_DIMENSION_PT, compareUtf8, type DocumentIndex, type TermEntry, type WordBox } from "../../src/core/codec/format";
 
 const QUANTUM = 1 / 65535;
 const SEED = 20260401;
@@ -44,6 +44,10 @@ const indexArb: fc.Arbitrary<DocumentIndex> = fc.integer({ min: 0, max: 5 }).cha
     pageTermCounts: fc.array(fc.nat({ max: 100000 }), { minLength: pageCount, maxLength: pageCount }),
     terms: termsArb(pageCount),
     pageBoxes: fc.array(fc.array(boxArb, { maxLength: 4 }), { minLength: pageCount, maxLength: pageCount }),
+    pageSizes: fc.array(
+      fc.record({ widthPt: fc.integer({ min: 1, max: MAX_PAGE_DIMENSION_PT * 10 }).map((n) => n / 10), heightPt: fc.integer({ min: 1, max: MAX_PAGE_DIMENSION_PT * 10 }).map((n) => n / 10) }),
+      { minLength: pageCount, maxLength: pageCount },
+    ),
   }),
 );
 
@@ -92,6 +96,7 @@ describe("fuzz de corruption", () => {
       { term: "beta", postings: [{ page: 1, termFrequency: 1, wordOrdinals: [1] }, { page: 3, termFrequency: 1, wordOrdinals: [0] }] },
     ],
     pageBoxes: [[{ x: 0.1, y: 0.1, width: 0.2, height: 0.2 }], [], [{ x: 0.5, y: 0.5, width: 0.5, height: 0.5 }]],
+    pageSizes: [{ widthPt: 595, heightPt: 842 }, { widthPt: 612, heightPt: 792 }, { widthPt: 842, heightPt: 595 }],
   };
 
   /** Réussir ou lever un DsxFormatError : aucune autre erreur n'est acceptable. */

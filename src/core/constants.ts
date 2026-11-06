@@ -17,3 +17,13 @@ export const OCCURRENCE_MAX_GAP_PT = 25;
 export const SAME_LINE_OVERLAP = 0.6;
 /** Largeur de page supposée (A4 en points) pour convertir les fractions de page en points. */
 export const ASSUMED_PAGE_WIDTH_PT = 595;
+/** Hauteur de page supposée (A4 en points) : repli pour les index v1 sans taille de page. */
+export const ASSUMED_PAGE_HEIGHT_PT = 842;
+
+/**
+ * Bonus de police du moteur DocSeeker (search-core) : (meilleure taille - seuil) * multiplicateur, plafonné.
+ * La « taille de police » y est en réalité la hauteur de la boîte du mot en points (arrondie à 0,1).
+ */
+export const FONT_SIZE_BONUS_THRESHOLD = 10;
+export const FONT_SIZE_BONUS_MULTIPLIER = 25;
+export const FONT_SIZE_BONUS_MAX = 400;

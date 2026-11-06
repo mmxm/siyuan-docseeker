@@ -49,7 +49,7 @@ describe("createPageMatchService", () => {
     const readDsx = vi.fn(async () => new Uint8Array(1));
     const decode = vi.fn(async (_b: Uint8Array, _p: number, _w: unknown, _l: unknown, indexOf?: (t: string) => number) => {
       seen.push(indexOf?.("classification") ?? -2, indexOf?.("bpco") ?? -2);
-      return { boxes: [], ordinals: [] } as PageMatch;
+      return { boxes: [], ordinals: [], pageSize: { widthPt: 595, heightPt: 842 } } as PageMatch;
     });
     const service = createPageMatchService({ readDsx, decode: decode as never });
     await service.getPageMatches("d", 1, "classification bpco");
@@ -212,17 +212,29 @@ describe("createPageMatchService", () => {
       expect(decodePages).toHaveBeenCalledTimes(1);
       expect(decodePages.mock.calls[0]?.[1]).toEqual([1, 2, 3]);
       for (const page of [1, 2, 3]) expect(many.get(page)).toEqual(await service.getPageMatches("d", page, "plan"));
-      expect(decode).not.toHaveBeenCalled(); // servi par le cache rempli page par page
+      expect(decode).toHaveBeenCalledTimes(3); // le lot ne remplit pas le cache : chaque page est redecodee
     });
 
-    it("ne decode que les pages absentes du cache", async () => {
+    it("ne met pas ses resultats en cache : le lot du re-classement n'evince pas les pages affichees", async () => {
+      const readDsx = vi.fn(async () => new Uint8Array(10));
+      const decode = vi.fn(async (_b: Uint8Array, page: number) => ({ boxes: [], ordinals: [page] }) as unknown as PageMatch);
+      const decodePages = vi.fn(async (_b: Uint8Array, pages: readonly number[]) =>
+        new Map(pages.map((p) => [p, { boxes: [], ordinals: [p] } as unknown as PageMatch])),
+      );
+      const service = createPageMatchService({ readDsx, decode: decode as never, decodePages: decodePages as never, maxPages: 2 });
+      await service.getPageMatches("shown", 1, "plan"); // page affichee, en cache
+      for (let i = 0; i < 6; i++) await service.getPagesMatches(`doc${i}`, [1, 2, 3, 4, 5], "plan"); // 30 pages mesurees
+      expect(decode).toHaveBeenCalledTimes(1);
+      await service.getPageMatches("shown", 1, "plan");
+      expect(decode).toHaveBeenCalledTimes(1); // toujours en cache
+    });
+
+    it("reutilise une page deja en cache (affichee) sans la redecoder", async () => {
       const { service, decodePages } = setupPages();
+      await service.getPageMatches("d", 2, "plan");
       await service.getPagesMatches("d", [1, 2], "plan");
-      await service.getPagesMatches("d", [2, 3], "plan");
-      expect(decodePages).toHaveBeenCalledTimes(2);
-      expect(decodePages.mock.calls[1]?.[1]).toEqual([3]);
-      await service.getPagesMatches("d", [1, 2, 3], "plan");
-      expect(decodePages).toHaveBeenCalledTimes(2);
+      expect(decodePages).toHaveBeenCalledTimes(1);
+      expect(decodePages.mock.calls[0]?.[1]).toEqual([1]);
     });
 
     it("mutualise un appel en vol et fusionne les doublons", async () => {
@@ -255,7 +267,7 @@ describe("createPageMatchService", () => {
       live.abort();
       await expect(pending).rejects.toMatchObject({ name: "AbortError" });
       gate.resolve(new Uint8Array(2));
-      await service.getPagesMatches("d", [1], "plan"); // le travail partagé a abouti : résultat en cache
+      await service.getPagesMatches("d", [1], "plan"); // le fichier lu par le travail partagé est réutilisé
       expect(readDsx).toHaveBeenCalledTimes(1);
     });
 

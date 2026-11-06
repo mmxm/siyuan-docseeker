@@ -16,11 +16,11 @@ function setup() {
   });
   const emit = (e: IndexerEvent) => [...listeners].forEach((l) => l(e));
   const idle = (
-    over: Partial<{ indexed: number; skippedScanned: number; failed: number; removed: number; incomplete: number; failures: string[] }> = {},
+    over: Partial<{ indexed: number; skippedScanned: number; failed: number; removed: number; migrated: number; incomplete: number; failures: string[] }> = {},
   ) =>
     emit({
       type: "idle",
-      summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false, incomplete: 0, ...over },
+      summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, migrated: 0, cancelled: false, incomplete: 0, ...over },
     });
   return { activity, emit, idle, listeners, setProgress: (p: typeof progress) => (progress = p) };
 }
@@ -105,7 +105,7 @@ describe("indexActivity", () => {
   it("passe annulée sans travail : retombe au repos", () => {
     const s = setup();
     s.emit({ type: "progress", path: "a.pdf", page: 1, total: 2 });
-    s.emit({ type: "idle", summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: true, incomplete: 0 } });
+    s.emit({ type: "idle", summary: { indexed: 0, skippedScanned: 0, failed: 0, removed: 0, migrated: 0, cancelled: true, incomplete: 0 } });
     expect(s.activity.getSnapshot().phase).toBe("idle");
   });
 
@@ -217,3 +217,54 @@ describe("indexActivity : échecs persistants et découverte", () => {
   });
 });
 
+describe("indexActivity : migration de l'index", () => {
+  it("une passe qui ne fait que migrer est marquée migrating pendant son exécution", () => {
+    const s = setup();
+    s.emit({ type: "started" });
+    s.emit({ type: "plan", toIndex: 2, migrating: 2, complete: true });
+    s.setProgress({ done: 0, total: 2 });
+    s.emit({ type: "progress", path: "a.pdf", page: 1, total: 3 });
+    expect(s.activity.getSnapshot()).toEqual({
+      phase: "running", done: 0, total: 2, failed: 0, incomplete: 0, discovery: false, migrating: true,
+    });
+    s.idle({ indexed: 2, migrated: 2 });
+    expect(s.activity.getSnapshot()).toEqual({ phase: "done", done: 0, total: 0, failed: 0, incomplete: 0, discovery: false });
+  });
+
+  it("une passe mixte (PDF nouveaux en plus) n'est pas marquée migrating : de vrais résultats manquent", () => {
+    const s = setup();
+    s.emit({ type: "started" });
+    s.emit({ type: "plan", toIndex: 3, migrating: 2, complete: true });
+    s.emit({ type: "progress", path: "a.pdf", page: 1, total: 3 });
+    expect(s.activity.getSnapshot().migrating).toBeUndefined();
+  });
+
+  it("un parcours incomplet n'est jamais marqué migrating : des résultats peuvent manquer", () => {
+    const s = setup();
+    s.emit({ type: "started" });
+    s.emit({ type: "plan", toIndex: 2, migrating: 2, complete: false });
+    s.emit({ type: "progress", path: "a.pdf", page: 1, total: 3 });
+    expect(s.activity.getSnapshot().phase).toBe("running");
+    expect(s.activity.getSnapshot().migrating).toBeUndefined();
+  });
+
+  it("le marquage ne survit pas à la passe suivante", () => {
+    const s = setup();
+    s.emit({ type: "started" });
+    s.emit({ type: "plan", toIndex: 1, migrating: 1, complete: true });
+    s.idle({ indexed: 1, migrated: 1 });
+    s.emit({ type: "started" });
+    s.emit({ type: "progress", path: "b.pdf", page: 1, total: 3 });
+    expect(s.activity.getSnapshot().phase).toBe("running");
+    expect(s.activity.getSnapshot().migrating).toBeUndefined();
+  });
+
+  it("un événement plan seul ne produit ni état ni notification", () => {
+    const s = setup();
+    const l = vi.fn();
+    s.activity.subscribe(l);
+    s.emit({ type: "started" });
+    s.emit({ type: "plan", toIndex: 1, migrating: 1, complete: true });
+    expect(l).not.toHaveBeenCalled();
+  });
+});

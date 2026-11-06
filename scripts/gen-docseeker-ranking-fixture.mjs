@@ -15,9 +15,10 @@
 //
 // Fidelite : seuls la recherche FTS5/SQLite (bm25, fenetre LIMIT 15, ORDER BY score DESC, title ASC) est
 // EMULEE ici (pas de base SQLite) ; tout le reste (occurrences, tris, bonus, score final, ordre) vient du Rust.
-// Unites : les `words_json` du Rust sont en points sur une page supposee 595 x 842 (le seuil de 25 pt, la
-// fusion a 2,5 pt et la hauteur de page 842 pour y_ratio sont codes en dur). Le JSON stocke les boites en
-// FRACTIONS de page (comme WordBox) ; le script les reconvertit en points (x * 595, y * 842) pour le Rust.
+// Unites : les `words_json` du Rust sont en POINTS REELS de la page (le seuil de 25 pt et la fusion a 2,5 pt
+// sont en points ; 842 n'est code en dur que pour y_ratio). Le JSON stocke les boites en FRACTIONS de page
+// (comme WordBox) et, par page, `size` {widthPt, heightPt} quand elle n'est pas A4 (595 x 842) ; le script
+// reconvertit en points avec cette taille pour le Rust.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,20 +42,20 @@ const round9 = (v) => Number(v.toFixed(9));
 
 // ---------- construction des pages synthetiques ----------
 
-/** Une ligne de mots. `words` : "mot" ou ["mot", ecartAvantEnPoints]. Retourne des boites en fractions. */
-function line(words, { y, lineNo, x = 50, h = LINE_H, gap = WORD_GAP }) {
+/** Une ligne de mots. `words` : "mot" ou ["mot", ecartAvantEnPoints, hauteurEnPoints]. Retourne des boites en fractions. */
+function line(words, { y, lineNo, x = 50, h = LINE_H, gap = WORD_GAP, pw = PAGE_W, ph = PAGE_H }) {
   const boxes = [];
   let cursor = x;
   words.forEach((w, i) => {
-    const [text, gapBefore] = Array.isArray(w) ? w : [w, gap];
+    const [text, gapBefore = gap, wordH = h] = Array.isArray(w) ? w : [w];
     if (i > 0) cursor += gapBefore;
     const width = [...text].length * CHAR_W;
     boxes.push({
       text,
-      x: round9(cursor / PAGE_W),
-      y: round9(y / PAGE_H),
-      width: round9(width / PAGE_W),
-      height: round9(h / PAGE_H),
+      x: round9(cursor / pw),
+      y: round9(y / ph),
+      width: round9(width / pw),
+      height: round9(wordH / ph),
       line: lineNo,
     });
     cursor += width;
@@ -70,7 +71,8 @@ function textPage(lines, opts = {}) {
 
 const sentence = (s) => s.split(" ");
 
-const page = (n, bm25, words) => ({ page: n, bm25, words });
+/** `size` : taille de page en points, seulement si elle n'est pas A4 (les boites doivent alors etre construites avec). */
+const page = (n, bm25, words, size) => ({ page: n, bm25, words, ...(size ? { size } : {}) });
 
 /** Score de document tel que calcule par sql.rs : titre + |meilleur bm25| * 100 + min(pages * 5, 300). */
 function sqlDocScore(pages, titleBonus) {
@@ -99,14 +101,14 @@ function sqlOrder(docs) {
   );
 }
 
-function toWordsJson(words) {
+function toWordsJson(words, size = { widthPt: PAGE_W, heightPt: PAGE_H }) {
   // Tuple WordEntry : [x0, y0, x1, y1, mot, block_no, line_no], en points.
   return JSON.stringify(
     words.map((w) => [
-      w.x * PAGE_W,
-      w.y * PAGE_H,
-      (w.x + w.width) * PAGE_W,
-      (w.y + w.height) * PAGE_H,
+      w.x * size.widthPt,
+      w.y * size.heightPt,
+      (w.x + w.width) * size.widthPt,
+      (w.y + w.height) * size.heightPt,
       w.text,
       0,
       w.line,
@@ -134,10 +136,10 @@ function buildRows(windowed) {
       rows.push({ ...base, page_number: 1, words_json: "[]", page_bm25: 0 });
       continue;
     }
-    if (d.pages.length > SQL_PAGES_PER_DOC) throw new Error(`${d.title} : plus de ${SQL_PAGES_PER_DOC} pages`);
-    const byBm25 = [...d.pages].sort((a, b) => a.bm25 - b.bm25);
+    // `rp.page_rank <= 5` : seules les 5 meilleures pages (bm25 le plus negatif, puis page) arrivent au Rust.
+    const byBm25 = [...d.pages].sort((a, b) => a.bm25 - b.bm25 || a.page - b.page).slice(0, SQL_PAGES_PER_DOC);
     for (const p of byBm25) {
-      rows.push({ ...base, page_number: p.page, words_json: toWordsJson(p.words), page_bm25: p.bm25 });
+      rows.push({ ...base, page_number: p.page, words_json: toWordsJson(p.words, p.size), page_bm25: p.bm25 });
     }
   }
   return rows;
@@ -393,6 +395,171 @@ function scenarios() {
     "contrat",
     [T.contrat],
     [doc(1, "Trente occurrences", manyOccPages)],
+  );
+
+  // ---------- Phase 2 : taille de police et tri des occurrences ----------
+  const one = (h) => textPage([sentence("le contrat")], { h });
+
+  // 18. Seuil strict a 10 pt et arrondi a 0,1 de la hauteur.
+  add(
+    "police-seuil-arrondi",
+    "Hauteurs 9,96 / 10 / 10,04 (arrondies a 10,0 : aucun bonus) puis 10,06 et 10,14 (arrondies a 10,1 : bonus 2,5). Le bonus s'applique a la taille ARRONDIE.",
+    "contrat",
+    [T.contrat],
+    [9.96, 10, 10.04, 10.06, 10.14].map((h, i) => doc(i + 1, `Seuil ${h}`, [page(1, -5, one(h))])),
+  );
+
+  // 19. Plafond du bonus.
+  add(
+    "police-plafond",
+    "Hauteurs 25,9 (397,5), 26 (400, atteint), 40 et 100 pt (plafonnes a 400).",
+    "contrat",
+    [T.contrat],
+    [25.9, 26, 40, 100].map((h, i) => doc(i + 1, `Plafond ${h}`, [page(1, -5, one(h))])),
+  );
+
+  // 20. Requete a un mot : le bonus de police retourne l'ordre BM25.
+  add(
+    "police-sur-requete-un-mot",
+    "Un seul terme : A (meilleur bm25, police 9 pt) est depasse par B (bm25 un peu moins bon, 14 pt : +100) puis C (20 pt : +250, bm25 le plus faible).",
+    "contrat",
+    [T.contrat],
+    [
+      doc(1, "A petit", [page(1, -6, one(9))]),
+      doc(2, "B moyen", [page(1, -5.4, one(14))]),
+      doc(3, "C grand", [page(1, -4.7, one(20))]),
+    ],
+  );
+
+  // 21. Mot isole en grande police dans une requete a deux termes.
+  add(
+    "police-mot-isole-deux-termes",
+    "Deux termes : le doc A a 'travail' et 'contrat' sur deux lignes distinctes, en 30 pt (pas de bonus multi-mots, bonus de police 400). Le doc B a les deux mots adjacents en 9 pt (+5000).",
+    "contrat travail",
+    [T.contrat, T.travail],
+    [
+      doc(1, "A isole", [page(1, -6, textPage([sentence("le travail"), [["contrat"]]], { h: 30 }))]),
+      doc(2, "B adjacents", [page(1, -5, textPage([sentence("le contrat travail")], { h: 9 }))]),
+    ],
+  );
+
+  // 22. Police d'un groupe = max de ses mots.
+  add(
+    "police-max-du-groupe",
+    "Occurrence a deux mots adjacents de hauteurs 10 et 20 pt : la police du groupe est 20 (bonus 250 en plus de +5000), pas la moyenne ni le premier mot. Doc B : 10 et 12.",
+    "contrat travail",
+    [T.contrat, T.travail],
+    [
+      doc(1, "A groupe", [page(1, -5, textPage([[["contrat", 8, 10], ["travail", 8, 20]]]))]),
+      doc(2, "B groupe", [page(1, -5, textPage([[["contrat", 8, 10], ["travail", 8, 12]]]))]),
+    ],
+  );
+
+  // 23. Egalite de police apres arrondi : le bm25 departage.
+  add(
+    "police-egalite-arrondie",
+    "Page 1 : 11,96 pt (arrondie a 12,0) et bm25 -5 ; page 2 : 12,04 pt (arrondie a 12,0) et bm25 -2. Police egale apres arrondi : la page 1 (meilleur bm25) passe devant, alors que la police brute avantagerait la page 2.",
+    "contrat",
+    [T.contrat],
+    [doc(1, "Egalite", [page(1, -5, one(11.96)), page(2, -2, one(12.04))])],
+  );
+
+  // 24. Mots distincts avant police.
+  add(
+    "tri-distinct-avant-police",
+    "Page 1 : deux mots distincts en 9 pt ; page 2 : un seul mot en 40 pt ; page 3 : un seul mot en 20 pt. Ordre attendu : 1, 2, 3 (distincts d'abord, puis police).",
+    "contrat travail",
+    [T.contrat, T.travail],
+    [
+      doc(1, "Distinct", [
+        page(1, -2, textPage([sentence("le contrat travail")], { h: 9 })),
+        page(2, -9, textPage([sentence("le contrat")], { h: 40 })),
+        page(3, -9, textPage([sentence("le travail")], { h: 20 })),
+      ]),
+    ],
+  );
+
+  // 25. Police avant bm25.
+  add(
+    "tri-police-avant-bm25",
+    "Meme nombre de mots distincts : page 2 (bm25 -1, 16 pt) et page 3 (bm25 -5, 16 pt) devant la page 1 (bm25 -9, 10 pt) ; a police egale le meilleur bm25 gagne (3 avant 2), puis la page.",
+    "contrat",
+    [T.contrat],
+    [
+      doc(1, "Police bm25", [
+        page(1, -9, one(10)),
+        page(2, -1, one(16)),
+        page(3, -5, one(16)),
+        page(4, -5, one(16)),
+      ]),
+    ],
+  );
+
+  // 26. Meilleure occurrence de chaque page.
+  add(
+    "tri-meilleure-occurrence-par-page",
+    "Page 1 : une occurrence a deux mots en 12 pt + un 'contrat' isole en 30 pt ; page 2 : deux mots en 14 pt ; page 3 : un mot en 40 pt. Une page vaut sa MEILLEURE occurrence (distincts puis police) : ordre 2, 1, 3 ; le 30 pt de la page 1 ne la fait pas remonter.",
+    "contrat travail",
+    [T.contrat, T.travail],
+    [
+      doc(1, "Meilleure occurrence", [
+        page(1, -4, [
+          ...line(["le", "contrat", "travail"], { y: 60, lineNo: 0, h: 12 }),
+          ...line(["contrat"], { y: 120, lineNo: 1, h: 30 }),
+        ]),
+        page(2, -4, textPage([sentence("le contrat travail")], { h: 14 })),
+        page(3, -4, textPage([sentence("le contrat")], { h: 40 })),
+      ]),
+    ],
+  );
+
+  // 27. Pages au-dela des 5 meilleures.
+  add(
+    "police-hors-5-pages",
+    "Le doc A a 6 pages ; la 6e (bm25 le plus faible) est en 40 pt mais le SQL (page_rank <= 5) ne la transmet pas : pas de bonus de police. Le doc B (score de base 810 < 930) a une 2e page en 20 pt dans ses 5 meilleures : +250, il passe devant A.",
+    "contrat",
+    [T.contrat],
+    [
+      doc(1, "A six pages", [
+        page(1, -9, one(10)),
+        page(2, -8, one(10)),
+        page(3, -7, one(10)),
+        page(4, -6, one(10)),
+        page(5, -5, one(10)),
+        page(6, -1, one(40)),
+      ]),
+      doc(2, "B grande police", [page(1, -8, one(10)), page(2, -2, one(20))]),
+    ],
+  );
+
+  // 28. Format Letter : la largeur reelle (612 pt) fixe le seuil de 25 pt, la hauteur reelle (792 pt) la police.
+  const LETTER = { widthPt: 612, heightPt: 792 };
+  const letterPage = (n, bm25, gapPt, h) =>
+    page(n, bm25, textPage([[["contrat"], ["travail", gapPt]]], { h, pw: LETTER.widthPt, ph: LETTER.heightPt }), LETTER);
+  add(
+    "page-letter",
+    "Pages Letter 612 x 792 pt, 'contrat travail' a 24,5 pt (joints, +5000) ou 25,5 pt (separes : sur 612 pt, 25,5 pt = 0,0417 de page, soit 24,8 pt si on suppose 595 pt). Police 12 pt sur 792 pt (12,8 pt si on suppose 842 pt).",
+    "contrat travail",
+    [T.contrat, T.travail],
+    [
+      doc(1, "Letter joints", [letterPage(1, -5, 24.5, 12)]),
+      doc(2, "Letter separes", [letterPage(1, -5, 25.5, 12)]),
+    ],
+  );
+
+  // 29. Format paysage : la largeur reelle (842 pt) fixe le seuil de 25 pt, la hauteur reelle (595 pt) la police.
+  const LANDSCAPE = { widthPt: 842, heightPt: 595 };
+  const landscapePage = (n, bm25, gapPt, h) =>
+    page(n, bm25, textPage([[["contrat"], ["travail", gapPt]]], { h, pw: LANDSCAPE.widthPt, ph: LANDSCAPE.heightPt }), LANDSCAPE);
+  add(
+    "page-paysage",
+    "Pages paysage 842 x 595 pt, 'contrat travail' a 24 pt (joints, +5000) ou 26 pt (separes : sur 842 pt, 26 pt = 0,0309 de page, soit 18,4 pt si on suppose 595 pt). Police 12 pt sur 595 pt (17 pt si on suppose 842 pt).",
+    "contrat travail",
+    [T.contrat, T.travail],
+    [
+      doc(1, "Paysage joints", [landscapePage(1, -5, 24, 12)]),
+      doc(2, "Paysage separes", [landscapePage(1, -5, 26, 12)]),
+    ],
   );
 
   return S;

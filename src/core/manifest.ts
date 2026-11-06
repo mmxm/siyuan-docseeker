@@ -8,6 +8,51 @@ export interface PdfEntry {
 
 export type Manifest = readonly PdfEntry[];
 
+/**
+ * Version de l'index d'un PDF (format du .dsx et extracteur), par entrée du manifeste. Une entrée plus ancienne
+ * (ou sans `indexVersion`, ce qui vaut 1) est réindexée par la passe d'indexation même si le PDF n'a pas changé.
+ * 1 = .dsx v1 (sans taille de page) ; 2 = .dsx v2 (tailles de page, extracteur « docseeker-extract-2 »).
+ */
+export const CURRENT_INDEX_VERSION = 2;
+/** Version attribuée à une entrée de manifeste qui n'en porte pas (manifestes écrits avant la version 2). */
+export const LEGACY_INDEX_VERSION = 1;
+
+/** Entrée de manifeste persistée : un PDF et la version de son index. */
+export interface IndexedEntry extends PdfEntry {
+  readonly indexVersion: number;
+}
+
+export type IndexVersionReading =
+  | { readonly version: number; readonly problem?: undefined }
+  | { readonly version: number; readonly problem: string };
+
+/**
+ * Lit la version d'index d'une entrée de manifeste (donnée non fiable). Absente -> 1 ; entier >= 1 -> tel quel ;
+ * toute autre valeur -> 1 avec `problem` (l'appelant trace). Une version supérieure à la courante est conservée
+ * et signalée (un index écrit par une version plus récente du plugin n'est ni réécrit ni rétrogradé).
+ */
+export function readIndexVersion(raw: unknown): IndexVersionReading {
+  if (raw === undefined) return { version: LEGACY_INDEX_VERSION };
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1) {
+    return { version: LEGACY_INDEX_VERSION, problem: `indexVersion invalide (${JSON.stringify(raw) ?? String(raw)}), traitée comme ${LEGACY_INDEX_VERSION}` };
+  }
+  if (raw > CURRENT_INDEX_VERSION) {
+    return { version: raw, problem: `indexVersion ${raw} postérieure à la version ${CURRENT_INDEX_VERSION} connue : entrée conservée telle quelle` };
+  }
+  return { version: raw };
+}
+
+/**
+ * Entrées inchangées (même taille et même date) dont l'index est plus ancien que `CURRENT_INDEX_VERSION` :
+ * à réindexer pour migrer leur .dsx. Les chemins absents de `current` ne sont jamais migrés.
+ */
+export function entriesNeedingMigration(previous: readonly IndexedEntry[], current: Manifest): PdfEntry[] {
+  const versionByPath = new Map(previous.map((e) => [e.path, e.indexVersion]));
+  return diffManifest(previous, current).unchanged.filter(
+    (e) => (versionByPath.get(e.path) ?? LEGACY_INDEX_VERSION) < CURRENT_INDEX_VERSION,
+  );
+}
+
 export interface ManifestDiff {
   readonly added: readonly PdfEntry[];
   readonly modified: readonly PdfEntry[];

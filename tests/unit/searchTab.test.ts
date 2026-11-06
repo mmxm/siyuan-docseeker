@@ -67,6 +67,8 @@ function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
       { x: 0.5, y: 0.6, width: 0.2, height: 0.05 },
     ],
     ordinals: [1],
+    pageSize: { widthPt: 595, heightPt: 842 },
+    termIndexes: [0],
   }));
   const onWarn = vi.fn();
   const observerDisconnect = vi.fn();
@@ -150,6 +152,7 @@ describe("mountSearchTab", () => {
         { x: 0.16, y: 0.2, width: 0.05, height: 0.02 },
       ],
       ordinals: [0, 1],
+      pageSize: { widthPt: 595, heightPt: 842 },
       termIndexes: [0, 1],
     };
 
@@ -187,7 +190,13 @@ describe("mountSearchTab", () => {
     });
 
     it("journalise l'échec de mesure via onWarn et garde l'ordre BM25", async () => {
-      const h = harness(); // le décodeur par défaut ne fournit pas termIndexes
+      const h = harness();
+      // Décodeur sans termIndexes (contrat violé) : la mesure échoue, l'ordre BM25 reste.
+      h.decodePageMatches.mockImplementation(async () => ({
+        boxes: TWO_TERMS.boxes,
+        ordinals: TWO_TERMS.ordinals,
+        pageSize: { widthPt: 595, heightPt: 842 },
+      }));
       const tab = mountSearchTab(h.host, h.deps);
       await flush();
       await type(h.host, "chat chien");
@@ -260,6 +269,7 @@ describe("mountSearchTab", () => {
     await flush();
     expect(h.read.mock.calls.filter(([n]) => n === "a.dsx")).toHaveLength(2); // index + page
     const before = h.list.mock.calls.length;
+    h.read.mockClear();
 
     h.emit({ type: "indexed", path: PDF_A, pages: 3 });
     h.emit({ type: "removed", path: "assets/autre.pdf" });
@@ -269,9 +279,8 @@ describe("mountSearchTab", () => {
     await flush();
     expect(h.list.mock.calls.length).toBe(before + 1);
 
-    h.read.mockClear();
-    cards(h.host)[0]!.click();
-    await flush();
+    // Les correspondances du document sont invalidées : le re-classement relancé (requête à un mot incluse)
+    // relit le .dsx au lieu de réutiliser le cache.
     expect(h.read.mock.calls.filter(([n]) => n === "a.dsx").length).toBeGreaterThanOrEqual(1);
     tab.dispose();
   });
@@ -296,7 +305,9 @@ describe("mountSearchTab", () => {
     expect(arg.rects[0]!.top).toBeCloseTo(60);
     expect(arg.rects[0]!.width).toBeCloseTo(20);
     expect(arg.rects[0]!.height).toBeCloseTo(5);
-    expect(h.decodePageMatches).toHaveBeenCalledTimes(1);
+    // Le re-classement (requête à un mot incluse) décode les pages 2 et 3 sans les mettre en cache,
+    // pour ne pas évincer les pages affichées ; le clic sur la page 3 la décode donc une fois de plus.
+    expect(h.decodePageMatches).toHaveBeenCalledTimes(3);
     tab.dispose();
   });
 
@@ -844,6 +855,7 @@ describe("mountSearchTab : indicateur d'indexation automatique", () => {
     failed: number;
     incomplete: number;
     discovery: boolean;
+    migrating?: boolean;
   };
   const IDLE: Snapshot = { phase: "idle", done: 0, total: 0, failed: 0, incomplete: 0, discovery: false };
   const snap = (over: Partial<Snapshot>): Snapshot => ({ ...IDLE, ...over });
@@ -925,6 +937,16 @@ describe("mountSearchTab : indicateur d'indexation automatique", () => {
     a.set(snap({ phase: "running", done: 2, total: 3 }));
     expect(region.firstChild).toBe(node);
     expect(count.textContent).toBe("2/3 PDF");
+  });
+
+  it("migration de l'index : libellé « Mise à jour de l'index » avec N/M, distinct de « Indexation en cours »", () => {
+    const a = activity();
+    const { region, count } = mount(a);
+    a.set(snap({ phase: "running", done: 1, total: 4, migrating: true }));
+    expect(region.textContent).toBe("Mise à jour de l'index");
+    expect(count.textContent).toBe("1/4 PDF");
+    a.set(snap({ phase: "running", done: 1, total: 4 }));
+    expect(region.textContent).toBe("Indexation en cours");
   });
 
   it("total inconnu : pas de fraction", () => {
@@ -1027,7 +1049,7 @@ describe("mountSearchTab : résultats partiels pendant l'indexation", () => {
   const IDLE = { phase: "idle", done: 0, total: 0, failed: 0, incomplete: 0, discovery: false } as const;
   function setup() {
     const h = harness();
-    let snapshot: { phase: "idle" | "running" | "done" | "partial" | "failed"; done: number; total: number; failed: number; incomplete: number; discovery: boolean } = IDLE;
+    let snapshot: { phase: "idle" | "running" | "done" | "partial" | "failed"; done: number; total: number; failed: number; incomplete: number; discovery: boolean; migrating?: boolean } = IDLE;
     const listeners = new Set<() => void>();
     h.deps = {
       ...h.deps,
@@ -1037,8 +1059,8 @@ describe("mountSearchTab : résultats partiels pendant l'indexation", () => {
         subscribe: (l) => (listeners.add(l), () => listeners.delete(l)),
       },
     };
-    const set = (phase: typeof snapshot.phase, done = 0): void => {
-      snapshot = { ...IDLE, phase, done, total: 3 };
+    const set = (phase: typeof snapshot.phase, done = 0, migrating = false): void => {
+      snapshot = { ...IDLE, phase, done, total: 3, ...(migrating ? { migrating } : {}) };
       for (const l of [...listeners]) l();
     };
     const status = (): string => h.host.querySelector(".docseeker-status")!.textContent!;
@@ -1059,6 +1081,22 @@ describe("mountSearchTab : résultats partiels pendant l'indexation", () => {
     set("done");
     expect(status()).toBe("Aucun résultat");
     expect(h.read.mock.calls.length).toBe(reads);
+    tab.dispose();
+  });
+
+  it("pendant une migration de l'index, les résultats ne sont PAS annoncés comme incomplets", async () => {
+    const { h, set, status } = setup();
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    const plain = status();
+    set("running", 0, true);
+    expect(status()).toBe(plain);
+    expect(status()).not.toContain("peuvent manquer");
+    set("running", 1, false); // une vraie indexation de PDF nouveaux : l'avis revient
+    expect(status()).toContain("des résultats peuvent manquer");
+    set("running", 2, true); // retour à la migration seule : l'avis disparaît sans relancer la requête
+    expect(status()).toBe(plain);
     tab.dispose();
   });
 

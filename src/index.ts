@@ -366,6 +366,7 @@ export default class DocSeekerPlugin extends Plugin {
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
       onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),
+      onWarn: (message) => this.warnLog.warn(message),
       shouldYield: () => this.userIsActive(), // les passes automatiques cèdent la place à l'utilisateur
     });
     return this.indexer;

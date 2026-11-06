@@ -498,12 +498,26 @@ describe("searchController : re-classement par proximité", () => {
     expect(RERANK_GRACE_MS).toBe(300);
   });
 
-  it("requête à un mot : chemin inchangé, aucun appel, ranking bm25 publié tout de suite", () => {
+  it("requête à un mot : re-classée aussi (bonus de police), un appel, rien publié avant la fenêtre 1 ou la grâce", async () => {
     const { controller, clock, calls, seen } = rerankSetup();
     controller.submit("alpha");
-    expect(calls).toHaveLength(0);
+    await flushMicro();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.query).toBe("alpha");
+    expect(seen).toHaveLength(0);
+    clock.advance(RERANK_GRACE_MS);
     expect(seen).toHaveLength(1);
     expect(resultOf(seen[0]!).ranking).toBe("bm25");
+  });
+
+  it("requête à un mot : publie l'ordre re-classé quand la fenêtre 1 arrive dans la grâce", async () => {
+    const { controller, calls, seen } = rerankSetup();
+    controller.submit("alpha");
+    const docs = calls[0]!.docs as Parameters<typeof reversed>[0];
+    calls[0]!.resolve(reversed(docs));
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).ranking).toBe("proximity");
   });
 
   it("requête à deux mots : un appel avec signal et onWindow, rien publié avant la fenêtre 1 ou la grâce", async () => {
@@ -624,8 +638,12 @@ describe("searchController : re-classement par proximité", () => {
     first.onWindow?.({ docs: [], pagesOrderByDoc: new Map(), bonusByDoc: new Map(), failedDocIds: new Set() });
     clock.advance(RERANK_GRACE_MS * 3);
     await flushMicro();
-    expect(seen).toHaveLength(published);
-    expect(resultOf(controller.getViewModel()).ranking).toBe("bm25");
+    // Seule la grâce de la nouvelle requête (re-classée aussi depuis les requêtes à un mot) publie, en BM25 :
+    // jamais le résultat tardif de l'ancienne.
+    expect(seen).toHaveLength(published + 1);
+    const vm = resultOf(controller.getViewModel());
+    expect(vm.query).toBe("alpha");
+    expect(vm.ranking).toBe("bm25");
   });
 
   it("une nouvelle exécution (même requête) annule la précédente", async () => {
@@ -690,19 +708,59 @@ describe("searchController : re-classement par proximité", () => {
     expect(resultOf(seen[0]!).ranking).toBe("bm25");
   });
 
-  it("pendant le chargement partiel : pas de re-classement avant la fenêtre de regroupement", async () => {
+  it("pendant le chargement : aucun re-classement lancé, résultats BM25 partiels actualisés à chaque fenêtre", async () => {
+    const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    controller.submit("alpha beta");
+    expect(calls).toHaveLength(0);
+    expect(seen).toHaveLength(1); // publié tout de suite, sans attendre la grâce
+    const first = resultOf(seen[0]!);
+    expect(first.partial).toBe(true);
+    expect(first.ranking).toBe("bm25");
+    for (let i = 0; i < 4; i++) {
+      source.emit();
+      source.emit();
+      clock.advance(150);
+    }
+    expect(calls).toHaveLength(0); // des relances coalescées, jamais de décodage
+    expect(seen).toHaveLength(5); // une actualisation par fenêtre de 150 ms
+    expect(clock.pending).toBe(0); // pas de grâce en attente
+  });
+
+  it("fin du chargement : le re-classement est lancé une seule fois", async () => {
+    const { controller, clock, calls, source } = rerankSetup({ phase: "loading" });
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    controller.submit("alpha beta");
+    source.emit();
+    clock.advance(150);
+    expect(calls).toHaveLength(0);
+    source.phase = "ready";
+    source.emit();
+    expect(calls).toHaveLength(1);
+    clock.advance(1000);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("un re-classement en vol est annulé quand le chargement reprend (réindexation)", async () => {
     const { controller, clock, calls, source } = rerankSetup({ phase: "ready" });
     controller.submit("alpha beta");
     expect(calls).toHaveLength(1);
     source.phase = "loading";
     source.progress = { loaded: 1, total: 3, failed: [] };
     source.emit();
-    source.emit();
-    source.emit();
-    expect(calls).toHaveLength(1); // coalescé : pas de nouveau run immédiat
     clock.advance(150);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.signal!.aborted).toBe(true);
+  });
+
+  it("invalidate() pendant le chargement : pas de re-classement, juste l'actualisation BM25", async () => {
+    const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
+    source.progress = { loaded: 1, total: 3, failed: [] };
+    controller.submit("alpha beta");
+    controller.invalidate();
+    clock.advance(150);
+    expect(calls).toHaveLength(0);
+    expect(seen).toHaveLength(2);
   });
 
   it("invalidate() relance proprement le re-classement de la requête courante", async () => {
@@ -724,7 +782,7 @@ describe("searchController : re-classement par proximité", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("M1 : runs rapprochés (150 ms) avec un ranker lent : l'ordre BM25 finit par être publié", async () => {
+  it("M1 : runs rapprochés (150 ms) avec un ranker lent : l'ordre BM25 est publié à chaque fenêtre, sans ranker", async () => {
     const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
     source.progress = { loaded: 1, total: 3, failed: [] };
     controller.submit("alpha beta");
@@ -732,8 +790,8 @@ describe("searchController : re-classement par proximité", () => {
       source.emit();
       clock.advance(150);
     }
-    expect(calls.length).toBeGreaterThan(2); // le ranker a bien été relancé à chaque fenêtre
-    expect(seen.length).toBeGreaterThan(0);
+    expect(calls).toHaveLength(0);
+    expect(seen.length).toBeGreaterThan(2);
     expect(resultOf(seen[0]!).ranking).toBe("bm25");
   });
 
@@ -833,9 +891,10 @@ describe("searchController : re-classement par proximité", () => {
   });
 
   it("6 : invalidate pendant la coalescence du chargement annule le re-classement en vol", async () => {
-    const { controller, clock, calls, seen, source } = rerankSetup({ phase: "loading" });
-    source.progress = { loaded: 1, total: 3, failed: [] };
+    const { controller, clock, calls, seen, source } = rerankSetup({ phase: "ready" });
     controller.submit("alpha beta");
+    source.phase = "loading";
+    source.progress = { loaded: 1, total: 3, failed: [] };
     source.emit(); // coalescence armée
     controller.invalidate();
     expect(calls[0]!.signal!.aborted).toBe(true);
@@ -851,6 +910,58 @@ describe("searchController : re-classement par proximité", () => {
     source.emit(); // run immédiat : annule la relance coalescée devenue inutile
     expect(calls).toHaveLength(2);
     clock.advance(1000);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("13 : invalidate() avec une requête d'un mot annule le vol et relance une fois", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.submit("alpha");
+    expect(calls).toHaveLength(1);
+    controller.invalidate();
+    expect(calls[0]!.signal!.aborted).toBe(true);
+    calls[0]!.resolve(reversed(calls[0]!.docs as Parameters<typeof reversed>[0]));
+    await flushMicro();
+    expect(seen.filter((v) => v.kind === "results" && v.ranking === "proximity")).toHaveLength(0);
+    clock.advance(150);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.query).toBe("alpha");
+    expect(calls[1]!.signal!.aborted).toBe(false);
+  });
+
+  it("13 : une requête d'un mot qui devient non cherchable annule le re-classement et publie empty-query", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.submit("alpha");
+    const old = calls[0]!;
+    controller.submit("  ");
+    expect(old.signal!.aborted).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({ kind: "empty-query" });
+    old.resolve(reversed(old.docs as Parameters<typeof reversed>[0]));
+    old.onWindow?.({ docs: [], pagesOrderByDoc: new Map(), bonusByDoc: new Map(), failedDocIds: new Set() });
+    await flushMicro();
+    clock.advance(RERANK_GRACE_MS * 3); // la grâce de l'ancienne requête a été annulée
+    expect(seen).toHaveLength(1);
+    expect(controller.getViewModel()).toEqual({ kind: "empty-query" });
+    controller.invalidate(); // plus de requête active : sans effet
+    clock.advance(1000);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("13 : annulation pendant un re-classement avancé : fenêtres et résolution tardives de l'ancien run ignorées", async () => {
+    const { controller, clock, calls, seen } = rerankSetup();
+    controller.submit("alpha beta");
+    const old = calls[0]!;
+    const reversedOld = reversed(old.docs as Parameters<typeof reversed>[0]);
+    old.resolve(reversedOld);
+    await flushMicro();
+    expect(seen).toHaveLength(1);
+    expect(resultOf(seen[0]!).ranking).toBe("proximity");
+    controller.invalidate(); // annule le run en cours
+    expect(old.signal!.aborted).toBe(true);
+    old.onWindow?.(reversedOld); // fenêtre tardive
+    await flushMicro();
+    expect(seen).toHaveLength(1); // rien de plus publié par l'ancien run
+    clock.advance(150);
     expect(calls).toHaveLength(2);
   });
 });

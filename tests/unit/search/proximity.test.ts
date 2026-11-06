@@ -4,12 +4,23 @@ import {
   MULTI_TERMS_ALL_MATCHED_BONUS,
   MULTI_TERMS_PARTIAL_MATCHED_BONUS,
   OCCURRENCE_MAX_GAP_PT,
+  FONT_SIZE_BONUS_MAX,
+  FONT_SIZE_BONUS_MULTIPLIER,
+  FONT_SIZE_BONUS_THRESHOLD,
   PROXIMITY_PAGES,
   RERANK_WINDOW,
   SAME_LINE_OVERLAP,
 } from "../../../src/core/constants";
 import type { WordBox } from "../../../src/core/codec/format";
-import { groupOccurrences, multiTermBonus, orderTopPages, rerankWindows } from "../../../src/search/proximity";
+import {
+  fontBonus,
+  fontSizePt,
+  groupOccurrences,
+  multiTermBonus,
+  orderTopPages,
+  pageStats,
+  rerankWindows,
+} from "../../../src/search/proximity";
 
 const PT = 1 / ASSUMED_PAGE_WIDTH_PT;
 const box = (x: number, y = 0.1, width = 0.05, height = 0.02): WordBox => ({ x, y, width, height });
@@ -38,15 +49,15 @@ describe("groupOccurrences", () => {
   it("groups words on one line separated by less than 25 pt", () => {
     const a = box(0.1);
     const b = after(a, 24);
-    expect(groupOccurrences([a, b], [0, 1], [0, 1])).toEqual([{ distinct: 2, ordinals: [0, 1] }]);
+    expect(groupOccurrences([a, b], [0, 1], [0, 1])).toEqual([{ distinct: 2, ordinals: [0, 1], fontSizePt: 16.8 }]);
   });
 
   it("splits words separated by 26 pt", () => {
     const a = box(0.1);
     const b = after(a, 26);
     expect(groupOccurrences([a, b], [0, 1], [0, 1])).toEqual([
-      { distinct: 1, ordinals: [0] },
-      { distinct: 1, ordinals: [1] },
+      { distinct: 1, ordinals: [0], fontSizePt: 16.8 },
+      { distinct: 1, ordinals: [1], fontSizePt: 16.8 },
     ]);
   });
 
@@ -85,7 +96,7 @@ describe("groupOccurrences", () => {
     const a = box(0.1);
     const b = after(a, 20);
     const c = after(b, 20); // 40+ pt du premier mais 20 pt du précédent
-    expect(groupOccurrences([a, b, c], [0, 1, 2], [0, 1, 0])).toEqual([{ distinct: 2, ordinals: [0, 1, 2] }]);
+    expect(groupOccurrences([a, b, c], [0, 1, 2], [0, 1, 0])).toEqual([{ distinct: 2, ordinals: [0, 1, 2], fontSizePt: 16.8 }]);
   });
 
   it("ignores unmatched words in between (non-consecutive ordinals) and uses reading order", () => {
@@ -93,14 +104,14 @@ describe("groupOccurrences", () => {
     const skipped = box(0.3);
     const b = after(a, 10);
     const boxes = [a, skipped, b];
-    expect(groupOccurrences(boxes, [0, 2], [0, 1])).toEqual([{ distinct: 2, ordinals: [0, 2] }]);
+    expect(groupOccurrences(boxes, [0, 2], [0, 1])).toEqual([{ distinct: 2, ordinals: [0, 2], fontSizePt: 16.8 }]);
   });
 
   it("counts distinct term indexes, not words", () => {
     const a = box(0.1);
     const b = after(a, 5);
     const c = after(b, 5);
-    expect(groupOccurrences([a, b, c], [0, 1, 2], [1, 1, 1])).toEqual([{ distinct: 1, ordinals: [0, 1, 2] }]);
+    expect(groupOccurrences([a, b, c], [0, 1, 2], [1, 1, 1])).toEqual([{ distinct: 1, ordinals: [0, 1, 2], fontSizePt: 16.8 }]);
   });
 
   it("rejects misaligned ordinals and term indexes, and ordinals outside the boxes", () => {
@@ -137,14 +148,114 @@ describe("multiTermBonus", () => {
   });
 });
 
+describe("fontSizePt", () => {
+  const h = (heightPt: number, pageHeightPt = 842): WordBox => box(0.1, 0.1, 0.05, heightPt / pageHeightPt);
+  it("is the box height in points (fraction x page height), rounded to 0.1", () => {
+    expect(fontSizePt([h(12.04)], [0], 842)).toBe(12);
+    expect(fontSizePt([h(12.06)], [0], 842)).toBe(12.1);
+  });
+  it("takes the maximum over the words of the occurrence", () => {
+    expect(fontSizePt([h(9), h(20), h(14)], [0, 1, 2], 842)).toBe(20);
+  });
+  it("only looks at the matched ordinals", () => {
+    expect(fontSizePt([h(9), h(40), h(14)], [0, 2], 842)).toBe(14);
+  });
+  it("scales with the page height", () => {
+    expect(fontSizePt([box(0.1, 0.1, 0.05, 0.02)], [0], 792)).toBe(15.8);
+  });
+  it("rejects an ordinal outside the boxes, like groupOccurrences", () => {
+    expect(() => fontSizePt([h(12)], [1], 842)).toThrow(RangeError);
+    expect(() => fontSizePt([h(12)], [-1], 842)).toThrow(RangeError);
+    expect(() => fontSizePt([], [0], 842)).toThrow(RangeError);
+  });
+  it.each([0, -842, Number.NaN, Number.POSITIVE_INFINITY])("is 0, never NaN or infinite, for an aberrant page height (%s)", (pageHeightPt) => {
+    expect(fontSizePt([h(12)], [0], pageHeightPt)).toBe(0);
+  });
+  it("is 0 without ordinals and never negative", () => {
+    expect(fontSizePt([h(12)], [], 842)).toBe(0);
+    expect(fontSizePt([box(0.1, 0.1, 0.05, -0.5)], [0], 842)).toBe(0);
+  });
+});
+
+describe("fontBonus", () => {
+  it("mirrors the engine constants", () => {
+    expect(FONT_SIZE_BONUS_THRESHOLD).toBe(10);
+    expect(FONT_SIZE_BONUS_MULTIPLIER).toBe(25);
+    expect(FONT_SIZE_BONUS_MAX).toBe(400);
+  });
+  it("is zero at 10 pt or below, strictly", () => {
+    expect(fontBonus(0)).toBe(0);
+    expect(fontBonus(9.9)).toBe(0);
+    expect(fontBonus(10)).toBe(0);
+  });
+  it("grows by 25 per point above 10 pt", () => {
+    expect(fontBonus(10.1)).toBeCloseTo(2.5, 9);
+    expect(fontBonus(12)).toBe(50);
+    expect(fontBonus(14)).toBe(100);
+  });
+  it("is capped at 400 from 26 pt", () => {
+    expect(fontBonus(25.9)).toBeCloseTo(397.5, 9);
+    expect(fontBonus(26)).toBe(400);
+    expect(fontBonus(40)).toBe(400);
+    expect(fontBonus(1e9)).toBe(400);
+  });
+  it("rejects non-finite sizes as zero rather than propagating NaN", () => {
+    expect(fontBonus(Number.NaN)).toBe(0);
+  });
+});
+
+describe("groupOccurrences font size", () => {
+  it("reports the maximum font size of each group in points, using the page height", () => {
+    const a = box(0.1, 0.1, 0.05, 12 / 842);
+    const b = { ...after(a, 5), height: 20 / 842 };
+    const far = { ...box(0.8, 0.1, 0.05, 15 / 842) };
+    const occ = groupOccurrences([a, b, far], [0, 1, 2], [0, 1, 0], { widthPt: 595, heightPt: 842 });
+    expect(occ.map((o) => o.fontSizePt)).toEqual([20, 15]);
+  });
+  it("uses the real page width for the 25 pt gap (Letter 612 pt)", () => {
+    const a = box(0.1, 0.1, 0.05, 0.015);
+    // 0.04 de page : 24,5 pt sur une page de 612 pt (joint), 23,8 pt sur 595 pt.
+    const b = box(a.x + a.width + 0.04, 0.1, 0.05, 0.015);
+    expect(groupOccurrences([a, b], [0, 1], [0, 1], { widthPt: 612, heightPt: 792 })).toHaveLength(1);
+    const c = box(a.x + a.width + 0.0415, 0.1, 0.05, 0.015); // 25,4 pt sur 612, 24,7 pt sur 595
+    expect(groupOccurrences([a, c], [0, 1], [0, 1], { widthPt: 612, heightPt: 792 })).toHaveLength(2);
+    expect(groupOccurrences([a, c], [0, 1], [0, 1])).toHaveLength(1); // repli A4 : 24,7 pt
+  });
+});
+
+describe("pageStats", () => {
+  const occ = (distinct: number, fontSizePt: number) => ({ distinct, fontSizePt, ordinals: [0] });
+  it("is empty for a page without occurrence", () => {
+    expect(pageStats([])).toEqual({ distinct: 0, fontSizePt: 0 });
+  });
+  it("keeps the best occurrence by (distinct, font) lexicographically, not the maximum of each", () => {
+    expect(pageStats([occ(2, 10), occ(1, 30)])).toEqual({ distinct: 2, fontSizePt: 10 });
+    expect(pageStats([occ(2, 10), occ(2, 14), occ(1, 30)])).toEqual({ distinct: 2, fontSizePt: 14 });
+  });
+});
+
 describe("orderTopPages", () => {
   const p = (page: number, score: number) => ({ page, score });
+  const stats = (entries: [number, number, number][]) =>
+    new Map(entries.map(([page, distinct, fontSizePt]) => [page, { distinct, fontSizePt }] as const));
   it("sorts by distinct terms desc, then score desc (better first), then page asc", () => {
     const pages = [p(1, 5), p(2, 9), p(3, 9), p(4, 1)];
-    const distinct = new Map([[4, 3], [1, 2]]);
-    expect(orderTopPages(pages, distinct).map((x) => x.page)).toEqual([4, 1, 2, 3]);
+    expect(orderTopPages(pages, stats([[4, 3, 0], [1, 2, 0]])).map((x) => x.page)).toEqual([4, 1, 2, 3]);
   });
-  it("treats missing pages as 0 distinct terms and keeps the input untouched", () => {
+  it("sorts by font size after distinct terms and before score", () => {
+    const pages = [p(1, 9), p(2, 1), p(3, 5)];
+    expect(orderTopPages(pages, stats([[1, 1, 12], [2, 1, 20], [3, 1, 12]])).map((x) => x.page)).toEqual([2, 1, 3]);
+  });
+  it("lets distinct terms win over font size", () => {
+    const pages = [p(1, 1), p(2, 1)];
+    expect(orderTopPages(pages, stats([[1, 2, 10], [2, 1, 40]])).map((x) => x.page)).toEqual([1, 2]);
+  });
+  it("compares font sizes rounded to 0.1 (10.04 ties with 10.0, 10.06 does not)", () => {
+    const pages = [p(1, 1), p(2, 9)];
+    expect(orderTopPages(pages, stats([[1, 1, 10.04], [2, 1, 10]])).map((x) => x.page)).toEqual([2, 1]);
+    expect(orderTopPages(pages, stats([[1, 1, 10.06], [2, 1, 10]])).map((x) => x.page)).toEqual([1, 2]);
+  });
+  it("treats missing pages as 0 distinct terms and 0 pt and keeps the input untouched", () => {
     const pages = Object.freeze([p(2, 1), p(1, 1)]);
     expect(orderTopPages(pages, new Map()).map((x) => x.page)).toEqual([1, 2]);
     expect(pages.map((x) => x.page)).toEqual([2, 1]);
