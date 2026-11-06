@@ -43,6 +43,12 @@ export interface SharedIndex {
   start(): Promise<void>;
   /** Dernier échec de chargement/rafraîchissement (message affichable), effacé au succès suivant. */
   getError(): string | undefined;
+  /**
+   * Relit la liste des `.dsx` tout de suite (après un vidage de l'index) : invalide les correspondances par
+   * page de tous les documents connus, efface ou expose l'erreur. Rejette si le rafraîchissement échoue
+   * (déjà journalisé et exposé via `getError()`). Sans effet après `dispose()`.
+   */
+  refreshNow(): Promise<void>;
   onStatus(listener: () => void): () => void;
   onInvalidate(listener: (docIds: readonly string[]) => void): () => void;
   dispose(): void;
@@ -181,6 +187,22 @@ export function createSharedIndex(deps: SharedIndexDeps): SharedIndex {
       return run;
     },
     getError: stateError,
+    async refreshNow() {
+      if (disposed) return;
+      const ids = store.listDocs().map((info) => info.docId);
+      if (ids.length > 0) emit(invalidateListeners, ids);
+      try {
+        await store.refresh({ reloadPaths: [], signal: lifetime.signal });
+        if (!lifetime.signal.aborted) setError(undefined);
+      } catch (cause) {
+        if (lifetime.signal.aborted) return;
+        warn("Rafraîchissement de l'index en échec", cause);
+        setError(`Rafraîchissement de l'index en échec : ${messageOf(cause)}.`);
+        throw cause;
+      } finally {
+        if (!lifetime.signal.aborted && ids.length > 0) emit(invalidateListeners, ids);
+      }
+    },
     onStatus(listener) {
       statusListeners.add(listener);
       return () => statusListeners.delete(listener);

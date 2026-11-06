@@ -42,7 +42,7 @@ interface Harness {
   emit: (event: IndexerEvent) => void;
   shared: SharedIndex;
   listeners: Set<(event: IndexerEvent) => void>;
-  start: ReturnType<typeof vi.fn>;
+  openSettings: ReturnType<typeof vi.fn>;
   openPdfAtPage: ReturnType<typeof vi.fn>;
   decodePageMatches: ReturnType<typeof vi.fn>;
   onWarn: ReturnType<typeof vi.fn>;
@@ -59,7 +59,7 @@ function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
   const list = vi.fn(async () => [...files.keys()]);
   const read = vi.fn(async (name: string) => files.get(name) ?? null);
   const listeners = new Set<(event: IndexerEvent) => void>();
-  const start = vi.fn(async () => ({ indexed: 0, skippedScanned: 0, failed: 0, removed: 0, cancelled: false }));
+  const openSettings = vi.fn();
   const openPdfAtPage = vi.fn(async () => ({ dispose: vi.fn(), ready: Promise.resolve(ATTACHED) }));
   const decodePageMatches = vi.fn(async () => ({
     boxes: [
@@ -91,7 +91,7 @@ function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
     store: { read } as unknown as SearchTabDeps["store"],
     sharedIndex: shared,
     decodePageMatches: decodePageMatches as unknown as NonNullable<SearchTabDeps["decodePageMatches"]>,
-    indexer: { start },
+    onOpenSettings: openSettings,
     openTab: vi.fn(),
     app: { id: "app" },
     openPdfAtPage: openPdfAtPage as unknown as NonNullable<SearchTabDeps["openPdfAtPage"]>,
@@ -106,7 +106,7 @@ function harness(over: { ids?: string[]; autoStart?: boolean } = {}): Harness {
     onWarn,
   };
   return {
-    host, deps, shared, files, list, read, listeners, start, openPdfAtPage, decodePageMatches, onWarn, observerDisconnect,
+    host, deps, shared, files, list, read, listeners, openSettings, openPdfAtPage, decodePageMatches, onWarn, observerDisconnect,
     emit: (event) => {
       for (const l of [...listeners]) l(event);
     },
@@ -445,14 +445,16 @@ describe("mountSearchTab", () => {
     tab.dispose();
   });
 
-  it("branche le bouton Réindexer sur l'indexeur", async () => {
+  it("branche le bouton Ouvrir les paramètres sur onOpenSettings", async () => {
     const h = harness({ ids: [] });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     await type(h.host, "chat");
-    const button = h.host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!;
+    const button = h.host.querySelector<HTMLButtonElement>("button.docseeker-open-settings")!;
+    expect(button.hidden).toBe(false);
     button.click();
-    expect(h.start).toHaveBeenCalledTimes(1);
+    expect(h.openSettings).toHaveBeenCalledTimes(1);
+    expect(h.host.querySelector("button.docseeker-reindex")).toBeNull();
     tab.dispose();
   });
 
@@ -675,7 +677,7 @@ describe("mountSearchTab (review fixes)", () => {
     tab.dispose();
   });
 
-  it("montre l'échec du rafraîchissement (puis l'efface) et celui de la réindexation", async () => {
+  it("montre l'échec du rafraîchissement, puis l'efface", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
@@ -689,16 +691,6 @@ describe("mountSearchTab (review fixes)", () => {
     await flush();
     expect(errMsg(h.host)).toBe("");
     tab.dispose();
-
-    const h3 = harness({ ids: [] });
-    h3.start.mockRejectedValue(new Error("indexeur KO"));
-    const tab3 = mountSearchTab(h3.host, h3.deps);
-    await flush();
-    await type(h3.host, "chat");
-    h3.host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.click();
-    await flush();
-    expect(msg(h3.host)).toMatch(/indexeur KO/);
-    tab3.dispose();
   });
 
   it("crée l'observateur avec rootMargin 200px 0px par défaut", async () => {
@@ -782,25 +774,29 @@ describe("mountSearchTab (messages distincts)", () => {
     tab.dispose();
   });
 
-  it("Réindexer relance le chargement de l'index partagé s'il avait échoué", async () => {
+  it("document disparu de l'index : le message renvoie aux paramètres (clé i18n), sans parler de réindexation en ligne", async () => {
+    const h = harness();
+    h.deps = { ...h.deps, t: (key) => (key === "docNotFound" ? "Introuvable : voir les paramètres" : key) };
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    const card = cards(h.host)[0]!;
+    vi.spyOn(h.shared.store, "getDoc").mockReturnValue(undefined); // le document a disparu entre l'affichage et le clic
+    card.click();
+    await flush();
+    expect(msg(h.host)).toBe("Introuvable : voir les paramètres");
+    tab.dispose();
+  });
+
+  it("en cas d'erreur de chargement, propose les paramètres sans relancer le chargement", async () => {
     const h = harness({ ids: ["a"], autoStart: false });
     h.list.mockRejectedValueOnce(new Error("liste KO"));
     await h.shared.start();
     const tab = mountSearchTab(h.host, h.deps);
     expect(errMsg(h.host)).toMatch(/liste KO/);
-    h.host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.click();
+    h.host.querySelector<HTMLButtonElement>("button.docseeker-open-settings")!.click();
     await flush();
-    expect(h.list).toHaveBeenCalledTimes(2);
-    expect(errMsg(h.host)).toBe("");
-    tab.dispose();
-  });
-
-  it("Réindexer ne relance pas le chargement quand l'index va bien", async () => {
-    const h = harness();
-    await h.shared.start();
-    const tab = mountSearchTab(h.host, h.deps);
-    h.host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.click();
-    await flush();
+    expect(h.openSettings).toHaveBeenCalledTimes(1);
     expect(h.list).toHaveBeenCalledTimes(1);
     tab.dispose();
   });

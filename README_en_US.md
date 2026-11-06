@@ -44,7 +44,7 @@ After an installation or an update: **Marketplace** menu, **Downloaded** tab, **
 PDFs must be indexed before you can search them.
 
 1. Click the search icon in the top bar ("Open the search in PDFs").
-2. Open the **Advanced: indexing and diagnostics** section, then click **Reindex**.
+2. Open the plugin settings (DocSeeker's gear in **Marketplace > Downloaded > Plugins**, or the **Open settings** button in the search tab), then click **Reindex**.
 3. Wait until it finishes. While indexing, the status reads "Index being built" and results are partial.
 
 Things to know:

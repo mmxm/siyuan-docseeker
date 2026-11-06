@@ -561,3 +561,157 @@ describe("petalStore : validation des noms", () => {
     expect(() => createPetalStore({ api, pluginName: "" })).toThrow(InvalidNameError);
   });
 });
+
+describe("petalStore : clear (vider l'index)", () => {
+  it("supprime les .dsx, le manifeste et leurs .tmp/.bak, et rapporte les noms", async () => {
+    const kernel = createFake();
+    for (const n of [
+      "a.dsx",
+      "b.dsx",
+      "b.dsx.bak",
+      "c.dsx.id1.tmp",
+      "manifest.json",
+      "manifest.json.id2.tmp",
+      "manifest.json.bak",
+    ]) {
+      kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    }
+    const report = await storeOf(kernel).clear();
+    expect([...kernel.files.keys()]).toEqual([]);
+    expect([...report.removed].sort()).toEqual([
+      "a.dsx",
+      "b.dsx",
+      "b.dsx.bak",
+      "c.dsx.id1.tmp",
+      "manifest.json",
+      "manifest.json.bak",
+      "manifest.json.id2.tmp",
+    ]);
+    expect(report.failed).toEqual([]);
+  });
+
+  it("ne touche à aucun autre fichier du dossier (nom inconnu, nom invalide, sous-dossier)", async () => {
+    const kernel = createFake(["with space.dsx", "../evil.dsx"]);
+    kernel.files.set(`${IDX}/notes.txt`, bytesOf(1));
+    kernel.files.set(`${IDX}/a.dsx`, bytesOf(1));
+    kernel.files.set(`${IDX}/other.json`, bytesOf(1));
+    const report = await storeOf(kernel).clear();
+    expect([...kernel.files.keys()].sort()).toEqual([`${IDX}/notes.txt`, `${IDX}/other.json`]);
+    expect(report.removed).toEqual(["a.dsx"]);
+    const removals = kernel.log.filter((l) => l.startsWith("removeFile"));
+    expect(removals).toEqual([`removeFile ${IDX}/a.dsx`]);
+  });
+
+  it("dossier absent ou vide : rien à supprimer, pas d'erreur", async () => {
+    const kernel = createFake();
+    kernel.failWhen = (op) => (op === "readDir" ? new NotFoundError(200, "absent") : undefined);
+    expect(await storeOf(kernel).clear()).toEqual({ removed: [], failed: [], manifestFailed: false });
+  });
+
+  it("un échec partiel est rapporté sans interrompre les autres suppressions", async () => {
+    const kernel = createFake();
+    for (const n of ["a.dsx", "b.dsx", "manifest.json"]) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    const boom = new KernelApiError(500, 1, "disque plein");
+    kernel.failWhen = (op, path) => (op === "removeFile" && path.endsWith("/b.dsx") ? boom : undefined);
+    const report = await storeOf(kernel).clear();
+    expect([...report.removed].sort()).toEqual(["a.dsx", "manifest.json"]);
+    expect(report.failed).toEqual([{ name: "b.dsx", error: boom }]);
+    expect([...kernel.files.keys()]).toEqual([`${IDX}/b.dsx`]);
+  });
+
+  it("propage l'échec de la lecture du dossier (autre que absence)", async () => {
+    const kernel = createFake();
+    kernel.failWhen = (op) => (op === "readDir" ? new KernelApiError(500, 1, "readDir KO") : undefined);
+    await expect(storeOf(kernel).clear()).rejects.toThrow(/readDir KO/);
+  });
+
+  it("supprime le manifeste en premier ; s'il échoue, aucun .dsx n'est supprimé (manifeste présent + .dsx absents = trou permanent)", async () => {
+    const kernel = createFake();
+    for (const n of ["a.dsx", "b.dsx", "manifest.json"]) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    const boom = new KernelApiError(500, 1, "manifeste verrouillé");
+    kernel.failWhen = (op, path) => (op === "removeFile" && path.endsWith("/manifest.json") ? boom : undefined);
+    const report = await storeOf(kernel).clear();
+    expect(report.manifestFailed).toBe(true);
+    expect(report.removed).toEqual([]);
+    expect(report.failed).toEqual([{ name: "manifest.json", error: boom }]);
+    expect([...kernel.files.keys()].sort()).toEqual([`${IDX}/a.dsx`, `${IDX}/b.dsx`, `${IDX}/manifest.json`]);
+    const firstRemoval = kernel.log.find((l) => l.startsWith("removeFile"));
+    expect(firstRemoval).toBe(`removeFile ${IDX}/manifest.json`);
+  });
+
+  it("manifeste supprimé en premier dans le cas nominal", async () => {
+    const kernel = createFake();
+    for (const n of ["a.dsx", "manifest.json", "manifest.json.bak"]) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    const report = await storeOf(kernel).clear();
+    expect(report.manifestFailed).toBe(false);
+    const removals = kernel.log.filter((l) => l.startsWith("removeFile"));
+    expect(removals.slice(0, 2).every((l) => l.includes("manifest.json"))).toBe(true);
+    expect(removals[2]).toBe(`removeFile ${IDX}/a.dsx`);
+  });
+
+  it("supprime le .bak et le .tmp avant le fichier final", async () => {
+    const kernel = createFake();
+    for (const n of ["a.dsx", "a.dsx.bak", "a.dsx.id1.tmp"]) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    await storeOf(kernel).clear();
+    const removals = kernel.log.filter((l) => l.startsWith("removeFile"));
+    expect(removals.at(-1)).toBe(`removeFile ${IDX}/a.dsx`);
+    expect(removals).toHaveLength(3);
+  });
+
+  it("si un .bak ne part pas, le .dsx correspondant est conservé (sinon il ressusciterait depuis le .bak) et signalé", async () => {
+    const kernel = createFake();
+    for (const n of ["a.dsx", "a.dsx.bak", "b.dsx"]) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    const boom = new KernelApiError(500, 1, "bak verrouillé");
+    kernel.failWhen = (op, path) => (op === "removeFile" && path.endsWith("/a.dsx.bak") ? boom : undefined);
+    const report = await storeOf(kernel).clear();
+    expect(report.removed).toEqual(["b.dsx"]);
+    expect(report.failed.map((f) => f.name)).toEqual(["a.dsx.bak", "a.dsx"]);
+    expect(report.failed[0]!.error).toBe(boom);
+    expect([...kernel.files.keys()].sort()).toEqual([`${IDX}/a.dsx`, `${IDX}/a.dsx.bak`]);
+    expect(report.manifestFailed).toBe(false);
+  });
+
+  it("relit le dossier à la fin et signale un fichier apparu pendant le vidage", async () => {
+    const kernel = createFake();
+    for (const n of ["a.dsx", "b.dsx"]) kernel.files.set(`${IDX}/${n}`, bytesOf(1));
+    let injected = false;
+    kernel.failWhen = (op, path) => {
+      if (op === "removeFile" && path.endsWith("/a.dsx") && !injected) {
+        injected = true;
+        kernel.files.set(`${IDX}/late.dsx`, bytesOf(1)); // écrit par une indexation concurrente
+      }
+      return undefined;
+    };
+    const report = await storeOf(kernel).clear();
+    expect(report.failed.map((f) => f.name)).toEqual(["late.dsx"]);
+    expect(String((report.failed[0]!.error as Error).message)).toMatch(/pendant le vidage/);
+    expect([...report.removed].sort()).toEqual(["a.dsx", "b.dsx"]);
+  });
+
+  it("signale l'impossibilité de relire le dossier après la boucle", async () => {
+    const kernel = createFake();
+    kernel.files.set(`${IDX}/a.dsx`, bytesOf(1));
+    let reads = 0;
+    const boom = new KernelApiError(500, 1, "relecture KO");
+    kernel.failWhen = (op) => (op === "readDir" && ++reads === 2 ? boom : undefined);
+    const report = await storeOf(kernel).clear();
+    expect(report.removed).toEqual(["a.dsx"]);
+    expect(report.failed).toEqual([{ name: "(relecture du dossier)", error: boom }]);
+  });
+
+  it("est sérialisé avec une écriture en cours du même nom", async () => {
+    const kernel = createFake();
+    const held = holdPuts(kernel);
+    const store = storeOf(kernel);
+    const writing = store.write("a.dsx", bytesOf(1));
+    await flush();
+    kernel.files.set(`${IDX}/a.dsx`, bytesOf(9));
+    const clearing = store.clear();
+    await flush();
+    expect(kernel.log.some((l) => l.startsWith("removeFile"))).toBe(false);
+    held.releases.forEach((r) => r());
+    await writing;
+    await clearing;
+    expect([...kernel.files.keys()]).toEqual([]);
+  });
+});

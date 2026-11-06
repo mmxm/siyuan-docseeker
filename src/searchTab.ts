@@ -29,7 +29,8 @@ export interface SearchTabDeps {
   readonly store: Pick<PetalStore, "read">;
   /** Index partagé entre onglets, créé et chargé par le plugin : l'onglet ne le charge ni ne le libère. */
   readonly sharedIndex: SharedIndex;
-  readonly indexer: { start(): Promise<unknown> };
+  /** Ouvre le panneau de paramètres du plugin (indexation, index, diagnostic). */
+  readonly onOpenSettings?: () => void;
   /** `openTab` de SiYuan et `app` du plugin, passés tels quels à `openPdfAtPage`. */
   readonly openTab: OpenPdfOptions["openTab"];
   readonly app: unknown;
@@ -57,6 +58,7 @@ export interface SearchTab {
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const DOC_NOT_FOUND = "Document introuvable dans l'index : voir les paramètres du plugin.";
 const HIGHLIGHT_UNAVAILABLE = "Surlignage indisponible";
 const OBSERVER_ROOT_MARGIN = "200px 0px";
 const PAGE_SIZE_WAIT_MS = 400;
@@ -249,7 +251,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     showMessage("");
     const doc = searchStore.getDoc(docId);
     if (!doc) {
-      showMessage("Document introuvable dans l'index : lancez une réindexation.");
+      showMessage(deps.t?.("docNotFound") ?? DOC_NOT_FOUND);
       return;
     }
     let rects: PercentStyle[] = [];
@@ -313,15 +315,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     onOpen: (docId, page, query) => {
       void open(docId, page, query);
     },
-    onReindex: () => {
-      if (deps.sharedIndex.getError() !== undefined || searchStore.getPhase() === "error") {
-        void deps.sharedIndex.start(); // retente un chargement échoué (ne rejette jamais)
-      }
-      void deps.indexer.start().catch((error: unknown) => {
-        onWarn("Réindexation en échec", error);
-        showMessage(`Réindexation en échec : ${messageOf(error)}.`);
-      });
-    },
+    ...(deps.onOpenSettings ? { onOpenSettings: deps.onOpenSettings } : {}),
     getDocMeta: (docId) => {
       const info = searchStore.getDoc(docId);
       return info ? { pdfSize: info.pdfSize, pdfModifiedMs: info.pdfModifiedMs } : undefined;

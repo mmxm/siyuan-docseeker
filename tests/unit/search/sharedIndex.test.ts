@@ -346,3 +346,59 @@ describe("createSharedIndex", () => {
     expect(unhandled).not.toHaveBeenCalled();
   });
 });
+
+describe("createSharedIndex : refreshNow (après un vidage)", () => {
+  it("invalide tous les documents connus (avant et après), relit la liste et retire les documents disparus", async () => {
+    const s = setup(["a", "b"]);
+    await s.shared.start();
+    const ids = s.shared.store.listDocs().map((d) => d.docId);
+    expect(ids.length).toBeGreaterThan(0);
+    const invalidated: string[][] = [];
+    s.shared.onInvalidate((docIds) => invalidated.push([...docIds]));
+    s.files.clear();
+    await s.shared.refreshNow();
+    expect(s.shared.store.listDocs()).toHaveLength(0);
+    expect(invalidated.length).toBeGreaterThanOrEqual(1);
+    expect(invalidated[0]).toEqual(ids);
+    expect(invalidated.at(-1)).toEqual(ids);
+  });
+
+  it("efface l'erreur précédente en cas de succès", async () => {
+    const s = setup();
+    s.list.mockRejectedValueOnce(new Error("liste KO"));
+    await s.shared.start();
+    expect(s.shared.getError()).toMatch(/liste KO/);
+    await s.shared.refreshNow();
+    expect(s.shared.getError()).toBeUndefined();
+  });
+
+  it("en cas d'échec : journalise, expose l'erreur et rejette pour que l'appelant le signale", async () => {
+    const s = setup();
+    await s.shared.start();
+    s.list.mockRejectedValueOnce(new Error("noyau muet"));
+    await expect(s.shared.refreshNow()).rejects.toThrow(/noyau muet/);
+    expect(s.onWarn).toHaveBeenCalledWith(expect.stringMatching(/Rafraîchissement/), expect.any(Error));
+    expect(s.shared.getError()).toMatch(/noyau muet/);
+  });
+
+  it("ne fait rien après dispose", async () => {
+    const s = setup();
+    await s.shared.start();
+    s.shared.dispose();
+    s.list.mockClear();
+    await expect(s.shared.refreshNow()).resolves.toBeUndefined();
+    expect(s.list).not.toHaveBeenCalled();
+  });
+
+  it("dispose pendant le rafraîchissement : pas d'erreur exposée ni de rejet", async () => {
+    const s = setup();
+    await s.shared.start();
+    let release: () => void = () => undefined;
+    s.list.mockImplementationOnce(() => new Promise<string[]>((r) => (release = () => r([]))));
+    const pending = s.shared.refreshNow();
+    await flush();
+    s.shared.dispose();
+    release();
+    await expect(pending).resolves.toBeUndefined();
+  });
+});

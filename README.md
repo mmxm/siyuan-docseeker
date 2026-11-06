@@ -44,7 +44,7 @@ Après une installation ou une mise à jour : menu **Marché**, onglet **Téléc
 Avant de pouvoir chercher, les PDF doivent être indexés.
 
 1. Cliquer sur l'icône de recherche de la barre supérieure (« Ouvrir la recherche dans les PDF »).
-2. Ouvrir la section **Avancé : indexation et diagnostic**, puis cliquer sur **Réindexer**.
+2. Ouvrir les paramètres du plugin (engrenage de DocSeeker dans **Marché > Téléchargés > Plugins**, ou bouton **Ouvrir les paramètres** de l'onglet de recherche), puis cliquer sur **Réindexer**.
 3. Attendre la fin. Pendant l'indexation, le statut indique « Index en cours de construction » et les résultats sont partiels.
 
 Comportement à connaître :

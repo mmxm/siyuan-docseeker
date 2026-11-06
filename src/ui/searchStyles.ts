@@ -11,10 +11,16 @@ export const SEARCH_CSS = `
 .docseeker-message { font-size: 12px; color: var(--b3-theme-on-surface); }
 .docseeker-message:empty { display: none; }
 .docseeker-actions:empty { display: none; }
-.docseeker-reindex { min-height: 32px; min-width: 32px; }
-.docseeker-reindex:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
-.docseeker-summary { min-height: 32px; cursor: pointer; }
-.docseeker-summary:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-open-settings { min-height: 32px; min-width: 32px; }
+.docseeker-open-settings:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-setting-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
+.docseeker-setting-action pre { margin: 0; max-width: 100%; overflow-wrap: anywhere; }
+.docseeker-setting-action pre:empty { display: none; }
+.docseeker-action { min-height: 32px; min-width: 32px; }
+.docseeker-action:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-action[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.docseeker-log { max-height: 240px; overflow: auto; overflow-wrap: anywhere; padding: 4px; border: 1px solid var(--b3-border-color); }
+.docseeker-log:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
 .docseeker-doc { padding: 8px 0; border-bottom: 1px solid var(--b3-border-color); }
 .docseeker-doc-heading { margin: 0; font-size: inherit; font-weight: normal; }

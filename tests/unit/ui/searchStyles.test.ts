@@ -13,8 +13,9 @@ describe("SEARCH_CSS", () => {
   it.each([
     ".docseeker-card:focus-visible",
     ".docseeker-search input[type=\"search\"]:focus-visible",
-    ".docseeker-reindex:focus-visible",
-    ".docseeker-summary:focus-visible",
+    ".docseeker-open-settings:focus-visible",
+    ".docseeker-action:focus-visible",
+    ".docseeker-log:focus-visible",
     ".docseeker-more:focus-visible",
     ".docseeker-less:focus-visible",
   ])("donne un focus visible fort à %s", (selector) => {
@@ -28,10 +29,35 @@ describe("SEARCH_CSS", () => {
   });
 
   it("garantit des cibles d'au moins 32px pour les boutons", () => {
-    expect(rulesFor(".docseeker-reindex").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-open-settings").join(" ")).toMatch(/min-height:\s*32px/);
     expect(rulesFor(".docseeker-card").join(" ")).toMatch(/min-height:\s*32px/);
     expect(rulesFor(".docseeker-more").join(" ")).toMatch(/min-height:\s*32px/);
     expect(rulesFor(".docseeker-less").join(" ")).toMatch(/min-height:\s*32px/);
+  });
+
+  it("n'a plus de règle pour l'ancienne section « Avancé »", () => {
+    expect(SEARCH_CSS).not.toContain("docseeker-summary");
+  });
+
+  it("montre qu'un bouton d'action aria-disabled est inactif", () => {
+    const rule = rulesFor('.docseeker-action[aria-disabled="true"]').join(" ");
+    expect(rule).toMatch(/opacity:\s*0?\.\d+/);
+    expect(rule).toContain("cursor: not-allowed");
+  });
+
+  it("rend le journal défilable et sans débordement horizontal", () => {
+    const rule = rulesFor(".docseeker-log").join(" ");
+    expect(rule).toMatch(/max-height:/);
+    expect(rule).toContain("overflow: auto");
+    expect(rule).toContain("overflow-wrap: anywhere");
+  });
+
+  it("stylise le conteneur d'action des paramètres", () => {
+    expect(rulesFor(".docseeker-setting-action").join(" ")).toContain("flex-direction: column");
+  });
+
+  it("garantit des cibles d'au moins 32px pour les boutons d'action des paramètres", () => {
+    expect(rulesFor(".docseeker-action").join(" ")).toMatch(/min-height:\s*32px/);
   });
 
   it("masque réellement les boutons de dépliage hidden", () => {

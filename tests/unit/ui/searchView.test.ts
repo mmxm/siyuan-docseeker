@@ -31,7 +31,7 @@ let attach: Mock;
 let onOpen: Mock;
 let submit: Mock;
 
-function mount(extra: { onReindex?: () => void; t?: (key: string) => string } = {}) {
+function mount(extra: { onOpenSettings?: () => void; t?: (key: string) => string } = {}) {
   const thumbnails: ThumbnailAttacher = { attach: attach as ThumbnailAttacher["attach"] };
   return mountSearchView(host, {
     controller: { submit: submit as (q: string) => void, getViewModel: () => vm },
@@ -200,22 +200,49 @@ describe("mountSearchView", () => {
     expect(status()).toBe("");
     expect(host.querySelector("b")).toBeNull();
     update({ kind: "no-index", indexing: false });
-    expect(status()).toContain("Aucun index : lancez la réindexation");
-    expect(host.querySelector("button.docseeker-reindex")).toBeNull();
+    expect(status()).toContain("Aucun index : ouvrez les paramètres du plugin pour lancer l'indexation");
+    expect(host.querySelector("button.docseeker-open-settings")).toBeNull();
   });
 
-  it("propose la réindexation si onReindex fourni", () => {
-    const onReindex = vi.fn();
-    mount({ onReindex });
+  it("ne propose pas les paramètres pour une simple erreur de recherche (hors index)", () => {
+    mount({ onOpenSettings: vi.fn() });
+    update({ kind: "error", message: "boum" });
+    expect(host.querySelector<HTMLButtonElement>("button.docseeker-open-settings")!.hidden).toBe(true);
+    expect(host.querySelector<HTMLElement>(".docseeker-actions")!.hidden).toBe(true);
+  });
+
+  it("montre le conteneur d'actions avec le bouton, le masque avec lui", () => {
+    mount({ onOpenSettings: vi.fn() });
+    const actions = host.querySelector<HTMLElement>(".docseeker-actions")!;
+    expect(actions.hidden).toBe(true);
     update({ kind: "no-index", indexing: false });
-    host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.click();
-    expect(onReindex).toHaveBeenCalledOnce();
+    expect(actions.hidden).toBe(false);
+    update(results([doc("a", [1])]));
+    expect(actions.hidden).toBe(true);
   });
 
-  it("ne montre le bouton Réindexer que si nécessaire", () => {
-    mount({ onReindex: vi.fn() });
+  it("ne propose plus de bouton de réindexation dans l'onglet", () => {
+    mount({ onOpenSettings: vi.fn() });
+    update({ kind: "no-index", indexing: false });
+    expect(host.querySelector("button.docseeker-reindex")).toBeNull();
+    expect(host.textContent).not.toMatch(/Réindexer/);
+  });
+
+  it("propose d'ouvrir les paramètres si onOpenSettings fourni", () => {
+    const onOpenSettings = vi.fn();
+    mount({ onOpenSettings });
+    update({ kind: "no-index", indexing: false });
+    const button = host.querySelector<HTMLButtonElement>("button.docseeker-open-settings")!;
+    expect(button.textContent).toBe("Ouvrir les paramètres");
+    expect(button.type).toBe("button");
+    button.click();
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
+  it("ne montre le bouton Ouvrir les paramètres que si nécessaire", () => {
+    mount({ onOpenSettings: vi.fn() });
     const visible = () => {
-      const b = host.querySelector<HTMLButtonElement>("button.docseeker-reindex");
+      const b = host.querySelector<HTMLButtonElement>("button.docseeker-open-settings");
       return !!b && !b.hidden && host.contains(b);
     };
     update({ kind: "no-index", indexing: false });
@@ -344,10 +371,10 @@ describe("mountSearchView", () => {
       expect(host.querySelector('[role="alert"]')).not.toBeNull();
     });
 
-    it("garde le bouton Réindexer hors des régions live", () => {
-      mount({ onReindex: vi.fn() });
+    it("garde le bouton Ouvrir les paramètres hors des régions live", () => {
+      mount({ onOpenSettings: vi.fn() });
       update({ kind: "no-index", indexing: false });
-      const b = host.querySelector("button.docseeker-reindex")!;
+      const b = host.querySelector("button.docseeker-open-settings")!;
       expect(b.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();
     });
 
@@ -420,13 +447,13 @@ describe("mountSearchView", () => {
       expect(document.activeElement).toBe(c[0]);
     });
 
-    it("affiche le nombre d'index illisibles avec réindexation", () => {
-      mount({ onReindex: vi.fn() });
+    it("affiche le nombre d'index illisibles avec accès aux paramètres", () => {
+      mount({ onOpenSettings: vi.fn() });
       update(results([doc("a", [1])], false, 2));
-      expect(status()).toContain("2 index illisibles : réindexer");
-      expect(host.querySelector<HTMLButtonElement>("button.docseeker-reindex")!.hidden).toBe(false);
+      expect(status()).toContain("2 index illisibles : réindexez depuis les paramètres (détails dans le journal)");
+      expect(host.querySelector<HTMLButtonElement>("button.docseeker-open-settings")!.hidden).toBe(false);
       update({ kind: "no-result", query: "x", partial: false, failedCount: 1 });
-      expect(status()).toContain("1 index illisible : réindexer");
+      expect(status()).toContain("1 index illisible : réindexez depuis les paramètres (détails dans le journal)");
     });
 
     it("utilise réellement la fonction de traduction fournie", () => {

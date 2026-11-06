@@ -30,6 +30,10 @@ Légende utilisée ci-dessous :
 
 Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramètres du plugin : Réindexer, diagnostic, vider l'index, interrupteur d'indexation automatique) → **J9** (indexation automatique : démarrage, nouveaux PDF, suppressions, `removeStaleTmp`) → **J11** (classement phase 2, format `.dsx` v2, migration automatique grâce à J9) → **J10** (parité avec la recherche SiYuan : chemin, filtres, tris, onglet ou fenêtre flottante, raccourcis).
 
+- **J8 : fait et commité, non validé dans SiYuan.** Vérifié : typecheck propre, 1 441 tests verts (49 fichiers), trois relectures indépendantes (TypeScript, échecs silencieux, UX/accessibilité) dont les défauts ont été corrigés. Panneau `Setting` (`src/ui/settingsPanel.ts`) : Réindexer, Vider l'index (confirmation ; `petalStore.clear()` supprime le manifeste d'abord, puis `.bak`/`.tmp` avant chaque `.dsx` ; `SharedIndex.refreshNow()` invalide les caches), Diagnostic technique, journal. Section « Avancé » retirée de l'onglet ; bouton « Ouvrir les paramètres » à la place de Réindexer. Garde commune vidage/indexation portée par le plugin.
+  - **Pas d'interrupteur d'indexation automatique ici** : il arrive avec son implémentation en J9 (pas de réglage mort).
+  - **À valider à la main dans SiYuan** : `createActionElement` appelé à chaque ouverture et `destroyCallback` à chaque fermeture (supposé d'après les types `siyuan.d.ts`, non prouvé) ; `confirm()` annulable (ses boutons Confirmer/Annuler ne sont pas personnalisables) ; vidage réel et recherche qui se vide dans les onglets ouverts ; fermer/rouvrir le panneau pendant un vidage ou une indexation ; rendu des boutons `aria-disabled` et du journal défilable ; annonces du lecteur d'écran.
+  - **Reste** : `describeEvent` et quelques libellés d'état sont en dur en français ; clés mortes `pause`/`resume`/`indexingPaused` toujours présentes (R2).
 - **J7 : fait et commité, non validé dans SiYuan.** Vérifié : `npm run typecheck` propre, `npm test` 1 362 tests verts (47 fichiers), deux relectures indépendantes (TypeScript, accessibilité). Changements : `submit(query)` remplace `setQuery` et le débounce ; Entrée lance la recherche, la croix native et Échap vident ; dossier contenant seul affiché (`src/ui/pathLabel.ts`, ellipse par le début en CSS rtl, chemin complet en infobulle) ; « N pages » ; placeholder « (Entrée pour lancer) ».
   - **À valider à la main dans SiYuan** : rendu de l'ellipse rtl, Entrée dans le champ Electron (IME compris), croix native (émet-elle `search` ou `input` ?), annonces du lecteur d'écran.
   - **Écarts connus, non traités** : pas de bouton « Rechercher » (pointeur/commande vocale) ; pas d'`aria-busy` pendant le calcul ; chemin complet seulement en infobulle ; Échap efface les résultats.
@@ -162,7 +166,7 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 
 | Dossier | Rôle |
 |---|---|
-| `src/index.ts` | Plugin : barre supérieure, onglet, section « Avancé », câblage réel. Seul fichier qui importe `siyuan` (API plugin). |
+| `src/index.ts` | Plugin : barre supérieure, onglet, panneau de paramètres (`Setting`, depuis J8), câblage réel. Seul fichier qui importe `siyuan` (API plugin). |
 | `src/searchTab.ts` | Assemblage de l'onglet de recherche. Tout est injecté, aucun accès direct au noyau ou à `window`. |
 | `src/core/` | Cœur pur : normalisation, codec `.dsx`, BM25, fusion d'index, extraction, manifeste, file, cadrage. Pas de DOM. |
 | `src/search/` | Logique de recherche sans DOM : index partagé, magasin, contrôleur, correspondances, proximité, vignettes (plan et cache). |

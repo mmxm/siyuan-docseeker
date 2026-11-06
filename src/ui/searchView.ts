@@ -24,7 +24,8 @@ export interface SearchViewDeps {
   readonly subscribe: (listener: () => void) => () => void;
   readonly thumbnails: ThumbnailAttacher;
   onOpen(docId: string, page: number, query: string): void;
-  onReindex?(): void;
+  /** Ouvre le panneau de paramètres du plugin (où se lance l'indexation). */
+  onOpenSettings?(): void;
   getDocMeta(docId: string): { pdfSize: number; pdfModifiedMs: number } | undefined;
   readonly t?: (key: string) => string;
 }
@@ -56,8 +57,8 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   noResults: "Aucun résultat",
   error: "Erreur : {message}",
   indexing: "Index en cours de construction",
-  noIndex: "Aucun index : lancez la réindexation",
-  reindex: "Réindexer",
+  noIndex: "Aucun index : ouvrez les paramètres du plugin pour lancer l'indexation",
+  openSettings: "Ouvrir les paramètres",
   docOne: "{n} document",
   docMany: "{n} documents",
   pageOne: "{n} page",
@@ -67,8 +68,8 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   showLess: "Replier",
   truncated: "{n} pages non affichées",
   shownStatus: "{n} pages affichées pour {title}",
-  failedOne: "{n} index illisible : réindexer",
-  failedMany: "{n} index illisibles : réindexer",
+  failedOne: "{n} index illisible : réindexez depuis les paramètres (détails dans le journal)",
+  failedMany: "{n} index illisibles : réindexez depuis les paramètres (détails dans le journal)",
   cardLabel: "{title}, p. {page}",
   cardPage: "p. {page}",
   rankingRefined: "Classement affiné par proximité des mots",
@@ -112,15 +113,16 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   // Le bouton est hors des régions live : il n'est pas relu à chaque changement d'état.
   const actions = doc.createElement("div");
   actions.className = "docseeker-actions";
-  let reindexButton: HTMLButtonElement | undefined;
-  if (deps.onReindex) {
-    reindexButton = doc.createElement("button");
-    reindexButton.type = "button";
-    reindexButton.className = "b3-button b3-button--outline docseeker-reindex";
-    reindexButton.textContent = tr("reindex");
-    reindexButton.hidden = true;
-    reindexButton.addEventListener("click", () => deps.onReindex?.());
-    actions.appendChild(reindexButton);
+  let settingsButton: HTMLButtonElement | undefined;
+  if (deps.onOpenSettings) {
+    settingsButton = doc.createElement("button");
+    settingsButton.type = "button";
+    settingsButton.className = "b3-button b3-button--outline docseeker-open-settings";
+    settingsButton.textContent = tr("openSettings");
+    settingsButton.hidden = true;
+    actions.hidden = true;
+    settingsButton.addEventListener("click", () => deps.onOpenSettings?.());
+    actions.appendChild(settingsButton);
   }
 
   const list = doc.createElement("ul");
@@ -156,7 +158,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (el.textContent !== text) el.textContent = text;
   };
 
-  const setStatus = (text: string, opts: { error?: boolean; reindex?: boolean } = {}): void => {
+  const setStatus = (text: string, opts: { error?: boolean; settings?: boolean } = {}): void => {
     if (opts.error) {
       setText(statusEl, "");
       setText(alertEl, text);
@@ -164,10 +166,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       setText(statusEl, text);
       setText(alertEl, "");
     }
-    if (reindexButton) {
-      const show = opts.reindex === true;
-      if (!show && !reindexButton.hidden && doc.activeElement === reindexButton) input.focus();
-      reindexButton.hidden = !show;
+    if (settingsButton) {
+      const show = opts.settings === true;
+      if (!show && !settingsButton.hidden && doc.activeElement === settingsButton) input.focus();
+      settingsButton.hidden = !show;
+      actions.hidden = !show;
     }
   };
 
@@ -390,15 +393,15 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         break;
       case "no-result": {
         const base = vm.partial ? `${tr("noResults")}${tr("partialSuffix")}` : tr("noResults");
-        setStatus(withFailed(base, vm.failedCount), { reindex: vm.failedCount > 0 });
+        setStatus(withFailed(base, vm.failedCount), { settings: vm.failedCount > 0 });
         break;
       }
       case "error":
-        setStatus(tr("error", { message: vm.message }), { error: true, reindex: true });
+        setStatus(tr("error", { message: vm.message }), { error: true });
         break;
       case "no-index":
         if (vm.indexing) setStatus(tr("indexing"));
-        else setStatus(tr("noIndex"), { reindex: true });
+        else setStatus(tr("noIndex"), { settings: true });
         break;
       case "results": {
         const pages = vm.docs.reduce((n, d) => n + d.matchingPages, 0);
@@ -406,7 +409,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         const counted = vm.partial ? `${base}${tr("partialSuffix")}` : base;
         // Texte identique tant que le classement reste affiné : la région live ne le ré-annonce pas.
         const refined = vm.ranking === "proximity" ? `${counted}. ${tr("rankingRefined")}` : counted;
-        setStatus(withFailed(refined, vm.failedCount), { reindex: vm.failedCount > 0 });
+        setStatus(withFailed(refined, vm.failedCount), { settings: vm.failedCount > 0 });
         renderResults(vm.docs, vm.query);
         break;
       }

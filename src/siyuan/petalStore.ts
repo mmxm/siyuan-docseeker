@@ -51,6 +51,24 @@ export interface PetalStore {
    * sont plus vieux que STALE_TMP_AGE_MS. Les noms invalides renvoyés par le noyau sont ignorés.
    */
   removeStaleTmp(): Promise<StaleCleanupReport>;
+  /**
+   * Vide l'index : supprime d'abord le manifeste, puis les `.dsx`, avec leurs `.tmp`/`.bak` (supprimés AVANT
+   * le fichier final, qui est conservé si l'un d'eux résiste). Tout autre fichier du dossier est laissé
+   * intact. Un échec sur un fichier n'interrompt pas les autres (sauf le manifeste, voir `manifestFailed`) :
+   * il est rapporté dans `failed`, de même que les fichiers apparus pendant le vidage.
+   * Ne rejette que si le dossier est illisible au départ (hors absence).
+   */
+  clear(): Promise<ClearReport>;
+}
+
+export interface ClearReport {
+  readonly removed: readonly string[];
+  readonly failed: readonly StaleCleanupFailure[];
+  /**
+   * Le manifeste n'a pas pu être supprimé : aucun `.dsx` n'a alors été touché (l'indexeur décide d'après le
+   * manifeste seul ; manifeste présent + `.dsx` absents laisserait un trou permanent dans l'index).
+   */
+  readonly manifestFailed: boolean;
 }
 
 export const DEFAULT_PLUGIN_NAME = "docseeker";
@@ -63,6 +81,10 @@ const BAK_SUFFIX = ".bak";
 const MAX_NAME_LENGTH = 200;
 const ALLOWED_NAME = /^[A-Za-z0-9._-]+$/;
 const MS_PER_SECOND = 1000;
+/** Fichiers du plugin que `clear()` peut supprimer : `.dsx` et manifeste, avec leurs `.bak` ou `.<id>.tmp`. */
+const CLEARABLE = /^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\.dsx|manifest\.json)(?:\.bak|\.[A-Za-z0-9_-]+\.tmp)?$/;
+const MANIFEST_NAME = "manifest.json";
+const TRANSIENT_TAIL = /(?:\.bak|\.[A-Za-z0-9_-]+\.tmp)$/;
 
 /** Nom de fichier rejeté (traversée de chemin, caractères interdits, suffixe réservé…). */
 export class InvalidNameError extends Error {
@@ -292,6 +314,56 @@ export function createPetalStore(options: PetalStoreOptions): PetalStore {
         }
       }
       return { handled, failed };
+    },
+
+    async clear() {
+      const listClearable = async (): Promise<string[]> =>
+        ((await listEntries()) ?? []).filter(isUsableEntry).map((e) => e.name).filter((n) => CLEARABLE.test(n));
+      const groups = new Map<string, string[]>(); // fichier final -> [.bak/.tmp..., final]
+      for (const name of await listClearable()) {
+        const key = name.replace(TRANSIENT_TAIL, "");
+        const group = groups.get(key) ?? [];
+        group.push(name);
+        groups.set(key, group);
+      }
+      const removed: string[] = [];
+      const failed: StaleCleanupFailure[] = [];
+      /** Transitoires d'abord, final ensuite ; le final est conservé si un transitoire résiste. */
+      const clearGroup = async (key: string, names: readonly string[]): Promise<boolean> => {
+        const ordered = [...names.filter((n) => n !== key), ...names.filter((n) => n === key)];
+        let blocked = false;
+        for (const name of ordered) {
+          if (blocked && name === key) {
+            failed.push({ name, error: new Error("conservé : un fichier .bak/.tmp associé n'a pas pu être supprimé") });
+            continue;
+          }
+          try {
+            await serialized(key, () => removeIgnoringAbsence(pathOf(name)));
+            removed.push(name);
+          } catch (error) {
+            failed.push({ name, error });
+            blocked = true;
+          }
+        }
+        return !blocked;
+      };
+      const manifestNames = groups.get(MANIFEST_NAME);
+      groups.delete(MANIFEST_NAME);
+      if (manifestNames && !(await clearGroup(MANIFEST_NAME, manifestNames))) {
+        return { removed, failed, manifestFailed: true };
+      }
+      for (const [key, names] of groups) await clearGroup(key, names);
+      try {
+        const known = new Set([...removed, ...failed.map((f) => f.name)]);
+        for (const name of await listClearable()) {
+          if (!known.has(name) || removed.includes(name)) {
+            failed.push({ name, error: new Error("fichier apparu pendant le vidage (indexation concurrente ?)") });
+          }
+        }
+      } catch (error) {
+        failed.push({ name: "(relecture du dossier)", error });
+      }
+      return { removed, failed, manifestFailed: false };
     },
   };
 }

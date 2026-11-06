@@ -2,6 +2,7 @@
 
 ## Non publié
 
+- Nouveau panneau de paramètres du plugin : Réindexer, Vider l'index (avec confirmation), Diagnostic technique et journal des avertissements. La section « Avancé » de l'onglet disparaît ; l'onglet propose « Ouvrir les paramètres ».
 - La recherche se lance uniquement avec Entrée (plus de recherche à la frappe).
 - Les résultats n'affichent plus que le dossier contenant le PDF ; le compteur indique « N pages ».
 
