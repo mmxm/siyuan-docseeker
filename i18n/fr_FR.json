@@ -78,5 +78,6 @@
   "autoIndexPartialMany": "Index à jour, mais {n} éléments n'ont pas pu être lus : voir le journal des paramètres",
   "indexingMayMiss": "Indexation en cours : des résultats peuvent manquer",
   "clearDoneWillRebuild": "Index vidé. Il sera reconstruit automatiquement.",
-  "autoIndexIntervalDisabledHint": "Disponible quand l'indexation automatique est activée."
+  "autoIndexIntervalDisabledHint": "Disponible quand l'indexation automatique est activée.",
+  "diagnosticRun": "Lancer le diagnostic"
 }

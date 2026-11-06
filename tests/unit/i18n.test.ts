@@ -53,6 +53,12 @@ describe("i18n/fr_FR.json", () => {
     for (const key of ["pause", "resume", "indexingPaused", "freq1", "autoIndexRunningShort"]) expect(fr).not.toHaveProperty(key);
   });
 
+  it("le bouton de diagnostic a son propre libellé, distinct du titre de l'item", () => {
+    expect(fr.diagnosticRun).toBe("Lancer le diagnostic");
+    expect(fr.diagnosticRun).not.toBe(fr.diagnostic);
+    expect(fr.diagnosticRun).not.toMatch(/[<>&]/);
+  });
+
   it("les fréquences proposées ont chacune un libellé", () => {
     expect(FREQUENCY_MINUTES).toEqual([5, 15, 60]);
     for (const m of FREQUENCY_MINUTES) expect(fr[`freq${m}`], `freq${m}`).toBeTypeOf("string");

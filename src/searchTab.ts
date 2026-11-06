@@ -97,7 +97,7 @@ export interface WarnLog {
 
 /** Petit journal circulaire des avertissements, affiché dans la section « Avancé ». */
 export function createWarnLog(
-  options: { max?: number; sink?: (message: string, error?: unknown) => void } = {},
+  options: { max?: number; sink?: (message: string, error?: unknown) => void; now?: () => Date } = {},
 ): WarnLog {
   const max = Math.max(1, options.max ?? WARN_LOG_MAX);
   const sink = options.sink ?? ((message, error) => console.warn(`[docseeker] ${message}`, error));
@@ -105,7 +105,9 @@ export function createWarnLog(
   const listeners = new Set<() => void>();
   return {
     warn(message, error) {
-      const stamp = new Date().toISOString().slice(11, 19);
+      const d = (options.now ?? (() => new Date()))();
+      const two = (n: number): string => String(n).padStart(2, "0");
+      const stamp = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; // heure locale
       lines.push(`${stamp} ${message}${error === undefined ? "" : ` — ${messageOf(error)}`}`);
       if (lines.length > max) lines.splice(0, lines.length - max);
       try {

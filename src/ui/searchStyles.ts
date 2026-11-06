@@ -17,6 +17,7 @@ export const SEARCH_CSS = `
 .docseeker-actions:empty { display: none; }
 .docseeker-open-settings { min-height: 32px; min-width: 32px; }
 .docseeker-open-settings:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.config-item:has(.docseeker-setting-action) .b3-label__text { word-break: normal; overflow-wrap: break-word; }
 .docseeker-setting-action { width: 100%; box-sizing: border-box; }
 .docseeker-setting-action > * + * { margin-top: 8px; }
 .docseeker-setting-action pre { margin: 0; width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }

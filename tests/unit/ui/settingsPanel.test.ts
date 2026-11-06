@@ -17,6 +17,7 @@ const flush = async (): Promise<void> => {
 const STRINGS: Record<string, string> = {
   reindex: "Réindexer",
   diagnostic: "Diagnostic technique",
+  diagnosticRun: "Lancer le diagnostic",
   clearIndex: "Vider l'index",
   indexStatusLabel: "État",
   indexProgressLabel: "Progression de l'indexation",
@@ -148,6 +149,22 @@ beforeEach(() => {
 
 const statusOf = (el: HTMLElement): HTMLElement => el.querySelector<HTMLElement>('[role="status"]')!;
 const alertOf = (el: HTMLElement): HTMLElement => el.querySelector<HTMLElement>('[role="alert"]')!;
+
+describe("settingsPanel : libellé du bouton de diagnostic", () => {
+  it("le bouton ne répète pas le titre de l'item : « Lancer le diagnostic »", () => {
+    const panel = createSettingsPanel(h.deps);
+    expect(btn(panel.diagnostic).textContent).toBe("Lancer le diagnostic");
+    expect(btn(panel.diagnostic).textContent).not.toBe(STRINGS.diagnostic);
+    panel.dispose();
+  });
+
+  it("Réindexer et Vider l'index gardent leur libellé", () => {
+    const panel = createSettingsPanel(h.deps);
+    expect(btn(panel.reindex).textContent).toBe("Réindexer");
+    expect(btn(panel.clearIndex).textContent).toBe("Vider l'index");
+    panel.dispose();
+  });
+});
 
 describe("settingsPanel : style", () => {
   it("injecte la feuille de style (le panneau n'a pas l'onglet pour le faire)", () => {

@@ -802,6 +802,21 @@ describe("mountSearchTab (messages distincts)", () => {
   });
 });
 
+describe("createWarnLog : heure locale", () => {
+  it("horodate en heure locale HH:MM:SS (pas en UTC), avec une horloge injectée", () => {
+    const local = new Date(2026, 10, 6, 13, 36, 5); // construite en heure locale, quel que soit le fuseau
+    const log = createWarnLog({ sink: () => undefined, now: () => local });
+    log.warn("test");
+    expect(log.entries()).toEqual(["13:36:05 test"]);
+  });
+
+  it("complète les unités à deux chiffres", () => {
+    const log = createWarnLog({ sink: () => undefined, now: () => new Date(2026, 0, 2, 3, 4, 5) });
+    log.warn("x", new Error("e"));
+    expect(log.entries()[0]).toBe("03:04:05 x — e");
+  });
+});
+
 describe("createWarnLog", () => {
   it("garde au plus 50 entrées récentes, notifie et relaie à la console", () => {
     const sink = vi.fn();

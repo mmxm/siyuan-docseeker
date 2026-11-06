@@ -324,7 +324,7 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   const diagnosticStatus = textBlock({ live: true, label: t("indexStatusLabel") });
   const diagnosticReport = textBlock({ live: false, label: t("diagnosticOutputLabel") });
   diagnosticReport.className = "docseeker-diagnostic-report";
-  const diagnosticButton = guardedButton("docseeker-diagnostic", t("diagnostic"), diagnosticStatus, async () => {
+  const diagnosticButton = guardedButton("docseeker-diagnostic", t("diagnosticRun"), diagnosticStatus, async () => {
     diagnosticStatus.textContent = t("diagnosticRunning");
     diagnosticReport.textContent = "";
     try {

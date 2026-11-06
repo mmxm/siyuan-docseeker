@@ -80,6 +80,16 @@ describe("SEARCH_CSS", () => {
     expect(SEARCH_CSS).toContain(".docseeker-index-settings[hidden] { display: none; }");
   });
 
+  it("les descriptions du panneau ne sont pas coupées au milieu des mots, pour nos seuls items", () => {
+    expect(SEARCH_CSS).toContain(
+      ".config-item:has(.docseeker-setting-action) .b3-label__text { word-break: normal; overflow-wrap: break-word; }",
+    );
+    // La règle est restreinte à nos items : aucune règle globale sur .b3-label__text.
+    const rules = SEARCH_CSS.split("\n").filter((l) => l.includes(".b3-label__text"));
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toContain(":has(.docseeker-setting-action)");
+  });
+
   it("gère les couleurs forcées pour les surlignages", () => {
     expect(SEARCH_CSS).toMatch(/@media \(forced-colors: active\)[\s\S]*\.docseeker-highlight[\s\S]*Highlight/);
   });
