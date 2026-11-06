@@ -27,4 +27,10 @@ describe("i18n/fr_FR.json", () => {
   it("ne code pas le nombre d'entrées du journal dans le texte", () => {
     expect(fr.warnLogDesc).not.toMatch(/\d/);
   });
+
+  it("les titres et descriptions du panneau ne contiennent pas de balise ni d'entité (SiYuan les insère comme HTML)", () => {
+    for (const key of ["reindex", "clearIndex", "diagnostic", "warnLog"]) {
+      for (const k of [key, `${key}Desc`]) expect(fr[k], k).not.toMatch(/[<>&]/);
+    }
+  });
 });

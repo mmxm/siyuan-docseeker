@@ -267,6 +267,13 @@ describe("panneau de paramètres", () => {
     expect(h.settings[0]!.items.every((i) => typeof i.createActionElement === "function")).toBe(true);
   });
 
+  it("chaque item utilise direction « row » : SiYuan place alors l'action sous le titre, en pleine largeur (fn__block)", () => {
+    setup();
+    const items = h.settings[0]!.items as { direction?: string }[];
+    expect(items).toHaveLength(4);
+    expect(items.map((i) => i.direction)).toEqual(["row", "row", "row", "row"]);
+  });
+
   it("n'abonne rien avant l'ouverture du panneau", () => {
     setup();
     expect(h.listeners.size).toBe(0);

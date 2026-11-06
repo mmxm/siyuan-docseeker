@@ -52,8 +52,23 @@ describe("SEARCH_CSS", () => {
     expect(rule).toContain("overflow-wrap: anywhere");
   });
 
-  it("stylise le conteneur d'action des paramètres", () => {
-    expect(rulesFor(".docseeker-setting-action").join(" ")).toContain("flex-direction: column");
+  it("espace verticalement le contenu d'une action sans dépendre de display (SiYuan lui ajoute fn__block)", () => {
+    const rule = rulesFor(".docseeker-setting-action").join(" ");
+    expect(rule).not.toContain("display: flex"); // fn__block impose display:block
+    expect(rulesFor(".docseeker-setting-action > * + *").join(" ")).toContain("margin-top");
+    expect(rule).not.toMatch(/(?<!max-)width:\s*\d+px/); // pas de largeur fixe
+  });
+
+  it("le bouton d'action garde sa largeur naturelle et les blocs de texte prennent toute la largeur", () => {
+    expect(rulesFor(".docseeker-action").join(" ")).toContain("width: auto");
+    expect(rulesFor(".docseeker-setting-action pre").join(" ")).toContain("box-sizing: border-box");
+  });
+
+  it("le journal occupe la pleine largeur, défile au-delà d'une hauteur max, sans largeur fixe", () => {
+    const rule = rulesFor(".docseeker-log").join(" ");
+    expect(rule).toContain("width: 100%");
+    expect(rule).toContain("box-sizing: border-box");
+    expect(rule).not.toMatch(/(?<!max-)width:\s*\d+px/);
   });
 
   it("garantit des cibles d'au moins 32px pour les boutons d'action des paramètres", () => {

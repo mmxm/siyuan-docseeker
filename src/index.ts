@@ -53,7 +53,7 @@ export default class DocSeekerPlugin extends Plugin {
       this.setting.addItem({
         title: this.t(part.key),
         description: this.t(`${part.key}Desc`),
-        direction: "column",
+        direction: "row", // "column" met l'action à droite sur 200 px (fn__size200) ; "row" la met sous le titre, en pleine largeur
         // Appelé par SiYuan à chaque ouverture du panneau ; `destroyCallback` à sa fermeture.
         createActionElement: () => this.panelPart(part.part),
       });
