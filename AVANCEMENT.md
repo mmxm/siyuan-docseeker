@@ -31,6 +31,8 @@ Légende utilisée ci-dessous :
 
 Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramètres du plugin : Réindexer, diagnostic, vider l'index, interrupteur d'indexation automatique) → **J9** (indexation automatique : démarrage, nouveaux PDF, suppressions, `removeStaleTmp`) → **J11** (classement phase 2, format `.dsx` v2, migration automatique grâce à J9) → **J10** (parité avec la recherche SiYuan : chemin, filtres, tris, onglet ou fenêtre flottante, raccourcis).
 
+- **Banc d'essai (J10, étape 0A)** : `npm run sandbox -- start|install|status|stop|reset` lance un noyau SiYuan jetable (port 6807, workspace dans `$TMPDIR/docseeker-sandbox`) avec le plugin et 8 PDF de test, sans toucher à `~/SiYuan` (`scripts/dev-sandbox.mjs`, `scripts/lib/`). Le noyau charge le plugin (`loadPetals`) ; l'affichage dans l'interface web n'est pas vérifié ici.
+
 - **J11 (classement phase 2, format `.dsx` v2, migration) : terminé côté code, non commité, validation manuelle SiYuan à faire.** Détail en section 2 (« Classement, phase 2 » et « Format `.dsx` »).
   - **Ce qui change pour l'utilisateur** : les passages en gros caractères remontent, y compris pour une requête d'un seul mot ; les index créés avant cette version sont mis à jour automatiquement, une fois, PDF par PDF (statut « Mise à jour de l'index ») ; la version 0.2.0 ne lit pas les index mis à jour.
   - **Réglages techniques (J11)** :

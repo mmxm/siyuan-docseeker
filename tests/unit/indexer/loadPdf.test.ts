@@ -149,3 +149,57 @@ describe("createLoadPdf", () => {
     });
   });
 });
+
+describe("createLoadPdf : workerSrc de PDF.js", () => {
+  const EXPECTED = "/stage/protyle/js/pdf/pdf.worker.compat.mjs?v=6.4.299-siyuan.2";
+  const signal = () => new AbortController().signal;
+
+  function withOptions(workerSrc: string | undefined) {
+    const f = fakePdfjs();
+    const options: { workerSrc?: string } = workerSrc === undefined ? {} : { workerSrc };
+    const seen: Array<string | undefined> = [];
+    f.getDocument.mockImplementation((_src: { url: string }) => {
+      seen.push(options.workerSrc);
+      return { promise: Promise.resolve(f.doc), destroy: f.destroyTask };
+    });
+    const pdfjs = { getDocument: f.getDocument, GlobalWorkerOptions: options } as unknown as PdfjsLoader;
+    return { pdfjs, options, seen };
+  }
+
+  it("renseigne workerSrc vide avant getDocument, avec la valeur exacte", async () => {
+    const f = withOptions("");
+    await createLoadPdf(() => f.pdfjs)("assets/a.pdf", signal());
+    expect(f.options.workerSrc).toBe(EXPECTED);
+    expect(f.seen).toEqual([EXPECTED]);
+  });
+
+  it("renseigne workerSrc absent", async () => {
+    const f = withOptions(undefined);
+    await createLoadPdf(() => f.pdfjs)("assets/a.pdf", signal());
+    expect(f.seen).toEqual([EXPECTED]);
+  });
+
+  it("n'écrase jamais un workerSrc déjà défini", async () => {
+    const f = withOptions("/custom/worker.mjs");
+    await createLoadPdf(() => f.pdfjs)("assets/a.pdf", signal());
+    expect(f.options.workerSrc).toBe("/custom/worker.mjs");
+    expect(f.seen).toEqual(["/custom/worker.mjs"]);
+  });
+
+  it("est idempotent sur plusieurs appels", async () => {
+    const f = withOptions("");
+    const load = createLoadPdf(() => f.pdfjs);
+    await load("assets/a.pdf", signal());
+    await load("assets/b.pdf", signal());
+    expect(f.seen).toEqual([EXPECTED, EXPECTED]);
+  });
+
+  it("sans GlobalWorkerOptions : pas d'exception de notre part, mais une trace lisible", async () => {
+    const f = fakePdfjs();
+    const onWarn = vi.fn();
+    const doc = await createLoadPdf(() => f.pdfjs, onWarn)("assets/a.pdf", signal());
+    expect(doc).toBe(f.doc);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(String(onWarn.mock.calls[0]?.[0])).toMatch(/GlobalWorkerOptions/);
+  });
+});

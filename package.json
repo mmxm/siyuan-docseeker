@@ -15,7 +15,8 @@
     "measure:memory": "vitest run -c vitest.perf.config.ts memory",
     "measure:multiword": "vitest run -c vitest.perf.config.ts multiword",
     "measure:corpus": "vitest run -c vitest.perf.config.ts corpus.measure",
-    "release:check": "node scripts/release.mjs"
+    "release:check": "node scripts/release.mjs",
+    "sandbox": "node scripts/dev-sandbox.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

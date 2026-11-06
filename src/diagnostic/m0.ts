@@ -4,6 +4,7 @@
  * Aucun secret n'est lu ni écrit : seuls des chemins, tailles et statuts HTTP apparaissent dans le rapport.
  */
 import type { PdfEntry } from "../core/manifest";
+import { ensureWorkerSrc } from "../indexer/loadPdf";
 import { discoverPdfs } from "../siyuan/discovery";
 import type { FetchLike, KernelApi } from "../siyuan/kernelApi";
 
@@ -25,6 +26,7 @@ export interface M0Report {
 
 export interface PdfjsLike {
   readonly version?: string;
+  GlobalWorkerOptions?: { workerSrc?: string };
   getDocument(src: { url: string }): {
     promise: Promise<{
       numPages: number;
@@ -168,6 +170,8 @@ async function checkRoundtrip(deps: M0Deps): Promise<Outcome> {
 async function checkPdfjs(deps: M0Deps, pdf: PdfEntry): Promise<Outcome> {
   const pdfjs = deps.pdfjs;
   if (pdfjs === undefined) return fail("pdfjs indisponible (window.pdfjsLib non défini)");
+  // Même préparation que l'indexeur ; si GlobalWorkerOptions est absent, PDF.js produit son erreur (check en échec).
+  ensureWorkerSrc(pdfjs);
   const doc = await pdfjs.getDocument({ url: assetUrl(pdf.path) }).promise;
   try {
     const page = await doc.getPage(1);

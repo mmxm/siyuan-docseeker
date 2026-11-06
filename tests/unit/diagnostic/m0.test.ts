@@ -387,4 +387,26 @@ describe("formatReport", () => {
     const text = formatReport({ ok: true, results: [{ id: "a", label: "A", status: "pass", detail: "d", durationMs: 1 }] });
     expect(text).toMatch(/aucun échec/i);
   });
+
+  it("pdfjs : renseigne workerSrc vide avant getDocument, sans écraser une valeur existante", async () => {
+    const seen: Array<string | undefined> = [];
+    const mk = (workerSrc: string): PdfjsLike => {
+      const GlobalWorkerOptions = { workerSrc };
+      return {
+        GlobalWorkerOptions,
+        getDocument: () => {
+          seen.push(GlobalWorkerOptions.workerSrc);
+          return {
+            promise: Promise.resolve({
+              numPages: 1,
+              getPage: async () => ({ getTextContent: async () => ({ items: [] }) }),
+            }),
+          };
+        },
+      };
+    };
+    await runM0Diagnostic(makeDeps({ pdfjs: mk("") }).deps);
+    await runM0Diagnostic(makeDeps({ pdfjs: mk("/custom.mjs") }).deps);
+    expect(seen).toEqual(["/stage/protyle/js/pdf/pdf.worker.compat.mjs?v=6.4.299-siyuan.2", "/custom.mjs"]);
+  });
 });

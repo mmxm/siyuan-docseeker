@@ -6,6 +6,26 @@ export interface PdfjsLoader {
     readonly promise: Promise<PdfDocumentLike>;
     destroy(): Promise<void> | void;
   };
+  GlobalWorkerOptions?: { workerSrc?: string };
+}
+
+/**
+ * URL du worker PDF.js, identique à celle que SiYuan 3.8.9 pose à l'ouverture de son visualiseur PDF
+ * (`${Constants.PROTYLE_CDN}/js/pdf/pdf.worker.compat.mjs?v=6.4.299-siyuan.2`, PROTYLE_CDN = "/stage/protyle").
+ * SiYuan ne renseigne `workerSrc` qu'à ce moment-là : sans PDF déjà ouvert dans la session,
+ * `getDocument` échoue avec « No "GlobalWorkerOptions.workerSrc" specified. ».
+ */
+export const SIYUAN_PDF_WORKER_SRC = "/stage/protyle/js/pdf/pdf.worker.compat.mjs?v=6.4.299-siyuan.2";
+
+/**
+ * Renseigne `workerSrc` s'il est vide/absent (jamais d'écrasement). Renvoie false si
+ * `GlobalWorkerOptions` est absent : l'appelant trace, et PDF.js produira sa propre erreur.
+ */
+export function ensureWorkerSrc(pdfjs: { GlobalWorkerOptions?: { workerSrc?: string } }): boolean {
+  const options = pdfjs.GlobalWorkerOptions;
+  if (!options) return false;
+  if (!options.workerSrc) options.workerSrc = SIYUAN_PDF_WORKER_SRC;
+  return true;
 }
 
 const ABORT_MESSAGE = "Chargement du PDF annulé";
@@ -25,12 +45,16 @@ function toAssetUrl(path: string): string {
  */
 export function createLoadPdf(
   getPdfjs: () => PdfjsLoader | undefined,
+  onWarn: (message: string) => void = (message) => console.warn(`[docseeker] ${message}`),
 ): (path: string, signal: AbortSignal) => Promise<PdfDocumentLike> {
   return async (path, signal) => {
     if (signal.aborted) throw abortError();
     const pdfjs = getPdfjs();
     if (!pdfjs) throw new Error("PDF.js de SiYuan indisponible (window.pdfjsLib absent)");
 
+    if (!ensureWorkerSrc(pdfjs)) {
+      onWarn("pdfjsLib.GlobalWorkerOptions absent : impossible de définir workerSrc, PDF.js risque d'échouer");
+    }
     const task = pdfjs.getDocument({ url: toAssetUrl(path) });
     // La tâche n'est libérée qu'une fois, que ce soit par l'annulation ou par destroy() du document.
     let released: Promise<void> | undefined;

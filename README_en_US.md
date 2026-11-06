@@ -88,6 +88,16 @@ npm run package               # builds dist/index.js, then package.zip
 npm run release:check         # checks a release without publishing anything
 ```
 
+Test bench (real SiYuan UI, never touching `~/SiYuan`): a throwaway kernel on port 6807 with the plugin and test PDFs.
+
+```bash
+npm run build && npm run sandbox -- start      # optional --dir D, --port P, --pdfs N; open the printed URL
+npm run build && npm run sandbox -- install    # reinstalls the bundle, then F5 in the browser
+npm run sandbox -- status | stop | reset       # reset only deletes the folder marked .docseeker-sandbox
+```
+
+Default folder: `$TMPDIR/docseeker-sandbox`. Ports 6806 and 55165 and any path inside `~/SiYuan` or an existing workspace are refused. `DOCSEEKER_KERNEL` overrides the kernel binary.
+
 Measurements and tools (read-only on the data, except `gen:ranking-fixture`):
 
 ```bash

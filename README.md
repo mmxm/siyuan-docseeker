@@ -88,6 +88,16 @@ npm run package               # construit dist/index.js puis package.zip
 npm run release:check         # vérifie une release sans rien publier
 ```
 
+Banc d'essai (vraie interface SiYuan, sans toucher à `~/SiYuan`) : un noyau jetable sur le port 6807, avec le plugin et des PDF de test.
+
+```bash
+npm run build && npm run sandbox -- start      # ajoute --dir D, --port P, --pdfs N ; ouvrir l'URL affichée
+npm run build && npm run sandbox -- install    # réinstalle le bundle, puis F5 dans le navigateur
+npm run sandbox -- status | stop | reset       # reset ne supprime que le dossier marqué .docseeker-sandbox
+```
+
+Dossier par défaut : `$TMPDIR/docseeker-sandbox`. Les ports 6806 et 55165 et tout chemin dans `~/SiYuan` ou dans un workspace existant sont refusés. Variable `DOCSEEKER_KERNEL` : autre binaire du noyau.
+
 Mesures et outils (lecture seule sur les données, sauf `gen:ranking-fixture`) :
 
 ```bash
