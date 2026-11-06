@@ -45,11 +45,19 @@ export interface SearchViewDeps {
     setOptions(next: SearchOptions): void;
     getFolders(): readonly string[];
   };
+  /** Regroupement par document au montage (défaut : oui). État de VUE : changer de mode ne relance aucune recherche. */
+  readonly initialGroupByDocument?: boolean;
+  /** Appelé à chaque changement de la case « Regrouper par document » (pour le mémoriser). */
+  readonly onGroupByDocumentChange?: (groupByDocument: boolean) => void;
 }
 
 export interface SearchView {
   dispose(): void;
   focusInput(): void;
+  /** Change le regroupement sans notifier `onGroupByDocumentChange` (réglage mémorisé lu après le montage). */
+  setGroupByDocument(groupByDocument: boolean): void;
+  /** Resynchronise la barre d'outils (tri, filtres) avec les options courantes, sans attendre un rendu de résultats. */
+  refreshOptions(): void;
 }
 
 export const MAX_CARDS_PER_DOC = 5;
@@ -57,12 +65,19 @@ export const MAX_CARDS_PER_DOC = 5;
 export const UP_TO_DATE_VISIBLE_MS = 8000;
 /** Nombre de cartes ajoutées à chaque clic sur « et N autres pages ». */
 export const EXPAND_BATCH = 10;
+/** Liste plate : nombre de cartes affichées au départ, et ajoutées à chaque clic sur « Afficher plus ». */
+export const FLAT_PAGE_SIZE = 60;
 
 interface DocEntry {
   li: HTMLLIElement;
   signature: string;
   /** Un détacheur par carte affichée, dans l'ordre des cartes. */
   detachers: (() => void)[];
+  /** Pages encore dépliables / pages dépliées au-delà du minimum (« Élargir » / « Réduire » globaux). */
+  canExpand(): boolean;
+  canCollapse(): boolean;
+  expandAll(): void;
+  collapseAll(): void;
 }
 
 /** Chaînes par défaut (français) : `deps.t` les remplace quand une clé i18n existe. */
@@ -86,6 +101,8 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   moreMany: "et {n} autres pages",
   showLess: "Replier",
   truncated: "{n} pages non affichées",
+  flatMoreOne: "Afficher plus ({n} page restante)",
+  flatMoreMany: "Afficher plus ({n} pages restantes)",
   shownStatus: "{n} pages affichées pour {title}",
   failedOne: "{n} index illisible : réindexez depuis les paramètres (détails dans le journal)",
   failedMany: "{n} index illisibles : réindexez depuis les paramètres (détails dans le journal)",
@@ -120,6 +137,19 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   hiddenByFiltersMany: "{n} documents masqués par les filtres",
   noResultFiltersOne: "Aucun résultat avec 1 filtre actif.",
   noResultFiltersMany: "Aucun résultat avec {n} filtres actifs.",
+  sortBy: "Trier par",
+  sortRelevanceDesc: "Pertinence",
+  sortRelevanceAsc: "ASC de pertinence",
+  sortModifiedAsc: "Modifier le temps croissant",
+  sortModifiedDesc: "Modifier le temps décroissant",
+  sortNameAsc: "Nom croissant",
+  sortNameDesc: "Nom décroissant",
+  sortPathAsc: "Chemin croissant",
+  sortMatchesDesc: "Pages correspondantes décroissant",
+  groupByDocument: "Regrouper par document",
+  expandAll: "Élargir",
+  collapseAll: "Réduire",
+  rankingRefinedPages: "Pages classées par proximité et taille de police",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -201,7 +231,20 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     toolbarEl.className = "docseeker-toolbar";
   }
 
-  root.append(input, ...(toolbarEl ? [toolbarEl] : []), ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list);
+  // Pied de la liste plate : « Afficher plus » et note de troncature (aucune région live ajoutée).
+  const flatFooter = doc.createElement("div");
+  flatFooter.className = "docseeker-flat-footer";
+  flatFooter.hidden = true;
+  const flatMore = doc.createElement("button");
+  flatMore.type = "button";
+  flatMore.className = "docseeker-flat-more b3-button b3-button--outline";
+  flatMore.hidden = true;
+  const flatNote = doc.createElement("span");
+  flatNote.className = "docseeker-truncated";
+  flatNote.hidden = true;
+  flatFooter.append(flatMore, flatNote);
+
+  root.append(input, ...(toolbarEl ? [toolbarEl] : []), ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list, flatFooter);
   host.appendChild(root);
   const opts = deps.options;
   // Fonctions liées explicitement : pas de spread de méthodes (qui perdrait `this` d'un objet à classe).
@@ -216,7 +259,55 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       : undefined;
 
   const entries = new Map<string, DocEntry>();
+  /** Mode liste plate : une entrée par page, clé « docId|page ». Vide en mode regroupé. */
+  const flatEntries = new Map<string, DocEntry>();
+  let groupByDocument = deps.initialGroupByDocument ?? true;
   let disposed = false;
+
+  // Commandes de regroupement (état de vue), dans la barre d'outils : sélecteur de tri, regroupement, Élargir, Réduire,
+  // puis le panneau Filtres (ordre du DOM = ordre de tabulation).
+  let groupBox: HTMLInputElement | undefined;
+  let expandBtn: HTMLButtonElement | undefined;
+  let collapseBtn: HTMLButtonElement | undefined;
+  if (toolbarEl) {
+    const wrap = doc.createElement("div");
+    wrap.className = "docseeker-view-options";
+    const label = doc.createElement("label");
+    label.className = "docseeker-group";
+    groupBox = doc.createElement("input");
+    groupBox.type = "checkbox";
+    groupBox.id = nextUiId("docseeker-group");
+    groupBox.checked = groupByDocument;
+    label.htmlFor = groupBox.id;
+    label.append(groupBox, tr("groupByDocument"));
+    const makeBtn = (cls: string, key: string): HTMLButtonElement => {
+      const b = doc.createElement("button");
+      b.type = "button";
+      b.className = `b3-button b3-button--outline ${cls}`;
+      b.textContent = tr(key);
+      b.setAttribute("aria-disabled", "true");
+      return b;
+    };
+    expandBtn = makeBtn("docseeker-expand-all", "expandAll");
+    collapseBtn = makeBtn("docseeker-collapse-all", "collapseAll");
+    wrap.append(label, expandBtn, collapseBtn);
+    const filters = Array.from(toolbarEl.children).find((c) => c.tagName === "DETAILS");
+    toolbarEl.insertBefore(wrap, filters ?? null);
+  }
+
+  /** « Élargir » / « Réduire » : désactivés (aria-disabled, focus conservé) quand l'état demandé est déjà atteint. */
+  const refreshExpansionButtons = (): void => {
+    if (!expandBtn || !collapseBtn) return;
+    const all = [...entries.values()];
+    expandBtn.setAttribute("aria-disabled", String(!all.some((e) => e.canExpand())));
+    collapseBtn.setAttribute("aria-disabled", String(!all.some((e) => e.canCollapse())));
+  };
+  const applyGroupChrome = (): void => {
+    list.classList.toggle("docseeker-list--flat", !groupByDocument);
+    if (expandBtn) expandBtn.hidden = !groupByDocument;
+    if (collapseBtn) collapseBtn.hidden = !groupByDocument;
+  };
+  applyGroupChrome();
   // Nombre de cartes affichées par document déplié ; valable pour une seule requête.
   const expanded = new Map<string, number>();
   let expandedQuery: string | undefined;
@@ -267,9 +358,65 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     entry.li.remove();
   };
 
+  const dropAll = (map: Map<string, DocEntry>): void => {
+    for (const entry of map.values()) dropEntry(entry);
+    map.clear();
+  };
+
+  const hideFlatFooter = (): void => {
+    flatMore.hidden = true;
+    flatNote.hidden = true;
+    flatFooter.hidden = true;
+  };
+
   const clearList = (): void => {
-    for (const entry of entries.values()) dropEntry(entry);
-    entries.clear();
+    dropAll(entries);
+    dropAll(flatEntries);
+    hideFlatFooter();
+  };
+
+  const thumbnailRequest = (result: ResultDoc, page: number, query: string): ThumbnailRequest => {
+    const meta = deps.getDocMeta(result.docId);
+    return {
+      docId: result.docId,
+      path: result.path,
+      page,
+      query,
+      pdfSize: meta?.pdfSize ?? 0,
+      pdfModifiedMs: meta?.pdfModifiedMs ?? 0,
+    };
+  };
+
+  /** Une carte seule (liste plate) : vignette, titre du document et page. */
+  const buildFlat = (result: ResultDoc, page: number, query: string, signature: string): DocEntry => {
+    const li = doc.createElement("li");
+    li.className = "docseeker-flat-item";
+    const card = doc.createElement("button");
+    card.type = "button";
+    card.className = "docseeker-card docseeker-card--flat";
+    card.tabIndex = -1;
+    card.dataset["docId"] = result.docId;
+    card.dataset["page"] = String(page);
+    card.setAttribute("aria-label", tr("cardLabel", { title: result.title, page }));
+    const frame = doc.createElement("span");
+    frame.className = "docseeker-thumb";
+    const name = doc.createElement("span");
+    name.className = "docseeker-card-title";
+    name.textContent = result.title;
+    const label = doc.createElement("span");
+    label.className = "docseeker-card-page";
+    label.textContent = tr("cardPage", { page });
+    card.append(frame, name, label);
+    li.appendChild(card);
+    return {
+      li,
+      signature,
+      detachers: [deps.thumbnails.attach(frame, thumbnailRequest(result, page, query))],
+      canExpand: () => false,
+      canCollapse: () => false,
+      expandAll: () => undefined,
+      collapseAll: () => undefined,
+    };
   };
 
   const buildDoc = (result: ResultDoc, query: string, signature: string): DocEntry => {
@@ -296,9 +443,16 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     const cardsEl = doc.createElement("div");
     cardsEl.className = "docseeker-cards";
     cardsEl.id = nextUiId("docseeker-cards");
-    const entry: DocEntry = { li, signature, detachers: [] };
-    const meta = deps.getDocMeta(result.docId);
     const total = result.pages.length;
+    const entry: DocEntry = {
+      li,
+      signature,
+      detachers: [],
+      canExpand: () => false,
+      canCollapse: () => false,
+      expandAll: () => undefined,
+      collapseAll: () => undefined,
+    };
 
     const addCard = (page: number): void => {
       const card = doc.createElement("button");
@@ -315,16 +469,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       label.textContent = tr("cardPage", { page });
       card.append(frame, label);
       cardsEl.appendChild(card);
-      entry.detachers.push(
-        deps.thumbnails.attach(frame, {
-          docId: result.docId,
-          path: result.path,
-          page,
-          query,
-          pdfSize: meta?.pdfSize ?? 0,
-          pdfModifiedMs: meta?.pdfModifiedMs ?? 0,
-        }),
-      );
+      entry.detachers.push(deps.thumbnails.attach(frame, thumbnailRequest(result, page, query)));
     };
 
     const wanted = Math.min(Math.max(expanded.get(result.docId) ?? MAX_CARDS_PER_DOC, MAX_CARDS_PER_DOC), total);
@@ -382,7 +527,22 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       if (shown > MAX_CARDS_PER_DOC) expanded.set(result.docId, shown);
       else expanded.delete(result.docId);
       ensureTabStop();
+      refreshExpansionButtons();
     };
+    const collapseCards = (): void => {
+      while (entry.detachers.length > MAX_CARDS_PER_DOC) {
+        entry.detachers.pop()?.();
+        cardsEl.lastElementChild?.remove();
+      }
+      sync();
+    };
+    entry.canExpand = () => shownCount() < total;
+    entry.canCollapse = () => shownCount() > MAX_CARDS_PER_DOC;
+    entry.expandAll = () => {
+      for (const { page } of result.pages.slice(shownCount())) addCard(page);
+      sync();
+    };
+    entry.collapseAll = collapseCards;
     more.addEventListener("click", () => {
       const from = shownCount();
       for (const { page } of result.pages.slice(from, from + EXPAND_BATCH)) addCard(page);
@@ -391,11 +551,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     });
     lessBtn.addEventListener("click", () => {
       const focusWasInCards = cardsEl.contains(doc.activeElement);
-      while (entry.detachers.length > MAX_CARDS_PER_DOC) {
-        entry.detachers.pop()?.();
-        cardsEl.lastElementChild?.remove();
-      }
-      sync();
+      collapseCards();
       if (focusWasInCards) (more.hidden ? lessBtn : more).focus();
       announce();
     });
@@ -403,15 +559,42 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     return entry;
   };
 
-  const renderResults = (docs: readonly ResultDoc[], query: string): void => {
-    const active = doc.activeElement as HTMLElement | null;
-    const keyOf = (el: HTMLElement): string =>
-      `${el.dataset["docId"]}|${el.dataset["page"] ?? el.dataset["action"]}`;
-    const focusedKey = active && list.contains(active) ? keyOf(active) : undefined;
-    if (query !== expandedQuery) {
-      expanded.clear();
-      expandedQuery = query;
+  const keyOf = (el: HTMLElement): string => `${el.dataset["docId"]}|${el.dataset["page"] ?? el.dataset["action"]}`;
+
+  /** Remet le focus sur l'élément de même clé après un re-rendu (les <li> déplacés perdent le focus) ; une seule carte tabbable. */
+  const settleFocus = (focusedKey: string | undefined): void => {
+    const cards = allCards();
+    const focusable = Array.from(list.querySelectorAll<HTMLButtonElement>("button[data-doc-id]")).filter(
+      (b) => !b.hidden,
+    );
+    const keep =
+      focusable.find((b) => keyOf(b) === focusedKey) ??
+      // « Plus » masqué par le re-rendu : le focus passe à « Replier » du même document.
+      (focusedKey?.endsWith("|more") ? focusable.find((b) => keyOf(b) === focusedKey.replace(/\|more$/, "|less")) : undefined);
+    const keptCard = keep && keep.classList.contains("docseeker-card") ? keep : undefined;
+    const tabbable = keptCard ?? cards[0];
+    for (const c of cards) c.tabIndex = c === tabbable ? 0 : -1;
+    if (keep) keep.focus();
+  };
+
+  /** Place `li` à la suite de `previous` (ne déplace rien s'il y est déjà) ; renvoie le nouveau « précédent ». */
+  const place = (li: HTMLLIElement, previous: Element | null): Element => {
+    const expectedNext: Element | null = previous ? previous.nextElementSibling : list.firstElementChild;
+    if (expectedNext !== li) list.insertBefore(li, expectedNext);
+    return li;
+  };
+
+  const dropMissing = (map: Map<string, DocEntry>, seen: ReadonlySet<string>, onDrop?: (key: string) => void): void => {
+    for (const [key, entry] of [...map]) {
+      if (!seen.has(key)) {
+        dropEntry(entry);
+        map.delete(key);
+        onDrop?.(key);
+      }
     }
+  };
+
+  const renderGrouped = (docs: readonly ResultDoc[], query: string): void => {
     const seen = new Set<string>();
     let previous: Element | null = null;
     for (const result of docs) {
@@ -433,29 +616,95 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         entry = buildDoc(result, query, signature);
         entries.set(result.docId, entry);
       }
-      const expectedNext: Element | null = previous ? previous.nextElementSibling : list.firstElementChild;
-      if (expectedNext !== entry.li) list.insertBefore(entry.li, expectedNext);
-      previous = entry.li;
+      previous = place(entry.li, previous);
     }
-    for (const [id, entry] of [...entries]) {
-      if (!seen.has(id)) {
-        dropEntry(entry);
-        entries.delete(id);
-        expanded.delete(id);
+    dropMissing(entries, seen, (id) => expanded.delete(id));
+  };
+
+  /** Plafond global de la liste plate (toutes pages de tous les documents) ; remis à 60 quand la requête change. */
+  let flatLimit = FLAT_PAGE_SIZE;
+  let flatQuery: string | undefined;
+  let lastDocs: readonly ResultDoc[] = [];
+  let lastQuery = "";
+
+  const renderFlat = (docs: readonly ResultDoc[], query: string, focusedKey: string | undefined): void => {
+    // Totaux d'abord (sans rien créer) : pages affichables, et pages au-delà du plafond de 200 par document.
+    let total = 0;
+    let notShown = 0;
+    let focusedRank = -1;
+    for (const result of docs) {
+      if (focusedKey !== undefined && focusedRank < 0) {
+        const at = result.pages.findIndex((p) => `${result.docId}|${p.page}` === focusedKey);
+        if (at >= 0) focusedRank = total + at;
+      }
+      total += result.pages.length;
+      notShown += Math.max(0, result.matchingPages - result.pages.length);
+    }
+    // La carte focalisée ne doit pas sortir du rendu : le plafond s'étend jusqu'à elle (par paliers de 60).
+    if (focusedRank >= flatLimit) flatLimit = Math.ceil((focusedRank + 1) / FLAT_PAGE_SIZE) * FLAT_PAGE_SIZE;
+    const rendered = Math.min(flatLimit, total);
+    const seen = new Set<string>();
+    let previous: Element | null = null;
+    let left = rendered;
+    for (const result of docs) {
+      if (left <= 0) break;
+      const meta = deps.getDocMeta(result.docId);
+      for (const { page } of result.pages) {
+        if (left <= 0) break;
+        left--;
+        const key = `${result.docId}|${page}`;
+        seen.add(key);
+        const signature = JSON.stringify([result.title, result.path, page, query, meta?.pdfSize, meta?.pdfModifiedMs]);
+        let entry = flatEntries.get(key);
+        if (entry && entry.signature !== signature) {
+          dropEntry(entry);
+          entry = undefined;
+        }
+        if (!entry) {
+          entry = buildFlat(result, page, query, signature);
+          flatEntries.set(key, entry);
+        }
+        previous = place(entry.li, previous);
       }
     }
-    const cards = allCards();
-    const focusable = Array.from(list.querySelectorAll<HTMLButtonElement>("button[data-doc-id]")).filter(
-      (b) => !b.hidden,
-    );
-    const keep =
-      focusable.find((b) => keyOf(b) === focusedKey) ??
-      // « Plus » masqué par le re-rendu : le focus passe à « Replier » du même document.
-      (focusedKey?.endsWith("|more") ? focusable.find((b) => keyOf(b) === focusedKey.replace(/\|more$/, "|less")) : undefined);
-    const keptCard = keep && keep.classList.contains("docseeker-card") ? keep : undefined;
-    const tabbable = keptCard ?? cards[0];
-    for (const c of cards) c.tabIndex = c === tabbable ? 0 : -1;
-    if (keep) keep.focus();
+    dropMissing(flatEntries, seen);
+    const remaining = total - rendered;
+    const hadFocus = doc.activeElement === flatMore;
+    flatMore.hidden = remaining <= 0;
+    flatMore.textContent = remaining > 0 ? count(remaining, "flatMoreOne", "flatMoreMany") : "";
+    flatNote.hidden = remaining > 0 || notShown <= 0;
+    flatNote.textContent = notShown > 0 ? tr("truncated", { n: notShown }) : "";
+    flatFooter.hidden = flatMore.hidden && flatNote.hidden;
+    // Le bouton qui a le focus ne doit pas disparaître sans le rendre : dernière carte affichée.
+    if (hadFocus && flatMore.hidden) {
+      const last = allCards().at(-1);
+      if (last) focusCard(last);
+    }
+  };
+
+  const renderResults = (docs: readonly ResultDoc[], query: string): void => {
+    const active = doc.activeElement as HTMLElement | null;
+    const focusedKey = active && list.contains(active) ? keyOf(active) : undefined;
+    if (query !== expandedQuery) {
+      expanded.clear();
+      expandedQuery = query;
+    }
+    if (query !== flatQuery) {
+      flatLimit = FLAT_PAGE_SIZE;
+      flatQuery = query;
+    }
+    lastDocs = docs;
+    lastQuery = query;
+    // Un seul mode à la fois dans la liste : l'autre est vidé (vignettes détachées).
+    if (groupByDocument) {
+      dropAll(flatEntries);
+      hideFlatFooter();
+      renderGrouped(docs, query);
+    } else {
+      dropAll(entries);
+      renderFlat(docs, query, focusedKey);
+    }
+    settleFocus(focusedKey);
   };
 
   const hiddenText = (n: number): string => count(n, "hiddenByFiltersOne", "hiddenByFiltersMany");
@@ -482,6 +731,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       clearList();
       expanded.clear();
       expandedQuery = undefined;
+      // Le plafond de la liste plate survit aux états transitoires de la même requête (filtres), pas à une saisie vidée.
+      if (vm.kind === "empty-query") {
+        flatLimit = FLAT_PAGE_SIZE;
+        flatQuery = undefined;
+      }
     }
     switch (vm.kind) {
       case "empty-query":
@@ -513,12 +767,16 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         const withPartial = vm.partial ? `${base}${tr("partialSuffix")}` : base;
         const counted = vm.hiddenByFilters > 0 ? `${withPartial}. ${hiddenText(vm.hiddenByFilters)}` : withPartial;
         // Texte identique tant que le classement reste affiné : la région live ne le ré-annonce pas.
-        const refined = vm.ranking === "proximity" ? `${counted}. ${tr("rankingRefined")}` : counted;
+        // Hors tri par pertinence, l'ordre des documents vient du tri : seules les pages sont classées par proximité.
+        const sortKey = opts?.getOptions().sort.key ?? "relevance";
+        const refinedText = tr(sortKey === "relevance" ? "rankingRefined" : "rankingRefinedPages");
+        const refined = vm.ranking === "proximity" ? `${counted}. ${refinedText}` : counted;
         setStatus(withIndexing(withFailed(refined, vm.failedCount)), { settings: vm.failedCount > 0 });
         renderResults(vm.docs, vm.query);
         break;
       }
     }
+    refreshExpansionButtons();
     // La carte focalisée a disparu : le focus retombait sur <body>, on le rend à la saisie.
     if (hadFocus && !list.contains(doc.activeElement) && !disposed) input.focus();
   };
@@ -547,6 +805,34 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         focusCard(first);
       }
     }
+  });
+
+  groupBox?.addEventListener("change", () => {
+    if (!groupBox) return;
+    groupByDocument = groupBox.checked;
+    applyGroupChrome();
+    render();
+    deps.onGroupByDocumentChange?.(groupByDocument);
+  });
+  flatMore.addEventListener("click", () => {
+    const wasFocused = doc.activeElement === flatMore;
+    const before = allCards().length;
+    flatLimit += FLAT_PAGE_SIZE;
+    renderResults(lastDocs, lastQuery);
+    refreshExpansionButtons();
+    // Dernier lot : le bouton disparaît, le focus passe à la première carte ajoutée.
+    const firstNew = allCards()[before];
+    if (wasFocused && flatMore.hidden && firstNew) focusCard(firstNew);
+  });
+  expandBtn?.addEventListener("click", () => {
+    if (expandBtn?.getAttribute("aria-disabled") === "true") return;
+    for (const entry of entries.values()) entry.expandAll();
+    refreshExpansionButtons();
+  });
+  collapseBtn?.addEventListener("click", () => {
+    if (collapseBtn?.getAttribute("aria-disabled") === "true") return;
+    for (const entry of entries.values()) entry.collapseAll();
+    refreshExpansionButtons();
   });
 
   resetButton?.addEventListener("click", () => {
@@ -679,6 +965,16 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
 
   return {
     focusInput: () => input.focus(),
+    setGroupByDocument(next) {
+      if (disposed || next === groupByDocument) return;
+      groupByDocument = next;
+      if (groupBox) groupBox.checked = next;
+      applyGroupChrome();
+      render();
+    },
+    refreshOptions() {
+      if (!disposed) toolbar?.refresh();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

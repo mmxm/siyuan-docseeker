@@ -173,4 +173,86 @@ describe("SEARCH_CSS", () => {
       expect(block).toContain("Highlight");
     });
   });
+
+  describe("tri et regroupement (10c)", () => {
+    const forced = (): string => SEARCH_CSS.slice(SEARCH_CSS.indexOf("@media (forced-colors: active)"));
+
+    it("la barre d'outils est sur une ligne flex-wrap ; tri, regroupement et Filtres en sont les enfants", () => {
+      const toolbar = rulesFor(".docseeker-toolbar").join(" ");
+      expect(toolbar).toContain("display: flex");
+      expect(toolbar).toContain("flex-wrap: wrap");
+      expect(rulesFor(".docseeker-sort").join(" ")).toMatch(/display:\s*flex/);
+      expect(rulesFor(".docseeker-view-options").join(" ")).toMatch(/display:\s*flex/);
+      expect(rulesFor(".docseeker-view-options").join(" ")).toContain("flex-wrap: wrap");
+    });
+
+    it("le panneau Filtres ne prend toute la largeur que déplié (sinon il partage la ligne)", () => {
+      expect(rulesFor(".docseeker-filters").join(" ")).not.toMatch(/flex:\s*1 1 100%/);
+      expect(rulesFor(".docseeker-filters[open]").join(" ")).toMatch(/flex:\s*1 1 100%/);
+    });
+
+    it("le sélecteur, la case, Élargir et Réduire font au moins 32px", () => {
+      expect(rulesFor(".docseeker-sort select").join(" ")).toMatch(/min-height:\s*32px/);
+      expect(rulesFor(".docseeker-group").join(" ")).toMatch(/min-height:\s*32px/);
+      expect(rulesFor(".docseeker-expand-all").join(" ")).toMatch(/min-height:\s*32px/);
+      expect(rulesFor(".docseeker-collapse-all").join(" ")).toMatch(/min-height:\s*32px/);
+      expect(rulesFor(".docseeker-expand-all").join(" ")).toMatch(/min-width:\s*32px/);
+    });
+
+    it("rien ne dépasse 320px de large : le sélecteur se réduit (min-width: 0, max-width: 100%)", () => {
+      const rule = rulesFor(".docseeker-sort select").join(" ");
+      expect(rule).toContain("max-width: 100%");
+      expect(rulesFor(".docseeker-sort").join(" ")).toContain("min-width: 0");
+      expect(SEARCH_CSS).not.toMatch(/\.docseeker-(sort|view-options|group)[^{]*\{[^}]*(?<!max-)(?<!min-)width:\s*\d{3,}px/);
+    });
+
+    it.each([
+      ".docseeker-sort select:focus-visible",
+      ".docseeker-group input:focus-visible",
+      ".docseeker-expand-all:focus-visible",
+      ".docseeker-collapse-all:focus-visible",
+    ])("focus visible fort : %s", (selector) => {
+      expect(rulesFor(selector).join(" ")).toContain(FOCUS);
+    });
+
+    it("Élargir / Réduire aria-disabled : estompés et non cliquables, et visibles en couleurs forcées", () => {
+      for (const b of [".docseeker-expand-all", ".docseeker-collapse-all"]) {
+        const rule = rulesFor(`${b}[aria-disabled="true"]`).join(" ");
+        expect(rule).toMatch(/opacity:\s*0?\.\d+/);
+        expect(rule).toContain("cursor: not-allowed");
+        expect(forced()).toContain(`${b}[aria-disabled="true"]`);
+      }
+      expect(rulesFor(".docseeker-expand-all[hidden]").join(" ")).toContain("display: none");
+    });
+
+    it("couleurs forcées : le focus des nouveaux contrôles utilise Highlight", () => {
+      const media = forced();
+      for (const sel of [".docseeker-sort select:focus-visible", ".docseeker-group input:focus-visible", ".docseeker-expand-all:focus-visible", ".docseeker-collapse-all:focus-visible"]) {
+        expect(media).toContain(sel);
+      }
+    });
+
+    it("liste plate : cartes en flux, titre de la carte à capacité limitée", () => {
+      expect(rulesFor(".docseeker-list--flat").join(" ")).toMatch(/display:\s*flex/);
+      expect(rulesFor(".docseeker-list--flat").join(" ")).toContain("flex-wrap: wrap");
+      expect(rulesFor(".docseeker-card-title").join(" ")).toMatch(/overflow-wrap:\s*anywhere|text-overflow/);
+      expect(rulesFor(".docseeker-flat-item").join(" ")).toContain("min-width: 0");
+    });
+
+    it("la largeur max d'une carte plate est liée à la largeur de la vignette (variable CSS), sans 136px en dur", () => {
+      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*120px/);
+      expect(rulesFor(".docseeker-thumb").join(" ")).toContain("width: var(--docseeker-thumb-width)");
+      const flat = rulesFor(".docseeker-card--flat").join(" ");
+      expect(flat).toMatch(/max-width:\s*calc\(var\(--docseeker-thumb-width\)\s*\+\s*\d+px\)/);
+      expect(SEARCH_CSS).not.toContain("136px");
+    });
+
+    it("pied de la liste plate : bouton et note ont une taille de cible suffisante, focus visible, [hidden] respecté", () => {
+      expect(rulesFor(".docseeker-flat-more").join(" ")).toMatch(/min-height:\s*32px/);
+      expect(rulesFor(".docseeker-flat-more:focus-visible").join(" ")).toContain(FOCUS);
+      expect(rulesFor(".docseeker-flat-more[hidden]").join(" ")).toContain("display: none");
+      expect(rulesFor(".docseeker-flat-footer[hidden]").join(" ")).toContain("display: none");
+      expect(rulesFor(".docseeker-flat-footer").join(" ")).toMatch(/display:\s*flex/);
+    });
+  });
 });

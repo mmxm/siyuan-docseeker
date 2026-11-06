@@ -5,6 +5,8 @@ import type { IndexerEvent } from "../../src/indexer/indexer";
 import { InvalidPdfPathError } from "../../src/siyuan/openPdf";
 import { createWarnLog, mountSearchTab, type SearchTabDeps } from "../../src/searchTab";
 import { RERANK_GRACE_MS } from "../../src/search/searchController";
+import type { SortSpec } from "../../src/search/resultOptions";
+import type { DocSeekerSettings } from "../../src/settings";
 import { createSharedIndex, type SharedIndex } from "../../src/search/sharedIndex";
 
 const PDF_A = "assets/Alpha-20240101120000-abc1234.pdf";
@@ -1246,5 +1248,421 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     expect(status).toContain("1 document,");
     expect(status).toContain("1 document masqué par les filtres");
     tab.dispose();
+  });
+});
+
+describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
+  const SORTED = { key: "name", direction: "desc" } as const;
+  function settingsFor(initial: { sort?: SortSpec; groupByDocument?: boolean } = {}) {
+    const state = {
+      autoIndex: true,
+      intervalMinutes: 5,
+      sort: initial.sort ?? { key: "relevance", direction: "desc" },
+      groupByDocument: initial.groupByDocument ?? true,
+    } as DocSeekerSettings;
+    const get = vi.fn(() => state);
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => undefined);
+    return { get, update, settings: { get, update } };
+  }
+  const withSettings = (h: Harness, settings: NonNullable<SearchTabDeps["settings"]>): SearchTabDeps => ({ ...h.deps, settings });
+  const sortSelect = (host: HTMLElement) => host.querySelector<HTMLSelectElement>(".docseeker-sort select")!;
+  const groupBox = (host: HTMLElement) => host.querySelector<HTMLInputElement>(".docseeker-group input")!;
+  const choose = (host: HTMLElement, value: string): void => {
+    const select = sortSelect(host);
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const order = (host: HTMLElement): string[] => cards(host).map((c) => `${c.dataset["docId"]}|${c.dataset["page"]}`);
+
+  it("lit le tri mémorisé au montage : sélecteur, contrôleur (ordre des documents)", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings } = settingsFor({ sort: SORTED });
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    expect(sortSelect(h.host).value).toBe("name:desc");
+    await type(h.host, "chat");
+    expect(order(h.host).map((k) => k.split("|")[0])).toEqual(["b", "b", "a", "a"]);
+    tab.dispose();
+  });
+
+  it("sans réglage mémorisé (défaut) : pertinence et regroupement actif", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    expect(sortSelect(h.host).value).toBe("relevance:desc");
+    expect(groupBox(h.host).checked).toBe(true);
+    await type(h.host, "chat");
+    expect(order(h.host).map((k) => k.split("|")[0])).toEqual(["a", "a", "b", "b"]);
+    tab.dispose();
+  });
+
+  it("lit le regroupement mémorisé au montage : liste plate si faux", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings } = settingsFor({ groupByDocument: false });
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    expect(groupBox(h.host).checked).toBe(false);
+    await type(h.host, "chat");
+    expect(h.host.querySelectorAll(".docseeker-list > li")).toHaveLength(4);
+    expect(h.host.querySelector(".docseeker-doc-heading")).toBeNull();
+    tab.dispose();
+  });
+
+  it("un changement de tri appelle update({ sort }) une fois, et réordonne sans nouvelle lecture du store", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "chat");
+    const reads = h.read.mock.calls.length;
+    const decodes = h.decodePageMatches.mock.calls.length;
+    choose(h.host, "name:desc");
+    await flush();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ sort: SORTED });
+    expect(order(h.host).map((k) => k.split("|")[0])).toEqual(["b", "b", "a", "a"]);
+    expect(h.read.mock.calls.length).toBe(reads);
+    expect(h.decodePageMatches.mock.calls.length).toBe(decodes);
+    tab.dispose();
+  });
+
+  it("un changement de tri sans requête soumise est mémorisé aussi", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    choose(h.host, "modified:asc");
+    expect(update).toHaveBeenCalledWith({ sort: { key: "modified", direction: "asc" } });
+    tab.dispose();
+  });
+
+  it("un changement de regroupement appelle update({ groupByDocument })", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    groupBox(h.host).checked = false;
+    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ groupByDocument: false });
+    groupBox(h.host).checked = true;
+    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    expect(update).toHaveBeenLastCalledWith({ groupByDocument: true });
+    tab.dispose();
+  });
+
+  it("les filtres ne sont JAMAIS persistés (update non appelé), le tri l'est", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
+    name.value = "beta";
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    const min = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="number"]')!;
+    min.value = "2";
+    min.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
+    await flush();
+    expect(update).not.toHaveBeenCalled();
+    tab.dispose();
+  });
+
+  it("changer un filtre après un tri ne réécrit pas le tri", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    choose(h.host, "name:asc");
+    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
+    name.value = "beta";
+    name.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(update).toHaveBeenCalledTimes(1);
+    tab.dispose();
+  });
+
+  it("l'échec de update() est journalisé (onWarn, avec l'erreur), jamais avalé ; l'interface reste cohérente", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const boom = new Error("disque plein");
+    update.mockRejectedValue(boom);
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    choose(h.host, "name:asc");
+    groupBox(h.host).checked = false;
+    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+    const failures = h.onWarn.mock.calls.filter((c) => c[1] === boom);
+    expect(failures).toHaveLength(2);
+    expect(String(failures[0]![0])).toMatch(/tri/i);
+    expect(String(failures[1]![0])).toMatch(/regroup/i);
+    expect(sortSelect(h.host).value).toBe("name:asc");
+    tab.dispose();
+  });
+
+  it("un update() qui lève de façon synchrone est aussi journalisé", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, update } = settingsFor();
+    const boom = new Error("sync");
+    update.mockImplementation(() => {
+      throw boom;
+    });
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    expect(() => choose(h.host, "name:asc")).not.toThrow();
+    expect(h.onWarn).toHaveBeenCalledWith(expect.any(String), boom);
+    tab.dispose();
+  });
+
+  it("l'onglet ne relit pas les réglages après le montage (pas d'abonnement aux changements externes)", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, get } = settingsFor();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    const calls = get.mock.calls.length;
+    await type(h.host, "chat");
+    choose(h.host, "name:asc");
+    await flush();
+    expect(get.mock.calls.length).toBe(calls);
+    expect("subscribe" in settings).toBe(false);
+    tab.dispose();
+  });
+
+  it("sans deps.settings : tri et regroupement fonctionnent en session, rien n'échoue", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    await type(h.host, "chat");
+    choose(h.host, "name:desc");
+    await flush();
+    expect(order(h.host).map((k) => k.split("|")[0])).toEqual(["b", "b", "a", "a"]);
+    expect(h.onWarn).not.toHaveBeenCalled();
+    tab.dispose();
+  });
+
+  it("deps.settings.get() qui renvoie un tri invalide : repli sur la pertinence", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings } = settingsFor({ sort: { key: "bogus", direction: "asc" } as never });
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    expect(sortSelect(h.host).value).toBe("relevance:desc");
+    tab.dispose();
+  });
+});
+
+describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J10 10c)", () => {
+  const SORTED = { key: "name", direction: "desc" } as const;
+  const messageText = (host: HTMLElement): string => host.querySelector(".docseeker-message")!.textContent ?? "";
+  const sortSelect = (host: HTMLElement) => host.querySelector<HTMLSelectElement>(".docseeker-sort select")!;
+  const groupBox = (host: HTMLElement) => host.querySelector<HTMLInputElement>(".docseeker-group input")!;
+  const choose = (host: HTMLElement, value: string): void => {
+    const select = sortSelect(host);
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const firstIds = (host: HTMLElement): string[] => cards(host).map((c) => c.dataset["docId"]!);
+
+  /** Réglages dont le chargement se termine sur commande : `get()` renvoie les défauts jusque-là. */
+  function lateSettings() {
+    let state = { autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true } as DocSeekerSettings;
+    let resolve!: () => void;
+    const ready = new Promise<void>((res) => (resolve = res));
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => undefined);
+    const settings = { get: () => state, update, ready };
+    return {
+      settings,
+      update,
+      finishLoading: async (stored: Partial<DocSeekerSettings>) => {
+        state = { ...state, ...stored };
+        resolve();
+        await flush();
+      },
+    };
+  }
+  const withSettings = (h: Harness, settings: NonNullable<SearchTabDeps["settings"]>): SearchTabDeps => ({ ...h.deps, settings });
+
+  it("onglet monté avant la fin du chargement : le tri et le regroupement mémorisés sont appliqués ensuite (sélecteur, ordre, case)", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, finishLoading, update } = lateSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await type(h.host, "chat");
+    expect(sortSelect(h.host).value).toBe("relevance:desc");
+    expect(firstIds(h.host)).toEqual(["a", "a", "b", "b"]);
+    await finishLoading({ sort: SORTED, groupByDocument: false });
+    expect(sortSelect(h.host).value).toBe("name:desc");
+    expect(groupBox(h.host).checked).toBe(false);
+    expect(h.host.querySelector(".docseeker-list--flat")).not.toBeNull();
+    expect(firstIds(h.host).slice(0, 2)).toEqual(["b", "b"]);
+    expect(update).not.toHaveBeenCalled(); // appliquer le réglage lu ne le réécrit pas
+    tab.dispose();
+  });
+
+  it("sans requête soumise, le sélecteur reflète quand même le tri appliqué après la fin du chargement", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, finishLoading } = lateSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    await finishLoading({ sort: SORTED });
+    expect(sortSelect(h.host).value).toBe("name:desc");
+    await type(h.host, "chat");
+    expect(firstIds(h.host).slice(0, 2)).toEqual(["b", "b"]);
+    tab.dispose();
+  });
+
+  it("l'utilisateur a changé le TRI avant la fin du chargement : son choix n'est pas écrasé (le regroupement, lui, est appliqué)", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, finishLoading } = lateSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    choose(h.host, "name:asc");
+    await finishLoading({ sort: SORTED, groupByDocument: false });
+    expect(sortSelect(h.host).value).toBe("name:asc");
+    expect(groupBox(h.host).checked).toBe(false);
+    tab.dispose();
+  });
+
+  it("l'utilisateur a changé le REGROUPEMENT avant la fin du chargement : son choix n'est pas écrasé (le tri est appliqué)", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, finishLoading } = lateSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    groupBox(h.host).checked = false;
+    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    await finishLoading({ sort: SORTED, groupByDocument: true });
+    expect(groupBox(h.host).checked).toBe(false);
+    expect(sortSelect(h.host).value).toBe("name:desc");
+    tab.dispose();
+  });
+
+  it("onglet fermé avant la fin du chargement : rien n'est appliqué, rien n'échoue", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const { settings, finishLoading } = lateSettings();
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    tab.dispose();
+    await finishLoading({ sort: SORTED, groupByDocument: false });
+    expect(h.onWarn).not.toHaveBeenCalled();
+  });
+
+  it("ready qui rejette : journalisé (onWarn), jamais avalé, l'onglet reste utilisable", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const boom = new Error("lecture");
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true }) as DocSeekerSettings,
+      update: vi.fn(async () => undefined),
+      ready: Promise.reject(boom),
+    };
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    expect(h.onWarn).toHaveBeenCalledWith(expect.any(String), boom);
+    expect(sortSelect(h.host).value).toBe("relevance:desc");
+    tab.dispose();
+  });
+
+  it("le tri est mémorisé même si le rendu lève pendant setOptions (try/finally)", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    let boom = false;
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => undefined);
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true }) as DocSeekerSettings,
+      update,
+    };
+    const tab = mountSearchTab(h.host, {
+      ...withSettings(h, settings),
+      t: (key: string) => {
+        if (boom && key === "docMany") throw new Error("rendu en échec");
+        return key;
+      },
+    });
+    await flush();
+    await type(h.host, "chat");
+    boom = true;
+    const swallow = (e: ErrorEvent): void => e.preventDefault();
+    window.addEventListener("error", swallow);
+    try {
+      choose(h.host, "name:asc");
+    } catch {
+      // l'erreur de rendu peut aussi remonter ici : seul compte l'enregistrement du tri
+    }
+    window.removeEventListener("error", swallow);
+    boom = false;
+    expect(update).toHaveBeenCalledWith({ sort: { key: "name", direction: "asc" } });
+    tab.dispose();
+  });
+
+  it("échec d'écriture : onWarn ET un message visible et bref « Réglage non enregistré » dans la zone de messages", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const update = vi.fn(async (_patch: Partial<DocSeekerSettings>) => {
+      throw new Error("disque plein");
+    });
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true }) as DocSeekerSettings,
+      update,
+    };
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    choose(h.host, "name:asc");
+    await vi.advanceTimersByTimeAsync(0);
+    await flush();
+    expect(h.onWarn).toHaveBeenCalled();
+    expect(messageText(h.host)).toBe("Réglage non enregistré");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(messageText(h.host)).toBe(""); // bref : disparaît seul
+    tab.dispose();
+  });
+
+  it("échec synchrone de update() : même message visible", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true }) as DocSeekerSettings,
+      update: () => {
+        throw new Error("sync");
+      },
+    };
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    groupBox(h.host).checked = false;
+    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    expect(messageText(h.host)).toBe("Réglage non enregistré");
+    tab.dispose();
+  });
+
+  it("le message d'échec n'efface pas, à son extinction, un message plus récent", async () => {
+    const h = harness({ ids: ["a", "b"] });
+    const settings = {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true }) as DocSeekerSettings,
+      update: async () => {
+        throw new Error("KO");
+      },
+    };
+    const tab = mountSearchTab(h.host, withSettings(h, settings));
+    await flush();
+    h.host.querySelector(".docseeker-message")!.textContent = "Autre message";
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(messageText(h.host)).toBe("Autre message");
+    tab.dispose();
+  });
+
+  it("aucun nouvel aria-live n'est ajouté par ce retour (la zone de messages existante est réutilisée)", async () => {
+    const h = harness({ ids: ["a"] });
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    const before = h.host.querySelectorAll("[aria-live]").length;
+    tab.dispose();
+    const h2 = harness({ ids: ["a"] });
+    const update = vi.fn(async () => {
+      throw new Error("KO");
+    });
+    const tab2 = mountSearchTab(h2.host, withSettings(h2, {
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true }) as DocSeekerSettings,
+      update,
+    }));
+    await flush();
+    choose(h2.host, "name:asc");
+    await flush();
+    expect(h2.host.querySelectorAll("[aria-live]").length).toBe(before);
+    tab2.dispose();
   });
 });

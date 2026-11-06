@@ -9,9 +9,12 @@
 import {
   MIN_PAGE_BOUND,
   NO_FILTERS,
+  SORT_CHOICES,
   countActiveFilters,
   isPageBound,
   isValidPageRange,
+  sortFromValue,
+  sortToValue,
   type ResultFilters,
   type SearchOptions,
 } from "../search/resultOptions";
@@ -139,7 +142,20 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
     makeField("filterModifiedAfter", dateInput, "date"),
     actions,
   );
-  host.appendChild(details);
+  // Tri : sur la même ligne que « Filtres » (la barre est un conteneur flex-wrap), avant le panneau.
+  const sortField = doc.createElement("div");
+  sortField.className = "docseeker-sort";
+  const sortSelect = doc.createElement("select");
+  sortSelect.className = "b3-select docseeker-sort-select";
+  sortSelect.id = nextUiId("docseeker-sort");
+  for (const choice of SORT_CHOICES) {
+    const option = doc.createElement("option");
+    option.value = sortToValue(choice.spec);
+    option.textContent = t(choice.labelKey);
+    sortSelect.appendChild(option);
+  }
+  sortField.append(makeLabel(t("sortBy"), sortSelect.id), sortSelect);
+  host.append(sortField, details);
 
   let disposed = false;
   /** Retire tous les écouteurs d'un coup à `dispose`. */
@@ -253,6 +269,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   };
 
   const syncFromOptions = (): void => {
+    syncSort();
     const f = currentFilters();
     rebuildFolders();
     folderSelect.value = f.folder;
@@ -263,6 +280,22 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
     dateInput.value = f.modifiedAfterMs === undefined ? "" : formatDate(f.modifiedAfterMs);
     for (const key of errorFields.keys()) showError(key, undefined);
     updateChrome();
+  };
+
+  const syncSort = (): void => {
+    const wanted = sortToValue(deps.getOptions().sort);
+    // Tri non proposé (options venues d'ailleurs) : aucune option sélectionnée plutôt qu'une fausse.
+    sortSelect.value = wanted;
+    if (sortSelect.value !== wanted) sortSelect.selectedIndex = -1;
+  };
+
+  /** Le tri s'applique sur `change` seulement ; le focus reste sur le sélecteur (rien ne le déplace). */
+  const applySort = (): void => {
+    if (disposed) return;
+    const sort = sortFromValue(sortSelect.value);
+    if (!sort) return;
+    const options = deps.getOptions();
+    deps.setOptions({ sort, filters: options.filters });
   };
 
   const reset = (): void => {
@@ -276,6 +309,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   for (const control of [folderSelect, subfolders, nameInput, minInput, maxInput, dateInput]) {
     control.addEventListener("change", apply, { signal });
   }
+  sortSelect.addEventListener("change", applySort, { signal });
   const clearable: readonly HTMLInputElement[] = [nameInput, minInput, maxInput, dateInput];
   details.addEventListener(
     "keydown",
@@ -311,6 +345,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   return {
     refresh() {
       if (disposed) return;
+      syncSort();
       if (details.open) rebuildFolders();
       updateChrome();
     },
@@ -319,6 +354,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
       if (disposed) return;
       disposed = true;
       listeners.abort();
+      sortField.remove();
       details.remove();
     },
   };

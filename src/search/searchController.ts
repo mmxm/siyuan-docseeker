@@ -5,7 +5,7 @@
 import { groupByDocument, searchPages, type Bm25Index } from "../core/bm25";
 import type { ProximityResult } from "./proximityRanker";
 import { isSearchable, titleBonuses } from "./queryMatch";
-import { applyFilters, DEFAULT_OPTIONS, normalizeSearchOptions, sameOptions, type SearchOptions } from "./resultOptions";
+import { applyFilters, DEFAULT_OPTIONS, normalizeSearchOptions, sameOptions, sortDocs, type SearchOptions } from "./resultOptions";
 
 import type { DocInfo, LoadPhase, LoadProgress } from "./searchStore";
 
@@ -89,8 +89,9 @@ export interface SearchController {
   /** Un document a été réindexé : relance proprement le re-classement de la requête courante (s'il y en a un). */
   invalidate(): void;
   /**
-   * Change les filtres/le tri (action explicite). Relance la requête déjà soumise ; sans requête soumise,
-   * l'option est seulement mémorisée.
+   * Change les filtres/le tri (action explicite). Un changement de filtre relance la requête déjà soumise ; un
+   * changement de tri SEUL re-publie la liste affichée, re-triée, sans nouvelle recherche ni nouveau re-classement.
+   * Sans requête soumise, l'option est seulement mémorisée.
    */
   setOptions(next: SearchOptions): void;
   /** Options courantes : objet gelé, à ne pas muter. */
@@ -228,10 +229,21 @@ export function createSearchController(options: SearchControllerOptions): Search
     clearGrace();
   };
 
+  /** Liste affichée avant tri (ordre de pertinence, re-classement compris) : de quoi re-trier sans rien recalculer. */
+  let unsorted: SearchViewModel = EMPTY;
+
+  /** Dernière étape de toute publication : l'ordre des DOCUMENTS suit le tri ; celui des pages reste celui du classement. */
+  const sorted = (vm: SearchViewModel): SearchViewModel => {
+    const { sort } = searchOptions;
+    if (vm.kind !== "results" || (sort.key === "relevance" && sort.direction === "desc")) return vm;
+    return { ...vm, docs: sortDocs(vm.docs, sort, (id) => source.getDoc(id)) };
+  };
+
   const publish = (vm: SearchViewModel): void => {
     clearGrace(); // avant onChange : l'état reste cohérent même si le consommateur lève
-    current = vm;
-    onChange(vm);
+    unsorted = vm;
+    current = sorted(vm);
+    onChange(current);
   };
 
   /** Publication issue d'un callback asynchrone du re-classement : une exception est journalisée, jamais perdue. */
@@ -349,6 +361,7 @@ export function createSearchController(options: SearchControllerOptions): Search
       abortRerank();
       if (!isSearchable(next)) {
         requestNumber++;
+        unsorted = EMPTY;
         current = EMPTY;
         onChange(EMPTY);
         return;
@@ -366,8 +379,17 @@ export function createSearchController(options: SearchControllerOptions): Search
       if (disposed) return;
       const normalized = frozenOptions(next);
       if (sameOptions(normalized, searchOptions)) return;
+      const sortOnly = sameOptions({ sort: searchOptions.sort, filters: normalized.filters }, searchOptions);
       searchOptions = normalized;
       if (!isSearchable(query)) return; // rien de soumis : l'option est seulement mémorisée
+      if (sortOnly) {
+        // Ni nouvelle recherche ni nouveau re-classement (un re-classement en vol continue : ses fenêtres seront
+        // triées avec ce tri). Pas de clearGrace : la publication en attente reste due.
+        if (unsorted.kind !== "results") return;
+        current = sorted(unsorted);
+        onChange(current);
+        return;
+      }
       cancelCoalescing();
       abortRerank();
       run();

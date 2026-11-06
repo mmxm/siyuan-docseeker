@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, FREQUENCY_MINUTES, SETTINGS_FILE, createSettings, normalizeSettings } from "../../src/settings";
 
+/** Valeurs par défaut des champs de présentation (tri et regroupement), ajoutés après les deux premiers réglages. */
+const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true } as const;
+
 describe("normalizeSettings", () => {
   it("défauts : indexation automatique activée, 5 minutes", () => {
-    expect(DEFAULT_SETTINGS).toEqual({ autoIndex: true, intervalMinutes: 5 });
+    expect(DEFAULT_SETTINGS).toEqual({ autoIndex: true, intervalMinutes: 5, ...EXTRA });
     expect(FREQUENCY_MINUTES).toEqual([5, 15, 60]);
     expect(SETTINGS_FILE).toBe("settings.json");
   });
@@ -16,23 +19,23 @@ describe("normalizeSettings", () => {
 
   it("valeurs valides conservées", () => {
     const warn = vi.fn();
-    expect(normalizeSettings({ autoIndex: false, intervalMinutes: 60 }, warn)).toEqual({ autoIndex: false, intervalMinutes: 60 });
+    expect(normalizeSettings({ autoIndex: false, intervalMinutes: 60 }, warn)).toEqual({ autoIndex: false, intervalMinutes: 60, ...EXTRA });
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("champ absent : défaut, sans avertissement", () => {
     const warn = vi.fn();
-    expect(normalizeSettings({ intervalMinutes: 15 }, warn)).toEqual({ autoIndex: true, intervalMinutes: 15 });
+    expect(normalizeSettings({ intervalMinutes: 15 }, warn)).toEqual({ autoIndex: true, intervalMinutes: 15, ...EXTRA });
     expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["intervalle inconnu", { autoIndex: true, intervalMinutes: 7 }, { autoIndex: true, intervalMinutes: 5 }],
-    ["intervalle texte", { autoIndex: true, intervalMinutes: "15" }, { autoIndex: true, intervalMinutes: 5 }],
-    ["intervalle NaN", { intervalMinutes: Number.NaN }, { autoIndex: true, intervalMinutes: 5 }],
-    ["interrupteur texte", { autoIndex: "false", intervalMinutes: 15 }, { autoIndex: true, intervalMinutes: 15 }],
-    ["interrupteur nul", { autoIndex: null, intervalMinutes: 15 }, { autoIndex: true, intervalMinutes: 15 }],
-    ["ancien intervalle d'une minute (retiré)", { autoIndex: true, intervalMinutes: 1 }, { autoIndex: true, intervalMinutes: 5 }],
+    ["intervalle inconnu", { autoIndex: true, intervalMinutes: 7 }, { autoIndex: true, intervalMinutes: 5, ...EXTRA }],
+    ["intervalle texte", { autoIndex: true, intervalMinutes: "15" }, { autoIndex: true, intervalMinutes: 5, ...EXTRA }],
+    ["intervalle NaN", { intervalMinutes: Number.NaN }, { autoIndex: true, intervalMinutes: 5, ...EXTRA }],
+    ["interrupteur texte", { autoIndex: "false", intervalMinutes: 15 }, { autoIndex: true, intervalMinutes: 15, ...EXTRA }],
+    ["interrupteur nul", { autoIndex: null, intervalMinutes: 15 }, { autoIndex: true, intervalMinutes: 15, ...EXTRA }],
+    ["ancien intervalle d'une minute (retiré)", { autoIndex: true, intervalMinutes: 1 }, { autoIndex: true, intervalMinutes: 5, ...EXTRA }],
   ])("%s : retombe sur le défaut du champ et journalise", (_name, raw, expected) => {
     const warn = vi.fn();
     expect(normalizeSettings(raw, warn)).toEqual(expected);
@@ -66,7 +69,7 @@ describe("createSettings", () => {
     const listener = vi.fn();
     store.subscribe(listener);
     await store.load();
-    expect(store.get()).toEqual({ autoIndex: false, intervalMinutes: 15 });
+    expect(store.get()).toEqual({ autoIndex: false, intervalMinutes: 15, ...EXTRA });
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
@@ -86,13 +89,14 @@ describe("createSettings", () => {
 
   it("update() applique tout de suite, notifie, puis enregistre l'objet complet", async () => {
     const { store, save } = make(undefined);
+    await store.load(); // chargé : l'application est alors immédiate
     const listener = vi.fn();
     store.subscribe(listener);
     const done = store.update({ intervalMinutes: 15 });
     expect(store.get().intervalMinutes).toBe(15);
     expect(listener).toHaveBeenCalledTimes(1);
     await done;
-    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 15 });
+    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 15, ...EXTRA });
   });
 
   it("update() garde la valeur en mémoire et rejette si l'enregistrement échoue", async () => {
@@ -110,6 +114,7 @@ describe("createSettings", () => {
 
   it("update() sans changement n'enregistre ni ne notifie", async () => {
     const { store, save } = make(undefined);
+    await store.load();
     const listener = vi.fn();
     store.subscribe(listener);
     await store.update({ autoIndex: true });
@@ -119,6 +124,7 @@ describe("createSettings", () => {
 
   it("subscribe renvoie un désabonnement ; un écouteur qui lève est journalisé sans bloquer les autres", async () => {
     const { store, warn } = make(undefined);
+    await store.load();
     const bad = vi.fn(() => { throw new Error("boom"); });
     const good = vi.fn();
     store.subscribe(bad);
@@ -156,6 +162,7 @@ describe("createSettings : enregistrement sérialisé", () => {
       },
       onWarn: vi.fn(),
     });
+    await store.ready;
     const a = store.update({ intervalMinutes: 15 });
     await Promise.resolve();
     await Promise.resolve();
@@ -168,8 +175,8 @@ describe("createSettings : enregistrement sérialisé", () => {
     await Promise.all([a, b, c]);
     expect(maxActive).toBe(1);
     expect(saved).toEqual([
-      { autoIndex: true, intervalMinutes: 15 },
-      { autoIndex: false, intervalMinutes: 60 },
+      { autoIndex: true, intervalMinutes: 15, ...EXTRA },
+      { autoIndex: false, intervalMinutes: 60, ...EXTRA },
     ]);
   });
 
@@ -190,7 +197,7 @@ describe("createSettings : enregistrement sérialisé", () => {
     const b = store.update({ intervalMinutes: 60 });
     await expect(a).rejects.toThrow("KO");
     await expect(b).resolves.toBeUndefined();
-    expect(save).toHaveBeenLastCalledWith({ autoIndex: true, intervalMinutes: 60 });
+    expect(save).toHaveBeenLastCalledWith({ autoIndex: true, intervalMinutes: 60, ...EXTRA });
   });
 });
 
@@ -208,7 +215,7 @@ describe("createSettings : fichier corrompu", () => {
     const save = vi.fn(async (_v: unknown) => undefined);
     const store = createSettings({ load: async () => ({ autoIndex: false, intervalMinutes: 1 }), save, onWarn: vi.fn() });
     await store.load();
-    expect(save).toHaveBeenCalledWith({ autoIndex: false, intervalMinutes: 5 });
+    expect(save).toHaveBeenCalledWith({ autoIndex: false, intervalMinutes: 5, ...EXTRA });
   });
 
   it("fichier absent ou valide : aucune réécriture", async () => {
@@ -223,5 +230,207 @@ describe("createSettings : fichier corrompu", () => {
     const store = createSettings({ load: async () => 42, save: async () => { throw new Error("lecture seule"); }, onWarn: warn });
     await expect(store.load()).resolves.toEqual(DEFAULT_SETTINGS);
     expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "lecture seule" }));
+  });
+});
+
+describe("réglages de présentation : tri et regroupement", () => {
+  it("défauts : pertinence décroissante, regroupement par document actif", () => {
+    expect(DEFAULT_SETTINGS.sort).toEqual({ key: "relevance", direction: "desc" });
+    expect(DEFAULT_SETTINGS.groupByDocument).toBe(true);
+  });
+
+  it("un ANCIEN fichier (deux champs) se charge sans avertissement, avec les défauts pour les nouveaux", () => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ autoIndex: false, intervalMinutes: 15 }, warn)).toEqual({
+      autoIndex: false, intervalMinutes: 15, ...EXTRA,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("valeurs valides conservées (objet de tri, et forme texte « clé:sens »)", () => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ sort: { key: "name", direction: "asc" }, groupByDocument: false }, warn)).toMatchObject({
+      sort: { key: "name", direction: "asc" }, groupByDocument: false,
+    });
+    expect(normalizeSettings({ sort: "matches:desc" }, warn).sort).toEqual({ key: "matches", direction: "desc" });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["texte inconnu", "foo:asc"],
+    ["clé inconnue", { key: "foo", direction: "asc" }],
+    ["ancienne clé pages", { key: "pages", direction: "desc" }],
+    ["sens inconnu", { key: "name", direction: "up" }],
+    ["tri non proposé", "path:desc"],
+    ["nombre", 3],
+    ["nul", null],
+  ])("tri invalide (%s) : défaut ET avertissement unique", (_n, sort) => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ autoIndex: true, intervalMinutes: 5, sort }, warn).sort).toEqual(EXTRA.sort);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([["texte", "false"], ["nombre", 0], ["nul", null]])("regroupement invalide (%s) : défaut true ET avertissement", (_n, groupByDocument) => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ groupByDocument }, warn).groupByDocument).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  const make = () => {
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const warn = vi.fn();
+    return { store: createSettings({ load: async () => undefined, save, onWarn: warn }), save, warn };
+  };
+
+  it("update({ sort }) : applique, notifie, enregistre l'objet complet avec le tri", async () => {
+    const { store, save } = make();
+    await store.load();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    await store.update({ sort: { key: "modified", direction: "desc" } });
+    expect(store.get().sort).toEqual({ key: "modified", direction: "desc" });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true });
+  });
+
+  it("update({ groupByDocument }) : applique, notifie, enregistre", async () => {
+    const { store, save } = make();
+    await store.update({ groupByDocument: false });
+    expect(store.get().groupByDocument).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("update() compare l'objet normalisé COMPLET : un tri identique mais NOUVEL objet ne notifie ni n'enregistre", async () => {
+    const { store, save } = make();
+    await store.load();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    await store.update({ sort: { key: "relevance", direction: "desc" } });
+    await store.update({ sort: "relevance:desc" as never });
+    expect(listener).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("update() avec un tri invalide : défaut (donc sans changement), avertissement, rien enregistré", async () => {
+    const { store, save, warn } = make();
+    await store.update({ sort: { key: "foo", direction: "asc" } as never });
+    expect(store.get().sort).toEqual(EXTRA.sort);
+    expect(warn).toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("fichier ancien : aucune réécriture au chargement", async () => {
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const warn = vi.fn();
+    await createSettings({ load: async () => ({ autoIndex: true, intervalMinutes: 15 }), save, onWarn: warn }).load();
+    expect(save).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("tri invalide dans le fichier : défaut, avertissement et réécriture avec les valeurs valides", async () => {
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const warn = vi.fn();
+    const store = createSettings({ load: async () => ({ autoIndex: false, intervalMinutes: 15, sort: "foo:asc" }), save, onWarn: warn });
+    await store.load();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(store.get()).toEqual({ autoIndex: false, intervalMinutes: 15, ...EXTRA });
+    expect(save).toHaveBeenCalledWith({ autoIndex: false, intervalMinutes: 15, ...EXTRA });
+  });
+});
+
+describe("createSettings : chargement unique et mise à jour avant la fin du chargement (J10 10c)", () => {
+  const deferred = <T>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  };
+  const STORED = { autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false };
+
+  it("ready : promesse résolue une fois le fichier lu ; load() est idempotent (une seule lecture)", async () => {
+    const load = vi.fn(async () => STORED);
+    const store = createSettings({ load, save: vi.fn(async () => undefined), onWarn: vi.fn() });
+    expect(store.ready).toBeInstanceOf(Promise);
+    const [a, b] = await Promise.all([store.load(), store.load()]);
+    await store.ready;
+    await store.load();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(a).toBe(b);
+    expect(store.get().autoIndex).toBe(false);
+  });
+
+  it("update() lancé AVANT la fin du chargement n'écrase pas le fichier existant (autoIndex et fréquence conservés)", async () => {
+    const gate = deferred<unknown>();
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const store = createSettings({ load: () => gate.promise, save, onWarn: vi.fn() });
+    const pending = store.update({ sort: { key: "modified", direction: "desc" } });
+    await Promise.resolve();
+    expect(save).not.toHaveBeenCalled(); // rien n'est écrit tant que le fichier n'est pas lu
+    gate.resolve(STORED);
+    await pending;
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ ...STORED, sort: { key: "modified", direction: "desc" } });
+    expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60, groupByDocument: false });
+  });
+
+  it("deux update() avant la fin du chargement : fusionnés dans l'ordre d'appel sur le fichier lu", async () => {
+    const gate = deferred<unknown>();
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const store = createSettings({ load: () => gate.promise, save, onWarn: vi.fn() });
+    const p1 = store.update({ groupByDocument: true });
+    const p2 = store.update({ sort: { key: "path", direction: "asc" } });
+    gate.resolve(STORED);
+    await Promise.all([p1, p2]);
+    expect(save).toHaveBeenLastCalledWith({ ...STORED, groupByDocument: true, sort: { key: "path", direction: "asc" } });
+    expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60 });
+  });
+
+  it("update() sans appel préalable à load() ne se bloque pas : il déclenche le chargement", async () => {
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const store = createSettings({ load: async () => STORED, save, onWarn: vi.fn() });
+    await store.update({ groupByDocument: true });
+    expect(save).toHaveBeenCalledWith({ ...STORED, groupByDocument: true });
+  });
+
+  it("une fois chargé, update() applique et notifie toujours de façon synchrone (pas d'attente inutile)", async () => {
+    const store = createSettings({ load: async () => STORED, save: vi.fn(async () => undefined), onWarn: vi.fn() });
+    await store.ready;
+    const seen: boolean[] = [];
+    store.subscribe(() => seen.push(store.get().groupByDocument));
+    void store.update({ groupByDocument: true });
+    expect(seen).toEqual([true]);
+  });
+
+  it("load() pendant un enregistrement en vol : pas de relecture, version intacte (pas d'écriture en trop, rien d'écrasé)", async () => {
+    const gate = deferred<void>();
+    const saved: unknown[] = [];
+    const load = vi.fn(async () => STORED);
+    const store = createSettings({
+      load,
+      save: async (v) => {
+        saved.push(v);
+        if (saved.length === 1) await gate.promise;
+      },
+      onWarn: vi.fn(),
+    });
+    await store.ready;
+    const first = store.update({ groupByDocument: true });
+    await Promise.resolve();
+    await store.load(); // pendant que le premier enregistrement est en vol
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(store.get().groupByDocument).toBe(true); // la modification de l'utilisateur n'est pas écrasée
+    gate.resolve();
+    await first;
+    await store.update({ groupByDocument: true }); // identique et déjà enregistré : aucune écriture
+    expect(saved).toHaveLength(1);
+  });
+
+  it("fichier illisible puis update avant la fin du chargement : la réécriture corrigée et la modification se suivent", async () => {
+    const gate = deferred<unknown>();
+    const saved: unknown[] = [];
+    const store = createSettings({ load: () => gate.promise, save: async (v) => void saved.push(v), onWarn: vi.fn() });
+    const pending = store.update({ intervalMinutes: 15 });
+    gate.resolve({ autoIndex: false, intervalMinutes: 7 }); // intervalle invalide : réécriture
+    await pending;
+    expect(saved.at(-1)).toMatchObject({ autoIndex: false, intervalMinutes: 15 });
   });
 });

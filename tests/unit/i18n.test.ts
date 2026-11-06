@@ -11,6 +11,9 @@ const NEW_KEYS = [
   "filterName", "filterMinPages", "filterMaxPages", "filterModifiedAfter", "filterReset", "filterError",
   "filterErrMinMax", "filterErrInteger", "filterErrDate", "hiddenByFiltersOne", "hiddenByFiltersMany",
   "noResultFiltersOne", "noResultFiltersMany",
+  "sortBy", "sortRelevanceDesc", "sortRelevanceAsc", "sortModifiedAsc", "sortModifiedDesc", "sortNameAsc", "sortNameDesc",
+  "sortPathAsc", "sortMatchesDesc", "groupByDocument", "expandAll", "collapseAll", "rankingRefinedPages",
+  "flatMoreOne", "flatMoreMany", "settingNotSaved",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
 
@@ -120,5 +123,45 @@ describe("i18n/fr_FR.json", () => {
     for (const key of NEW_KEYS.filter((k) => k.startsWith("filter") || k.startsWith("hiddenBy") || k.startsWith("noResultFilters"))) {
       expect(DEFAULT_STRINGS[key], key).toBe(fr[key]);
     }
+  });
+
+  it("libellés du tri et du regroupement : ceux de la recherche native de SiYuan quand ils existent", () => {
+    expect(fr.sortBy).toBe("Trier par");
+    expect(fr.sortRelevanceDesc).toBe("Pertinence");
+    expect(fr.sortRelevanceAsc).toBe("ASC de pertinence");
+    expect(fr.sortModifiedAsc).toBe("Modifier le temps croissant");
+    expect(fr.sortModifiedDesc).toBe("Modifier le temps décroissant");
+    expect(fr.sortNameAsc).toBe("Nom croissant");
+    expect(fr.sortNameDesc).toBe("Nom décroissant");
+    expect(fr.sortPathAsc).toBe("Chemin croissant");
+    expect(fr.sortMatchesDesc).toBe("Pages correspondantes décroissant");
+    expect(fr.groupByDocument).toBe("Regrouper par document");
+    expect(fr.expandAll).toBe("Élargir");
+    expect(fr.collapseAll).toBe("Réduire");
+    expect(fr.rankingRefinedPages).toBe("Pages classées par proximité et taille de police");
+  });
+
+  it("DEFAULT_STRINGS de la vue et fr_FR.json coïncident pour TOUTES les clés qu'ils partagent, et chaque clé de la vue existe en français", async () => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    const missing = Object.keys(DEFAULT_STRINGS).filter((k) => typeof fr[k] !== "string");
+    expect(missing).toEqual([]);
+    const different = Object.keys(DEFAULT_STRINGS).filter((k) => DEFAULT_STRINGS[k] !== fr[k]);
+    expect(different).toEqual([]);
+  });
+
+  it("chaque clé de tri proposée par le sélecteur a un libellé français sans < > &", async () => {
+    const { SORT_CHOICES } = await import("../../src/search/resultOptions");
+    for (const c of SORT_CHOICES) expect(fr[c.labelKey], c.labelKey).toMatch(/^[^<>&]+$/);
+  });
+
+  it("liste plate et échec d'écriture : textes français, variables attendues, identiques aux textes par défaut de la vue", async () => {
+    expect(fr.flatMoreOne).toBe("Afficher plus ({n} page restante)");
+    expect(fr.flatMoreMany).toBe("Afficher plus ({n} pages restantes)");
+    expect(String(fr.flatMoreMany).match(/\{n\}/g)).toHaveLength(1);
+    expect(String(fr.flatMoreOne)).toContain("{n}");
+    expect(fr.settingNotSaved).toBe("Réglage non enregistré");
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    expect(DEFAULT_STRINGS["flatMoreOne"]).toBe(fr.flatMoreOne);
+    expect(DEFAULT_STRINGS["flatMoreMany"]).toBe(fr.flatMoreMany);
   });
 });

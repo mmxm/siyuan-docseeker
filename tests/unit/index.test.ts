@@ -34,7 +34,10 @@ const h = vi.hoisted(() => ({
   saveData: vi.fn(),
   failCreate: false,
   queue: null as null | { pending: string[]; running: string[]; completed: string[]; failed: unknown[] },
-  mountDeps: [] as { indexActivity?: { getSnapshot(): unknown; subscribe(l: () => void): () => void } }[],
+  mountDeps: [] as {
+    indexActivity?: { getSnapshot(): unknown; subscribe(l: () => void): () => void };
+    settings?: { get(): { sort: unknown; groupByDocument: boolean }; update(patch: Record<string, unknown>): Promise<void> };
+  }[],
 }));
 
 vi.mock("siyuan", () => ({
@@ -538,6 +541,7 @@ describe("indexation automatique", () => {
   const settle = async (ms: number): Promise<void> => {
     await vi.advanceTimersByTimeAsync(ms);
   };
+  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true } as const;
   const startPlugin = async (stored: unknown = "") => {
     h.loadData.mockResolvedValue(stored);
     const s = setup();
@@ -709,7 +713,7 @@ describe("indexation automatique", () => {
     sw.checked = false;
     sw.dispatchEvent(new Event("change"));
     await settle(0);
-    expect(h.saveData).toHaveBeenCalledWith("settings.json", { autoIndex: false, intervalMinutes: 5 });
+    expect(h.saveData).toHaveBeenCalledWith("settings.json", { autoIndex: false, intervalMinutes: 5, ...PRESENTATION });
     await settle(30 * MIN);
     window.dispatchEvent(new Event("focus"));
     await settle(0);
@@ -739,7 +743,7 @@ describe("indexation automatique", () => {
     select.value = "15";
     select.dispatchEvent(new Event("change"));
     await settle(0);
-    expect(h.saveData).toHaveBeenCalledWith("settings.json", { autoIndex: true, intervalMinutes: 15 });
+    expect(h.saveData).toHaveBeenCalledWith("settings.json", { autoIndex: true, intervalMinutes: 15, ...PRESENTATION });
     await settle(15 * MIN);
     expect(h.start).toHaveBeenCalledTimes(2);
     panel.close();
@@ -802,5 +806,67 @@ describe("indexation automatique", () => {
     expect(h.mountDeps[0]!.indexActivity).toBe(h.mountDeps[1]!.indexActivity);
     s.plugin.onunload();
     expect(h.listeners.size).toBe(0);
+  });
+
+  it("l'onglet reçoit les réglages : tri et regroupement chargés depuis settings.json, réécrits à chaque changement", async () => {
+    const s = await startPlugin({ autoIndex: true, intervalMinutes: 5, sort: { key: "name", direction: "asc" }, groupByDocument: false });
+    s.render();
+    const tabSettings = h.mountDeps[0]!.settings!;
+    expect(tabSettings.get().sort).toEqual({ key: "name", direction: "asc" });
+    expect(tabSettings.get().groupByDocument).toBe(false);
+    await tabSettings.update({ sort: { key: "modified", direction: "desc" } });
+    expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
+      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false,
+    });
+  });
+
+  it("les réglages sont lus dès onload (avant onLayoutReady) et une seule fois", async () => {
+    h.loadData.mockResolvedValue({ autoIndex: false, intervalMinutes: 60 });
+    const s = setup();
+    expect(h.loadData).toHaveBeenCalledWith("settings.json");
+    s.plugin.onLayoutReady();
+    await settle(0);
+    expect(h.loadData).toHaveBeenCalledTimes(1);
+  });
+
+  it("un onglet monté et modifié AVANT onLayoutReady n'écrase pas settings.json existant", async () => {
+    h.loadData.mockResolvedValue({ autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: true });
+    const s = setup();
+    s.render();
+    const pending = h.mountDeps[0]!.settings!.update({ groupByDocument: false });
+    await pending;
+    expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
+      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false,
+    });
+  });
+
+  it("l'onglet reçoit une promesse ready (réglages chargés) pour appliquer le tri mémorisé", async () => {
+    h.loadData.mockResolvedValue({ sort: { key: "name", direction: "asc" } });
+    const s = setup();
+    s.render();
+    const tabSettings = h.mountDeps[0]!.settings as unknown as { ready: Promise<void>; get(): { sort: unknown } };
+    expect(tabSettings.ready).toBeInstanceOf(Promise);
+    await tabSettings.ready;
+    expect(tabSettings.get().sort).toEqual({ key: "name", direction: "asc" });
+  });
+
+  it("un ancien settings.json (deux champs) se charge sans avertissement ni réécriture", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await startPlugin({ autoIndex: true, intervalMinutes: 15 });
+    expect(h.saveData).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("changer le tri ne perturbe pas l'indexation automatique (aucune synchronisation de plus, minuterie intacte)", async () => {
+    const s = await startPlugin();
+    await settle(3100);
+    s.render();
+    expect(h.start).toHaveBeenCalledTimes(1);
+    await h.mountDeps[0]!.settings!.update({ sort: { key: "name", direction: "desc" } });
+    await h.mountDeps[0]!.settings!.update({ groupByDocument: false });
+    await settle(0);
+    expect(h.start).toHaveBeenCalledTimes(1);
+    await settle(5 * MIN);
+    expect(h.start).toHaveBeenCalledTimes(2); // la période de 5 minutes n'a pas été repoussée ni doublée
   });
 });

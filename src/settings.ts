@@ -1,3 +1,5 @@
+import { DEFAULT_SORT, isRecord, sortFromValue, type SortSpec } from "./search/resultOptions";
+
 /**
  * Réglages persistés du plugin (indexation automatique). Module pur : le chargement et l'enregistrement
  * (`loadData` / `saveData` du plugin, fichier `settings.json` à part du dossier `idx/`) sont injectés.
@@ -9,20 +11,29 @@ export const FREQUENCY_MINUTES = [5, 15, 60] as const;
 export interface DocSeekerSettings {
   readonly autoIndex: boolean;
   readonly intervalMinutes: number;
+  /** Tri des résultats (parmi les tris proposés par le sélecteur). Les filtres ne sont jamais mémorisés. */
+  readonly sort: SortSpec;
+  /** Résultats regroupés par document (vrai) ou liste plate de pages. */
+  readonly groupByDocument: boolean;
 }
 
-export const DEFAULT_SETTINGS: DocSeekerSettings = { autoIndex: true, intervalMinutes: 5 };
+export const DEFAULT_SETTINGS: DocSeekerSettings = {
+  autoIndex: true,
+  intervalMinutes: 5,
+  sort: DEFAULT_SORT,
+  groupByDocument: true,
+};
 
 type Warn = (message: string, error?: unknown) => void;
 
 /** Réglages validés ; `raw` absent (premier lancement) donne les défauts sans avertissement. */
 export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings {
   if (raw === undefined || raw === null || raw === "") return DEFAULT_SETTINGS;
-  if (typeof raw !== "object" || Array.isArray(raw)) {
+  if (!isRecord(raw) || Array.isArray(raw)) {
     onWarn("Réglages illisibles : valeurs par défaut utilisées (indexation automatique activée, vérification toutes les 5 minutes)");
     return DEFAULT_SETTINGS;
   }
-  const { autoIndex, intervalMinutes } = raw as Record<string, unknown>;
+  const { autoIndex, intervalMinutes, sort, groupByDocument } = raw;
   let nextAuto = DEFAULT_SETTINGS.autoIndex;
   if (autoIndex !== undefined) {
     if (typeof autoIndex === "boolean") nextAuto = autoIndex;
@@ -36,7 +47,25 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
       onWarn("Réglage « fréquence de vérification » invalide : défaut utilisé (5 minutes)");
     }
   }
-  return { autoIndex: nextAuto, intervalMinutes: nextInterval };
+  let nextSort = DEFAULT_SETTINGS.sort;
+  if (sort !== undefined) {
+    // Forme texte « clé:sens » ou objet { key, direction } ; seuls les tris proposés par le sélecteur sont valides.
+    const parsed = sortFromValue(
+      typeof sort === "string"
+        ? sort
+        : isRecord(sort) && typeof sort["key"] === "string" && typeof sort["direction"] === "string"
+          ? `${sort["key"]}:${sort["direction"]}`
+          : undefined,
+    );
+    if (parsed) nextSort = parsed;
+    else onWarn("Réglage « tri des résultats » invalide : défaut utilisé (pertinence)");
+  }
+  let nextGroup = DEFAULT_SETTINGS.groupByDocument;
+  if (groupByDocument !== undefined) {
+    if (typeof groupByDocument === "boolean") nextGroup = groupByDocument;
+    else onWarn("Réglage « regrouper par document » invalide : défaut utilisé (activé)");
+  }
+  return { autoIndex: nextAuto, intervalMinutes: nextInterval, sort: nextSort, groupByDocument: nextGroup };
 }
 
 export interface SettingsDeps {
@@ -47,9 +76,11 @@ export interface SettingsDeps {
 
 export interface SettingsStore {
   get(): DocSeekerSettings;
-  /** Lit le fichier ; ne rejette jamais (échec : défauts + avertissement). */
+  /** Lit le fichier UNE fois (appels suivants : même promesse) ; ne rejette jamais (échec : défauts + avertissement). */
   load(): Promise<DocSeekerSettings>;
-  /** Applique et notifie tout de suite, puis enregistre ; rejette si l'enregistrement échoue (valeur gardée en mémoire). */
+  /** Résolue quand le fichier est lu (lance le chargement au besoin). Avant, `get()` renvoie les défauts. */
+  readonly ready: Promise<void>;
+  /** Attend `ready` s'il n'est pas résolu (jamais d'écriture des défauts par-dessus le fichier), puis applique et notifie, puis enregistre ; rejette si l'enregistrement échoue (valeur gardée en mémoire). */
   update(patch: Partial<DocSeekerSettings>): Promise<void>;
   subscribe(listener: () => void): () => void;
 }
@@ -84,43 +115,61 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
     return task;
   };
 
+  let loading: Promise<DocSeekerSettings> | undefined;
+  let loaded = false;
+
+  const doLoad = async (): Promise<DocSeekerSettings> => {
+    let warned = false;
+    const warn: Warn = (message, error) => {
+      warned = true;
+      deps.onWarn(message, error);
+    };
+    try {
+      current = normalizeSettings(await deps.load(), warn);
+    } catch (error) {
+      warn("Lecture des réglages en échec : valeurs par défaut utilisées", error);
+      current = DEFAULT_SETTINGS;
+    }
+    // Aucun update() n'a pu s'appliquer avant `loaded` : les compteurs repartent de zéro sans rien écraser.
+    version = savedVersion = 0;
+    loaded = true;
+    notify();
+    if (warned) {
+      // Fichier corrompu : on le réécrit avec les valeurs valides pour que l'avertissement ne revienne pas.
+      version = 1;
+      try {
+        await persist();
+      } catch (error) {
+        deps.onWarn("Réécriture des réglages corrigés en échec", error);
+      }
+    }
+    return current;
+  };
+  const load = (): Promise<DocSeekerSettings> => (loading ??= doLoad());
+  let readyPromise: Promise<void> | undefined;
+
+  const apply = async (patch: Partial<DocSeekerSettings>): Promise<void> => {
+    const next = normalizeSettings({ ...current, ...patch }, deps.onWarn);
+    // Objet normalisé complet (clés dans un ordre fixe) : un champ ajouté plus tard est comparé sans autre changement.
+    const changed = JSON.stringify(next) !== JSON.stringify(current);
+    if (!changed && savedVersion === version) return;
+    if (changed) {
+      current = next;
+      version += 1;
+      notify();
+    }
+    await persist(); // si le précédent enregistrement a échoué, cette modification (même identique) le retente
+  };
+
   return {
     get: () => current,
-    async load() {
-      let warned = false;
-      const warn: Warn = (message, error) => {
-        warned = true;
-        deps.onWarn(message, error);
-      };
-      try {
-        current = normalizeSettings(await deps.load(), warn);
-      } catch (error) {
-        warn("Lecture des réglages en échec : valeurs par défaut utilisées", error);
-        current = DEFAULT_SETTINGS;
-      }
-      version = savedVersion = 0;
-      notify();
-      if (warned) {
-        // Fichier corrompu : on le réécrit avec les valeurs valides pour que l'avertissement ne revienne pas.
-        version = 1;
-        try {
-          await persist();
-        } catch (error) {
-          deps.onWarn("Réécriture des réglages corrigés en échec", error);
-        }
-      }
-      return current;
+    load,
+    get ready() {
+      return (readyPromise ??= load().then(() => undefined));
     },
-    async update(patch) {
-      const next = normalizeSettings({ ...current, ...patch }, deps.onWarn);
-      const changed = next.autoIndex !== current.autoIndex || next.intervalMinutes !== current.intervalMinutes;
-      if (!changed && savedVersion === version) return;
-      if (changed) {
-        current = next;
-        version += 1;
-        notify();
-      }
-      await persist(); // si le précédent enregistrement a échoué, cette modification (même identique) le retente
+    update(patch) {
+      // Chargé : application immédiate (synchrone). Sinon on attend le fichier, puis on fusionne dans l'ordre d'appel.
+      return loaded ? apply(patch) : load().then(() => apply(patch));
     },
     subscribe(listener) {
       listeners.add(listener);

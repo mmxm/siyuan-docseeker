@@ -51,6 +51,8 @@ declare global {
 /** Point d'entrée du plugin. Onglet de recherche (mountSearchTab) + panneau de paramètres (Réindexer, Vider l'index, Diagnostic M0, journal). */
 export default class DocSeekerPlugin extends Plugin {
   override onload(): void {
+    // Réglages lus tout de suite (idempotent, ne rejette jamais) : un onglet restauré ou un update() n'attend pas onLayoutReady.
+    void this.settings.load();
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- `destroy` reçoit l'onglet comme `this`
     const plugin = this;
     this.addTab({
@@ -298,6 +300,7 @@ export default class DocSeekerPlugin extends Plugin {
       store: this.getPetalStore(kernel),
       sharedIndex,
       onOpenSettings: () => this.openSetting(),
+      settings: this.settings, // tri et regroupement mémorisés
       indexActivity: this.getActivity(),
       openTab: openTab as unknown as OpenTabFn,
       app: this.app,

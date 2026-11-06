@@ -8,7 +8,7 @@ import { decodePageMatches as realDecodePageMatches, decodePagesMatches as realD
 import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
 import { createProximityRanker } from "./search/proximityRanker";
-import { listFolders } from "./search/resultOptions";
+import { DEFAULT_OPTIONS, isProposedSort, listFolders } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
@@ -17,6 +17,7 @@ import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyua
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
+import type { DocSeekerSettings } from "./settings";
 import { mountSearchView } from "./ui/searchView";
 
 export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
@@ -58,6 +59,17 @@ export interface SearchTabDeps {
   readonly schedule?: (fn: () => void, ms: number) => unknown;
   readonly clear?: (handle: unknown) => void;
   readonly t?: (key: string) => string;
+  /**
+   * Réglages persistés : le tri et le regroupement y sont lus au montage et réécrits à chaque changement.
+   * Si le fichier n'est pas encore lu au montage (`ready` en attente), l'onglet démarre avec les défauts puis applique
+   * UNE fois les valeurs lues, sauf pour un réglage que l'utilisateur a déjà changé entre-temps.
+   * Les filtres n'y vont jamais ; l'onglet ne s'abonne pas aux changements externes.
+   */
+  readonly settings?: {
+    get(): DocSeekerSettings;
+    update(patch: Partial<DocSeekerSettings>): Promise<void>;
+    readonly ready?: Promise<void>;
+  };
 }
 
 export interface SearchTab {
@@ -67,6 +79,9 @@ export interface SearchTab {
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const DOC_NOT_FOUND = "Document introuvable dans l'index : voir les paramètres du plugin.";
 const HIGHLIGHT_UNAVAILABLE = "Surlignage indisponible";
+const SETTING_NOT_SAVED = "Réglage non enregistré";
+/** Durée d'affichage du message « Réglage non enregistré ». */
+const FLASH_MESSAGE_MS = 5000;
 const OBSERVER_ROOT_MARGIN = "200px 0px";
 const PAGE_SIZE_WAIT_MS = 400;
 
@@ -140,6 +155,24 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   let disposed = false;
 
   const searchStore = deps.sharedIndex.store;
+  const saved = deps.settings?.get();
+  /** Mémorise un réglage ; un échec (synchrone ou non) est journalisé, jamais avalé. */
+  const persist = (what: string, patch: Partial<DocSeekerSettings>): void => {
+    const settings = deps.settings;
+    if (!settings) return;
+    const fail = (error: unknown): void => {
+      onWarn(`Réglage « ${what} » non enregistré`, error);
+      flashMessage(deps.t?.("settingNotSaved") ?? SETTING_NOT_SAVED); // retour visible et bref, en plus du journal
+    };
+    try {
+      settings.update(patch).catch(fail);
+    } catch (error) {
+      fail(error);
+    }
+  };
+  /** Réglages que l'utilisateur a changés lui-même : la lecture tardive du fichier ne les écrase pas. */
+  let sortTouched = false;
+  let groupTouched = false;
   const controllerListeners = new Set<() => void>();
   const pageMatches = createPageMatchService({
     readDsx: async (docId) => {
@@ -165,6 +198,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     },
     onWarn,
     rerank: ranker,
+    ...(saved ? { initialOptions: { ...DEFAULT_OPTIONS, sort: saved.sort } } : {}),
   });
   const renderer = createPdfRenderer({
     loadDocument: deps.loadDocument,
@@ -203,6 +237,20 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   const showMessage = (text: string): void => {
     if (!disposed) messageEl.textContent = text;
   };
+
+  let flashHandle: unknown;
+  let hasFlash = false;
+  /** Message bref dans la zone de messages existante ; il s'éteint seul, sans effacer un message plus récent. */
+  function flashMessage(text: string): void {
+    if (disposed) return;
+    showMessage(text);
+    if (hasFlash) clear(flashHandle);
+    hasFlash = true;
+    flashHandle = schedule(() => {
+      hasFlash = false;
+      if (!disposed && messageEl.textContent === text) messageEl.textContent = "";
+    }, FLASH_MESSAGE_MS);
+  }
 
   let openController: AbortController | null = null;
   let lastOpened: { dispose(): void } | null = null;
@@ -330,16 +378,56 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       const info = searchStore.getDoc(docId);
       return info ? { pdfSize: info.pdfSize, pdfModifiedMs: info.pdfModifiedMs } : undefined;
     },
-    // Filtres de la session : mémoire du contrôleur seulement, rien n'est persisté.
+    // Filtres de la session : mémoire du contrôleur seulement. Seul le TRI est mémorisé dans les réglages.
     options: {
       getOptions: () => controller.getOptions(),
-      setOptions: (next) => controller.setOptions(next),
+      setOptions: (next) => {
+        const before = controller.getOptions().sort;
+        try {
+          controller.setOptions(next);
+        } finally {
+          // Même si le rendu lève dans setOptions, le tri déjà appliqué par le contrôleur est mémorisé.
+          const after = controller.getOptions().sort; // normalisé par le contrôleur
+          if (after.key !== before.key || after.direction !== before.direction) {
+            sortTouched = true;
+            if (isProposedSort(after)) persist("tri des résultats", { sort: after }); // hors choix du sélecteur : session seulement
+          }
+        }
+      },
       getFolders: () => listFolders(searchStore.listDocs()),
+    },
+    ...(saved ? { initialGroupByDocument: saved.groupByDocument } : {}),
+    onGroupByDocumentChange: (groupByDocument) => {
+      groupTouched = true;
+      persist("regrouper par document", { groupByDocument });
     },
     ...(deps.indexActivity ? { indexActivity: deps.indexActivity, schedule, clear } : {}),
     ...(deps.t ? { t: deps.t } : {}),
   });
   host.append(errorEl, messageEl);
+
+  // Réglages lus après le montage : on applique le tri et le regroupement mémorisés, sauf ceux que l'utilisateur a changés.
+  const pendingSettings = deps.settings;
+  if (pendingSettings?.ready) {
+    const applyLoaded = (): void => {
+      if (disposed) return;
+      const loaded = pendingSettings.get();
+      try {
+        if (!sortTouched) {
+          const current = controller.getOptions();
+          controller.setOptions({ ...current, sort: loaded.sort }); // pas de persist : on applique ce qui est déjà enregistré
+        }
+      } finally {
+        // Le regroupement et la barre d'outils sont traités même si le rendu du tri a levé.
+        try {
+          if (!groupTouched) view.setGroupByDocument(loaded.groupByDocument);
+        } finally {
+          view.refreshOptions();
+        }
+      }
+    };
+    pendingSettings.ready.then(applyLoaded).catch((error: unknown) => onWarn("Application des réglages mémorisés en échec", error));
+  }
 
 
   // Le rafraîchissement et le chargement sont faits par l'index partagé ; l'onglet n'en garde que
@@ -362,6 +450,8 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (hasFlash) clear(flashHandle);
+      hasFlash = false;
       openController?.abort();
       unsubscribeInvalidate();
       unsubscribeStatus();
