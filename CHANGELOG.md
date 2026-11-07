@@ -1,6 +1,8 @@
 # Journal des modifications
 
-## Non publié
+## 0.4.0
+
+Publiée le 2026-11-07.
 
 - Recherche par sous-chaîne : « pco » trouve « BPCO », pour chaque mot de la requête à partir de 3 caractères. Le classement place les mots entiers avant les préfixes, puis les sous-chaînes ; le surlignage suit la même règle que la recherche. Les scores ne sont plus identiques à ceux de FTS5 pour les préfixes.
 

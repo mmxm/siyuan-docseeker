@@ -13,6 +13,7 @@ Légende utilisée ci-dessous :
 
 
 - **Release 0.3.0 publiée le 2026-11-07 par le workflow** (tag léger `v0.3.0` sur `2d7c100`) : run `Release` en succès, release GitHub `DocSeeker 0.3.0` (non brouillon, non préversion) avec `package.zip` (157 766 octets, sha256 `7bee87af…`, identique au hash des notes après téléchargement). Avant le tag : `ci.yml` vert sur `main` (la CI a révélé un test d'octets compressés dépendant de la version de zlib, corrigé en `2d7c100`) et mode à blanc de `release.yml` vert. **Reste non fait** : protection de branche et de tag, environnement `release` avec relecteur, releases immuables (réglages du dépôt, à la main sur GitHub).
+- **Version 0.4.0 (2026-11-07)** : recherche par sous-chaîne (≥ 3 caractères, `src/core/termMatch.ts`), commit `acd395f`, version passée à 0.4.0 ; la publication passe par le tag `v0.4.0` (workflow). Les scores des préfixes ne sont plus identiques à FTS5 (poids 0,6). Non essayé dans l'interface de l'application de bureau.
 ## 1. En une minute
 
 - **Version publiée : 0.2.0.** Tag git `v0.2.0` sur le commit `4a83cb0`. **Version préparée : 0.3.0.** `package.json` et `plugin.json` indiquent `0.3.0`, et `CHANGELOG.md` a une section `## 0.3.0`. Rien n'est encore publié en 0.3.0 : pas de tag `v0.3.0`, pas de release. La section 0.3.0 du CHANGELOG porte la mention « Publiée le 2026-11-07 », à corriger avant le tag (elle ne reflète pas l'état réel).
