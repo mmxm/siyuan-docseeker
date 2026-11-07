@@ -2,7 +2,7 @@
 
 > Document de passation. Il dit où en est le projet, comment il est construit, ce qui reste ouvert et comment reprendre.
 > Complète `CAHIER_DES_CHARGES.md` (le quoi), `PLAN_IMPLEMENTATION.md` (le plan et le guide d'entrée) et `CLAUDE.md` (règles de travail).
-> Dernière mise à jour : 2026-11-07 (J12 ajouté : filtre par documents SiYuan et critères enregistrés, code non committé ; `npm test`, `npm run typecheck` et `npm run test:coverage` relancés ce jour-là, chiffres du 2026-11-07 ; `npm run build` relancé le 2026-11-06 ; `npm run package`, `npm run release:check` et `gh release view v0.2.0` datent du 2026-11-05 et n'ont pas été relancés).
+> Dernière mise à jour : 2026-11-07 (J12 ajouté : filtre par documents SiYuan et critères enregistrés, committé `ae36b73` ; `npm test`, `npm run typecheck` et `npm run test:coverage` relancés ce jour-là, chiffres du 2026-11-07 ; `npm run build` relancé le 2026-11-06 ; `npm run package`, `npm run release:check` et `gh release view v0.2.0` datent du 2026-11-05 et n'ont pas été relancés).
 
 Légende utilisée ci-dessous :
 - **[SiYuan]** : validé à la main dans SiYuan 3.8.9 (webapp, ordinateur). Source : commits `docs:` et sections précédentes de ce fichier ; non rejouable depuis le dépôt.
@@ -23,7 +23,7 @@ Légende utilisée ci-dessous :
 - **Ce qui marche dans SiYuan 3.8.9** : diagnostic M0, indexation de PDF réels, recherche, vignettes surlignées, clic → PDF à la bonne page avec calque, plusieurs onglets de recherche, pages dépliables, re-classement par proximité (phase 1). Détail en section 2.
 - **Ce qui manque** : pause/reprise de l'indexation (le code existe, l'interface non), dossiers surveillés et taille des vignettes dans les réglages, `preview.png`, soumission au Marché, CI. Voir section 5.
 - **Depuis J12, J11 et J10** : ce qui est vérifié et ce qui ne l'est pas est détaillé dans la section 1 bis (rubriques « Vérifié » et « Non vérifié » par jalon ; liste à cocher des validations manuelles J10, J11 et J12).
-- **J12 (code, non committé)** : filtre par documents SiYuan dans le menu « Spécifier le chemin » (cahiers et documents, sous-documents inclus par défaut) et critères de recherche enregistrés (« Critères enregistrés » : enregistrer, rappeler, supprimer). Essayé à la main dans la webapp d'un noyau jetable SiYuan 3.8.9, pas dans l'application de bureau.
+- **J12 (code, committé `ae36b73`)** : filtre par documents SiYuan dans le menu « Spécifier le chemin » (cahiers et documents, sous-documents inclus par défaut) et critères de recherche enregistrés (« Critères enregistrés » : enregistrer, rappeler, supprimer). Essayé à la main dans la webapp d'un noyau jetable SiYuan 3.8.9, pas dans l'application de bureau.
 - **Attention** : `npm run release:check` échoue actuellement sur « le tag v0.2.0 existe déjà ». C'est attendu après publication. Pour une nouvelle version, il faut d'abord incrémenter la version (voir section 7).
 
 ---
@@ -32,11 +32,11 @@ Légende utilisée ci-dessous :
 
 Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramètres du plugin : Réindexer, diagnostic, vider l'index, interrupteur d'indexation automatique) → **J9** (indexation automatique : démarrage, nouveaux PDF, suppressions, `removeStaleTmp`) → **J11** (classement phase 2, format `.dsx` v2, migration automatique grâce à J9) → **J10** (parité avec la recherche SiYuan : chemin, filtres, tris, onglet ou fenêtre flottante, raccourcis) → **J12** (filtre par documents SiYuan et critères de recherche enregistrés).
 
-**État : J7, J8, J9, J11 et J10 sont faits côté code et committés. J12 est fait côté code, non committé. Aucun n'est validé dans l'application de bureau ni dans le `~/SiYuan` de l'utilisateur.** La liste à cocher est plus bas, dans « Validations manuelles à faire ».
+**État : J7, J8, J9, J11 et J10 sont faits côté code et committés. J12 est fait côté code et committé (`ae36b73`). Aucun n'est validé dans l'application de bureau ni dans le `~/SiYuan` de l'utilisateur.** La liste à cocher est plus bas, dans « Validations manuelles à faire ».
 
 - **Banc d'essai (J10, étape 0)** : `npm run sandbox -- start|stop|reset|status|install` lance un noyau SiYuan jetable (port 6807, espace de travail marqué `.docseeker-sandbox` dans `$TMPDIR/docseeker-sandbox` par défaut), avec le plugin et 8 PDF générés par défaut (`--pdfs N`). Il refuse `~/SiYuan`, un espace de travail existant et les ports 6806 et 55165 (`scripts/dev-sandbox.mjs`, `scripts/lib/sandboxCore.mjs`). Le noyau charge le plugin (`loadPetals`). Les essais de J10 ont été faits dans la webapp de ce noyau.
 
-- **J12 (filtre par documents SiYuan et critères enregistrés) : terminé côté code, non committé (arbre de travail du 2026-11-07), validation manuelle à faire.** Détail en section 2 (« Filtre par documents et critères enregistrés (J12) »).
+- **J12 (filtre par documents SiYuan et critères enregistrés) : terminé côté code, committé (`ae36b73`, 2026-11-07), validation manuelle à faire.** Détail en section 2 (« Filtre par documents et critères enregistrés (J12) »).
   - **Ce qui change pour l'utilisateur** :
     - Le menu « Spécifier le chemin » propose, en plus des dossiers de fichiers, deux sections : « Dossiers de fichiers » et « Documents SiYuan » (cahiers, puis documents indentés ; 500 entrées au plus). Un document ne garde que les PDF qu'il cite. Sous-documents inclus par défaut ; le bouton « Inclure les documents enfants » les exclut (pour un cahier : seulement les documents de premier niveau). Un seul chemin actif à la fois.
     - Tant que ce filtre est actif, les PDF jamais cités par un document sont exclus (l'infobulle de l'étiquette le dit).
@@ -228,7 +228,7 @@ Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 
 ### Filtre par documents et critères enregistrés (J12)
 - **Fichiers** : `src/search/docScope.ts` (résolution d'un chemin en ensemble de PDF, sous-documents, cache de 30 s et 8 entrées, identifiants validés), `src/search/docTree.ts` (arbre des cahiers et documents, 500 entrées au plus), `src/siyuan/docQueries.ts` (requêtes SQL sur `assets` et `blocks`, liste des cahiers), `src/siyuan/kernelApi.ts` (`sql` et `lsNotebooks`), `src/ui/docMenu.ts` (sections « Dossiers de fichiers » et « Documents SiYuan » du menu « Spécifier le chemin »), `src/ui/menuLabels.ts` (libellés des menus), `src/ui/searchToolbar.ts` (bouton « Inclure les documents enfants », bouton « Critères enregistrés »), `src/searchTab.ts` (câblage de la portée), `src/search/savedCriteria.ts` (validation et normalisation des critères), `src/ui/criteriaMenu.ts` (enregistrer, rappeler, supprimer), `src/settings.ts` (champ `savedCriteria`, relecture avant écriture, restauration si l'écriture échoue), `i18n/fr_FR.json`.
 - **Tests** : `tests/unit/search/docScope.test.ts`, `docScope.resolver.test.ts`, `docTree.test.ts`, `savedCriteria.test.ts`, `resultOptions.scope.test.ts`, `searchController.scope.test.ts`, `searchSession.scope.test.ts` ; `tests/unit/siyuan/docQueries.test.ts`, `kernelApi.sql.test.ts` ; `tests/unit/ui/docMenu.test.ts`, `criteriaMenu.test.ts`, `nativeFlow.scope.test.ts`, `searchToolbar.scope.test.ts`, `searchToolbar.criteria.test.ts`, `searchView.scope.test.ts`, `searchView.criteria.test.ts` ; `tests/unit/searchTab.scope.test.ts`, `searchTab.criteria.test.ts` ; `tests/unit/settings.criteria.test.ts`. Tests de vue en jsdom : ils ne voient ni le rendu ni la mise en page.
-- **Commits** : (commit à renseigner). Code non committé au 2026-11-07.
+- **Commits** : `ae36b73` (2026-11-07).
 - **Faits vérifiés dans le code (SiYuan 3.8.9)** : colonnes `box`, `docpath`, `path` de la table `assets` ; `docpath` est la chaîne des ancêtres (`/A/B/C.sy`), les sous-documents s'obtiennent par préfixe `/A/B/C/%` ; table `blocks` lue avec `type='d'` (`box`, `path`, `hpath`) ; `/api/notebook/lsNotebooks` pour les cahiers. Sans `limit`, le noyau répond au plus 64 lignes. Juste après le démarrage, il répond « index pas prêt ».
 - **[SiYuan]** : essai à la main dans la webapp d'un noyau jetable 3.8.9 (voir §1 bis, J12). **[tests]** : le reste.
 - **Non vérifié** : voir § 1 bis (J12, « Non vérifié ») et § 5 (« Dettes ouvertes par J12 »).
@@ -419,7 +419,7 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 Chaque étape a un critère de fin. L'ordre est une proposition.
 
 0. ~~**Faire sortir `npm test` avec le code 0 (R12, §5 point 26).**~~ **Fait** (commit `671d5f4`, constat du 2026-11-07 : code 0).
-0 bis. **Committer J12, après relance de `npm run typecheck`, `npm test` et `npm run test:coverage`** (coordinateur). Fin : le commit est fait, `(commit à renseigner)` de §2 est remplacé par son identifiant, et `git log origin/main..HEAD` est vide après `git push origin main`.
+0 bis. ~~Committer J12~~ : fait (`ae36b73`, poussé sur `origin/main`, 2026-11-07).
 0 ter. **Valider J12, J11 et J10 dans l'application de bureau et dans le `~/SiYuan` de l'utilisateur** (liste à cocher, §1 bis), après accord de l'utilisateur et sauvegarde.
    - Fin : chaque case de la liste est cochée ou marquée en échec, avec date et lieu (bureau ou `~/SiYuan`) ; les échecs ouvrent des tâches.
 1. **Revalider dans SiYuan le cadrage multi-termes des vignettes** (`13b3c55`, non revalidé).
