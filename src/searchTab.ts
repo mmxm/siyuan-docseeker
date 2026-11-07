@@ -8,20 +8,24 @@ import { decodePageMatches as realDecodePageMatches, decodePagesMatches as realD
 import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
 import { createProximityRanker } from "./search/proximityRanker";
-import { DEFAULT_OPTIONS, isProposedSort, listFolders } from "./search/resultOptions";
+import { ScopeTooLargeError, createScopeResolver, normalizedScope, scopeKey } from "./search/docScope";
+import { DEFAULT_OPTIONS, isProposedSort, listFolders, type SearchOptions } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
 import { addToHistory, clearHistory } from "./search/searchHistory";
 import type { SearchSessionState } from "./search/searchSession";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
+import { listDocTree } from "./siyuan/docQueries";
+import { IndexUnavailableError, type KernelApi } from "./siyuan/kernelApi";
 import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
+import type { SaveCriteriaResult, SavedCriteria } from "./search/savedCriteria";
 import type { DocSeekerSettings } from "./settings";
 import type { OpenDialog, OpenMenu } from "./ui/nativeUiTypes";
-import { mountSearchView } from "./ui/searchView";
+import { DEFAULT_STRINGS, mountSearchView } from "./ui/searchView";
 
 export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
 const THUMBNAIL_DOC_VERSION = 2; // 2 : cadrage par termes distincts (le recadrage mis en cache change)
@@ -44,6 +48,13 @@ export interface SearchTabDeps {
   readonly loadDocument: (path: string, signal?: AbortSignal) => Promise<RenderableDocument>;
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly onWarn: (message: string, error?: unknown) => void;
+  /**
+   * Noyau SiYuan (SQL et liste des cahiers) pour le filtre « portée de documents ». Absent : le menu du chemin ne propose que les
+   * dossiers de fichiers, et une portée restaurée d'une session est retirée avec un message.
+   */
+  readonly kernel?: Pick<KernelApi, "sql" | "lsNotebooks">;
+  /** Horloge du cache des portées (30 s) ; `Date.now` par défaut. */
+  readonly now?: () => number;
   /**
    * Message d'erreur VISIBLE (toast) pour un incident survenu quand la fenêtre flottante n'est plus là pour l'afficher (surlignage
    * raté après l'ouverture du PDF). Texte brut, sans `<`, `>` ni `&` (SiYuan l'insère comme HTML). Le journal reçoit toujours l'incident.
@@ -103,6 +114,9 @@ export interface SearchTabDeps {
     get(): DocSeekerSettings;
     update(patch: Partial<DocSeekerSettings>): Promise<void>;
     readonly ready?: Promise<void>;
+    /** Critères enregistrés (relecture et fusion à l'écriture). Absents : pas de bouton « Critères enregistrés ». */
+    saveCriteria?(criteria: SavedCriteria): Promise<SaveCriteriaResult>;
+    deleteCriteria?(name: string): Promise<boolean>;
   };
 }
 
@@ -116,6 +130,8 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 const DOC_NOT_FOUND = "Document introuvable dans l'index : voir les paramètres du plugin.";
 const HIGHLIGHT_UNAVAILABLE = "Surlignage indisponible";
 const SETTING_NOT_SAVED = "Réglage non enregistré";
+/** Durée de validité d'une portée résolue (le contenu des documents change au fil de l'édition). */
+const SCOPE_TTL_MS = 30_000;
 /** Durée d'affichage du message « Réglage non enregistré ». */
 const FLASH_MESSAGE_MS = 5000;
 const OBSERVER_ROOT_MARGIN = "200px 0px";
@@ -291,8 +307,21 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     getPagesMatches: (docId, pages, query, signal) => pageMatches.getPagesMatches(docId, pages, query, signal),
     onWarn,
   });
+  // Portée de documents : le résolveur interroge le noyau (cache 30 s) ; `lastResolved` garde le dernier ensemble connu pour que
+  // l'expiration du cache ne vide pas les résultats entre deux rafraîchissements (voir `refreshScope`).
+  const resolver = createScopeResolver({
+    query: (sql, signal) => (deps.kernel ? deps.kernel.sql(sql, signal) : Promise.reject(new Error(tr("kernelUnavailable")))),
+    now: () => (deps.now ?? Date.now)(),
+    ttlMs: SCOPE_TTL_MS,
+  });
+  let lastResolved: { readonly key: string; readonly paths: ReadonlySet<string> } | undefined;
   const controller = createSearchController({
     source: searchStore,
+    scopePaths: (scope, includeChildren) => {
+      const fresh = resolver.peek(scope, includeChildren);
+      if (fresh) return fresh;
+      return lastResolved?.key === scopeKey(scope, includeChildren) ? lastResolved.paths : undefined;
+    },
     schedule,
     clear,
     onChange: () => {
@@ -536,9 +565,226 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     if (problem) showMessage(issue ?? problem);
   };
 
+  // --- Portée de documents : résolution asynchrone des PDF cités avant d'appliquer le filtre au contrôleur.
+  const tr = (key: string): string => {
+    const custom = deps.t?.(key);
+    return custom && custom !== key ? custom : (DEFAULT_STRINGS[key] ?? key);
+  };
+  const describeScopeError = (error: unknown): string => {
+    if (error instanceof IndexUnavailableError) return tr("scopeNotReady");
+    if (error instanceof ScopeTooLargeError) return tr("scopeTooLarge");
+    return `${tr("scopeFailed")} (${messageOf(error)})`;
+  };
+  /** Dernier message lié à la portée (affiché dans la zone de messages) : n'efface que lui, jamais le message d'une autre action. */
+  let scopeMessage: string | undefined;
+  const setScopeMessage = (text: string): void => {
+    scopeMessage = text;
+    showMessage(text);
+  };
+  const clearScopeMessage = (): void => {
+    if (scopeMessage !== undefined && messageEl.textContent === scopeMessage) showMessage("");
+    scopeMessage = undefined;
+  };
+  let scopeGeneration = 0;
+  let scopeAbort: AbortController | undefined;
+  cleanups.push(() => scopeAbort?.abort());
+  /** Options demandées par l'utilisateur, en attente de la résolution de leur portée : la barre les affiche déjà. */
+  let pendingOptions: SearchOptions | undefined;
+  /** Requête soumise pendant la résolution d'une portée : jouée, avec les options appliquées, dès que la résolution est finie. */
+  let deferredQuery: string | undefined;
+  const flushDeferred = (): void => {
+    if (deferredQuery === undefined || disposed || pendingOptions !== undefined) return;
+    const query = deferredQuery;
+    deferredQuery = undefined;
+    controller.submit(query);
+  };
+  const withoutScopeOptions = (o: SearchOptions): SearchOptions => {
+    const { scope: _scope, ...filters } = o.filters;
+    return { sort: o.sort, filters };
+  };
+  /**
+   * Échec de résolution : tout ce qui était demandé (tri, autres filtres) est appliqué sauf la portée. Le choix d'une portée vide
+   * le dossier de la demande ; le dossier déjà actif est alors rétabli (il n'a pas été remplacé).
+   */
+  const withoutScopeKeepingFolder = (next: SearchOptions): SearchOptions => {
+    const rest = withoutScopeOptions(next);
+    if (rest.filters.folder !== "") return rest;
+    return { sort: rest.sort, filters: { ...rest.filters, folder: controller.getOptions().filters.folder } };
+  };
+  /** Applique au contrôleur ; mémorise le tri changé et la session (même si le rendu lève). */
+  const commitOptions = (next: SearchOptions): void => {
+    const before = controller.getOptions().sort;
+    try {
+      controller.setOptions(next);
+    } finally {
+      // Même si le rendu lève dans setOptions, le tri déjà appliqué par le contrôleur est mémorisé.
+      const after = controller.getOptions().sort; // normalisé par le contrôleur
+      if (after.key !== before.key || after.direction !== before.direction) {
+        sortTouched = true;
+        if (isProposedSort(after)) persist("tri des résultats", { sort: after }); // hors choix du sélecteur : session seulement
+      }
+      saveSession();
+    }
+  };
+  /**
+   * Demande de nouvelles options. Sans portée (ou portée en cache) : appliquées tout de suite. Sinon la portée est résolue
+   * d'abord ; une demande plus récente, ou la fermeture, annule la résolution (jeton de génération). Un échec ne laisse JAMAIS un
+   * filtre ignoré : `onFailure` donne les options à appliquer à la place, et message et trace sont affichés.
+   */
+  const requestOptions = (
+    next: SearchOptions,
+    onFailure: () => SearchOptions,
+    after?: (applied: boolean) => void,
+    restoring = false,
+    /** Critère rappelé : une portée qui ne cite plus aucun PDF (document ou cahier disparu) est retirée, avec un message. */
+    recalled = false,
+  ): void => {
+    // Restauration de session : appliquée telle quelle, sans mémoriser le tri dans les réglages ni réécrire la session.
+    const commit = restoring ? (o: SearchOptions): void => controller.setOptions(o) : commitOptions;
+    // Ordre : on annule d'abord la résolution en cours, PUIS on incrémente la génération. `scopeAbort` est partagé avec `refreshScope`
+    // (qui l'adopte s'il existe) : l'annulation coupe donc aussi un rafraîchissement en vol, et la génération (capturée par chaque
+    // demande avant son attente) fait ignorer tout résultat tardif d'une demande dépassée, même si son signal n'a pas pu l'arrêter.
+    scopeAbort?.abort();
+    scopeAbort = undefined;
+    const generation = ++scopeGeneration;
+    const rawScope = next.filters.scope;
+    if (rawScope !== undefined && normalizedScope(rawScope) === undefined) {
+      // Portée illisible (session ou entrée altérée) : jamais retirée en silence, ni appliquée.
+      onWarn("Portée de documents invalide retirée des options", rawScope);
+      pendingOptions = undefined;
+      clearScopeMessage();
+      commit(withoutScopeOptions(next));
+      setScopeMessage(tr("scopeInvalid"));
+      after?.(true);
+      flushDeferred();
+      return;
+    }
+    const { scope, includeSubfolders } = next.filters;
+    const cached = scope ? resolver.peek(scope, includeSubfolders) : undefined;
+    /** Rappel d'un critère dont le chemin n'existe plus : tout est appliqué sauf la portée, et l'utilisateur en est averti. */
+    const applyWithoutMissingPath = (): void => {
+      clearScopeMessage();
+      commit(withoutScopeOptions(next));
+      setScopeMessage(tr("criteriaMissingPath"));
+    };
+    if (scope === undefined || cached) {
+      pendingOptions = undefined;
+      if (recalled && cached?.size === 0) {
+        applyWithoutMissingPath();
+        after?.(true);
+        flushDeferred();
+        return;
+      }
+      if (scope && cached) lastResolved = { key: scopeKey(scope, includeSubfolders), paths: cached };
+      clearScopeMessage();
+      commit(next);
+      after?.(true);
+      flushDeferred();
+      return;
+    }
+    pendingOptions = next;
+    setScopeMessage(tr("scopeLoading"));
+    const mine = new AbortController();
+    scopeAbort = mine;
+    const finish = (apply: () => void, applied = true): void => {
+      if (disposed) return;
+      if (generation !== scopeGeneration) {
+        // Demande dépassée par une plus récente : rien n'est appliqué, mais le suivi (ex. requête de la session à relancer) est dû.
+        after?.(false);
+        return;
+      }
+      pendingOptions = undefined;
+      apply();
+      view.refreshOptions();
+      after?.(applied);
+      flushDeferred();
+    };
+    resolver
+      .resolve(scope, includeSubfolders, mine.signal)
+      .then(
+        (paths) =>
+          finish(() => {
+            if (recalled && paths.size === 0) {
+              applyWithoutMissingPath();
+              return;
+            }
+            lastResolved = { key: scopeKey(scope, includeSubfolders), paths };
+            clearScopeMessage();
+            commit(next);
+          }),
+        (error: unknown) =>
+          finish(() => {
+            onWarn("Filtre par document non appliqué", error);
+            setScopeMessage(describeScopeError(error));
+            commit(onFailure());
+          }, false),
+      )
+      .catch((error: unknown) => onWarn("Application du filtre par document en échec", error));
+  };
+  /**
+   * À chaque soumission : si les documents cités ne sont plus en cache (30 s), ils sont relus sans retarder la recherche, qui
+   * utilise l'ensemble précédent puis est relancée. Un échec garde l'ensemble précédent, avec un message et une trace.
+   */
+  const refreshScope = (): void => {
+    const { scope, includeSubfolders } = controller.getOptions().filters;
+    // Une portée est en résolution : les options du contrôleur sont périmées et le message « Chargement » ne doit pas être écrasé.
+    if (disposed || pendingOptions !== undefined || scope === undefined || resolver.peek(scope, includeSubfolders)) return;
+    const generation = scopeGeneration;
+    const mine = (scopeAbort ??= new AbortController());
+    resolver
+      .resolve(scope, includeSubfolders, mine.signal)
+      .then(
+        (paths) => {
+          if (generation !== scopeGeneration || disposed) return;
+          lastResolved = { key: scopeKey(scope, includeSubfolders), paths };
+          if (scopeMessage === tr("scopeRefreshFailed")) clearScopeMessage();
+          controller.invalidate();
+        },
+        (error: unknown) => {
+          if (generation !== scopeGeneration || disposed) return;
+          onWarn("Documents du filtre non relus : l'ensemble précédent est conservé", error);
+          // « Liste précédente conservée » n'est vrai que si elle correspond à cette portée ; sinon on décrit l'erreur.
+          const keptPrevious = lastResolved?.key === scopeKey(scope, includeSubfolders);
+          setScopeMessage(keptPrevious ? tr("scopeRefreshFailed") : describeScopeError(error));
+        },
+      )
+      .catch((error: unknown) => onWarn("Rafraîchissement du filtre par document en échec", error));
+  };
+
+  // --- Critères enregistrés : rappel (options, regroupement, puis requête) et branchement sur les réglages.
+  const recallCriteria = (criteria: SavedCriteria): void => {
+    if (disposed) return;
+    // Comme un choix manuel : la portée de documents repasse par la résolution asynchrone. Si elle échoue, rien n'est appliqué (le
+    // message de portée est affiché) : la recherche ne se relance pas sans un filtre que le critère demandait.
+    requestOptions(
+      { sort: criteria.sort, filters: criteria.filters },
+      () => controller.getOptions(),
+      (applied) => {
+        if (!applied || disposed) return;
+        groupTouched = true;
+        persist("regrouper par document", { groupByDocument: criteria.groupByDocument });
+        view.setGroupByDocument(criteria.groupByDocument);
+        view.restoreQuery(criteria.query); // champ rempli et recherche relancée, hors historique (la requête est déjà enregistrée)
+      },
+      false,
+      true,
+    );
+  };
+  const criteriaStore = deps.settings;
+  const saveCriteriaFn = criteriaStore?.saveCriteria?.bind(criteriaStore);
+  const deleteCriteriaFn = criteriaStore?.deleteCriteria?.bind(criteriaStore);
+
   const view = mountSearchView(host, {
     controller: {
       submit: (query) => {
+        if (pendingOptions !== undefined) {
+          // Portée en résolution : calculer maintenant donnerait des résultats hors portée. La requête est jouée à la fin.
+          deferredQuery = query;
+          lastQuery = query;
+          saveSession();
+          return;
+        }
+        refreshScope();
         controller.submit(query);
         lastQuery = query;
         saveSession();
@@ -568,23 +814,22 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     },
     // Filtres de la session : mémoire du contrôleur seulement. Seul le TRI est mémorisé dans les réglages.
     options: {
-      getOptions: () => controller.getOptions(),
-      setOptions: (next) => {
-        const before = controller.getOptions().sort;
-        try {
-          controller.setOptions(next);
-        } finally {
-          // Même si le rendu lève dans setOptions, le tri déjà appliqué par le contrôleur est mémorisé.
-          const after = controller.getOptions().sort; // normalisé par le contrôleur
-          if (after.key !== before.key || after.direction !== before.direction) {
-            sortTouched = true;
-            if (isProposedSort(after)) persist("tri des résultats", { sort: after }); // hors choix du sélecteur : session seulement
-          }
-          saveSession();
-        }
-      },
+      getOptions: () => pendingOptions ?? controller.getOptions(),
+      setOptions: (next) => requestOptions(next, () => withoutScopeKeepingFolder(next)),
       getFolders: () => listFolders(searchStore.listDocs()),
+      ...(deps.kernel ? { getDocTree: (signal?: AbortSignal) => listDocTree(deps.kernel as Pick<KernelApi, "sql" | "lsNotebooks">, signal) } : {}),
     },
+    ...(criteriaStore && saveCriteriaFn && deleteCriteriaFn
+      ? {
+          criteria: {
+            list: () => criteriaStore.get().savedCriteria ?? [],
+            save: saveCriteriaFn,
+            remove: deleteCriteriaFn,
+            recall: recallCriteria,
+            notify: flashMessage,
+          },
+        }
+      : {}),
     ...(saved ? { initialGroupByDocument: saved.groupByDocument } : {}),
     onGroupByDocumentChange: (groupByDocument) => {
       groupTouched = true;
@@ -608,12 +853,15 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   const initialSession = deps.session?.initial;
   if (initialSession) {
     try {
-      controller.setOptions(initialSession.options);
-      // Posé seulement une fois les options appliquées : le tri de la session l'emporte alors sur celui des réglages, même lus plus
-      // tard ; si la restauration échoue, rien n'a été appliqué et le tri des réglages reste celui qui s'applique.
+      // Une portée de documents repasse par la résolution (jamais de résultats non filtrés entre-temps : la requête n'est relancée
+      // qu'une fois les options appliquées) ; en cas d'échec, la portée est retirée avec un message et une trace.
+      requestOptions(initialSession.options, () => withoutScopeOptions(initialSession.options), () => {
+        view.refreshOptions();
+        if (initialSession.query !== "") view.restoreQuery(initialSession.query);
+      }, true);
+      // Posé une fois la demande acceptée : le tri de la session l'emporte alors sur celui des réglages, même lus plus tard ; si la
+      // restauration échoue, rien n'a été appliqué et le tri des réglages reste celui qui s'applique.
       sortTouched = true;
-      view.refreshOptions();
-      if (initialSession.query !== "") view.restoreQuery(initialSession.query);
     } catch (error) {
       onWarn("Restauration de la session de recherche en échec", error);
     }
@@ -687,6 +935,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       if (hasFlash) clear(flashHandle);
       hasFlash = false;
       openController?.abort();
+      scopeAbort?.abort();
       unsubscribeInvalidate();
       unsubscribeStatus();
       view.dispose();

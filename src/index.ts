@@ -247,6 +247,8 @@ export default class DocSeekerPlugin extends Plugin {
     load: () => this.loadData(SETTINGS_FILE) as Promise<unknown>,
     save: (value) => this.saveData(SETTINGS_FILE, value) as Promise<unknown>,
     onWarn: (message, error) => this.warnLog.warn(message, error),
+    // Une seule lecture par session : un seul message, la trace (un critère par ligne) est déjà dans le journal.
+    onCriteriaIgnored: () => this.toast(this.t("criteriaLoadFailed")),
   });
   /** Vidage de l'index en cours : porté ici pour survivre à la fermeture/réouverture du panneau. */
   private readonly clearing = createClearingFlag();
@@ -595,6 +597,7 @@ export default class DocSeekerPlugin extends Plugin {
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     return mountSearchTab(host, {
       store: this.getPetalStore(kernel),
+      kernel, // filtre « portée de documents » (arbre et PDF cités, SQL du noyau)
       sharedIndex,
       onOpenSettings: () => this.openSetting(),
       openMenu,

@@ -11,7 +11,7 @@ Recherche plein texte dans les PDF de votre espace SiYuan. Les résultats s'affi
 - **Ouverture à la bonne page** : un clic ouvre le PDF dans le visualiseur de SiYuan, à la page trouvée, centré sur la zone, avec un calque de surlignage. Fonctionne aussi quand le PDF est déjà ouvert.
 - **Classement par proximité des mots et taille de police** : pour une requête de plusieurs mots, les pages où les mots sont proches (sur la même ligne) remontent. Les passages écrits en gros caractères (titres) remontent aussi, y compris pour une requête d'un seul mot. Le classement reste proche de celui de DocSeeker, l'application d'origine, sans lui être identique.
 - **Pages dépliables** : chaque document n'affiche d'abord que quelques pages. « et N autres pages » en déplie 10 de plus à chaque clic (200 pages au maximum par document).
-- **Filtres, tris et clavier** : filtrer par dossier, nom, nombre de pages ou date ; trier et regrouper les résultats ; naviguer au clavier ; reprendre une recherche précédente dans l'historique.
+- **Filtres, tris et clavier** : filtrer par dossier, document SiYuan, nom, nombre de pages ou date ; trier et regrouper les résultats ; naviguer au clavier ; reprendre une recherche précédente dans l'historique ou dans les critères enregistrés.
 - **Fenêtre flottante ou onglet** : la recherche s'ouvre dans un onglet (par défaut) ou dans une fenêtre flottante, au choix dans les paramètres du plugin.
 
 ## Installation
@@ -71,12 +71,23 @@ Comportement à connaître :
 
 Le bouton **Filtres** de la barre d'outils ouvre un dialogue avec :
 
-- le **dossier**, à choisir dans la liste (menu du bouton **Spécifier le chemin**), avec ou sans ses sous-dossiers (bouton **Inclure les documents enfants**, actif seulement quand un dossier est choisi) ;
+- le **dossier**, à choisir dans la liste (menu du bouton **Spécifier le chemin**), avec ou sans ses sous-dossiers (bouton **Inclure les documents enfants** ; voir « Filtrer par document SiYuan ») ;
 - le **nom du document** : une partie du titre suffit, sans tenir compte de la casse ni des accents ;
 - le **nombre de pages** : au moins et au plus ;
 - la **date de modification** : PDF modifié après une date.
 
 **Confirmer** applique les filtres, **Annuler** les ignore, **Réinitialiser les filtres** les efface. Les filtres ne restreignent pas la recherche : ils masquent des documents dans les résultats. Ils ne sont pas conservés d'une session à l'autre.
+
+### Filtrer par document SiYuan
+
+Le menu **Spécifier le chemin** propose, en plus des dossiers de fichiers, deux sections : **Dossiers de fichiers** et **Documents SiYuan**. Les documents sont listés par cahier, puis par document, sous-documents indentés (500 entrées au plus).
+
+- Choisir un cahier ou un document ne garde que les PDF cités par ce document.
+- Les sous-documents sont inclus par défaut. Le bouton **Inclure les documents enfants** les exclut ; pour un cahier, il ne reste alors que ses documents de premier niveau.
+- Un seul chemin est actif à la fois : un dossier ou un document.
+- Tant que ce filtre est actif, les PDF qu'aucun document ne cite sont exclus. L'infobulle de l'étiquette le rappelle.
+
+Le plugin lit l'arborescence dans votre noyau SiYuan. Juste après le démarrage de SiYuan, son index n'est parfois pas prêt : le plugin l'indique alors et propose **Réessayer**. Un filtre qui ne peut pas être appliqué n'est jamais ignoré en silence : un message l'explique.
 
 ### Trier et regrouper
 
@@ -110,6 +121,16 @@ Dans les résultats :
 
 L'icône à droite du champ, ou **Alt+↓**, affiche les 20 dernières recherches. Un clic relance la recherche. **Supprimer tout l'historique** vide la liste. L'historique est conservé dans les réglages du plugin.
 
+### Critères enregistrés
+
+Le bouton **Critères enregistrés** (icône de signet), placé après **Spécifier le chemin**, garde une recherche complète : la requête, le chemin, les filtres, le tri et le regroupement.
+
+- **Enregistrer les critères actuels…** : donnez un nom de 80 caractères au plus. La requête est limitée à 200 caractères, et 30 critères au plus peuvent être enregistrés. Un nom déjà utilisé peut être remplacé, après confirmation (bouton **Remplacer**).
+- **Choisir un critère** dans la liste : il est appliqué et la recherche est relancée.
+- **Supprimer un critère** : sous-menu du bouton.
+
+Les critères sont conservés dans les réglages du plugin. Un critère illisible est ignoré, avec un avertissement dans le journal des paramètres.
+
 ### Fenêtre flottante ou onglet
 
 Le réglage **Ouverture de la recherche** (paramètres du plugin) choisit où s'ouvre la recherche :
@@ -132,12 +153,13 @@ Aucune commande n'a de raccourci par défaut. Pour en attribuer un, ouvrez les p
 ## Limites connues
 
 - **Cible : webapp SiYuan sur ordinateur**, testée avec SiYuan 3.8.9. Le mobile n'est pas pris en charge. L'application de bureau est déclarée dans le manifeste mais n'a pas été testée.
-- **Filtres, tris, clavier, historique et fenêtre flottante** ont été essayés dans la webapp de SiYuan 3.8.9, sur un espace de test. Ils ne sont pas encore validés dans l'application de bureau. Le rendu en thème sombre, en largeur de 320 px et le surlignage dans le volet ouvert à droite n'ont pas encore été contrôlés. Sous macOS, **Alt+↓** peut être capté par le système avant d'atteindre le plugin.
+- **Filtres, filtre par document SiYuan, critères enregistrés, tris, clavier, historique et fenêtre flottante** ont été essayés dans la webapp de SiYuan 3.8.9, sur un espace de test. Ils ne sont pas encore validés dans l'application de bureau. Le rendu en thème sombre, en largeur de 320 px et le surlignage dans le volet ouvert à droite n'ont pas encore été contrôlés. Sous macOS, **Alt+↓** peut être capté par le système avant d'atteindre le plugin.
 - **PDF sans texte ignorés** : un PDF scanné (image sans couche de texte) n'est pas indexé. Il est signalé dans l'onglet. Il n'y a pas d'OCR.
 - **Pas de sous-chaîne** : la recherche porte sur des mots entiers, avec préfixe sur le dernier mot. « pco » ne trouve pas « BPCO ».
 - **Classement proche de DocSeeker, pas identique** : la taille de police est approchée par la hauteur des mots telle que PDF.js la fournit. Sur 3 PDF seulement, cette hauteur s'est révélée environ 6 à 12 % plus grande que celle que donne PyMuPDF, le moteur d'extraction de DocSeeker ; cet écart n'est pas corrigé. Seules les 5 meilleures pages de chaque document sont mesurées pour le classement. Les expressions entre guillemets ne sont pas gérées.
 - **Version précédente du plugin** : la version 0.2.0 ne sait pas lire les index mis à jour. Ne pas utiliser les deux versions sur le même dossier de SiYuan.
-- **Périmètre** : seuls les PDF de `data/assets` sont indexés, pas les documents SiYuan.
+- **Périmètre** : seuls les PDF de `data/assets` sont indexés, pas les documents SiYuan. Ceux-ci ne servent qu'à filtrer les résultats.
+- **Document déplacé** : son chemin change. Un critère enregistré qui le visait peut alors ne plus rien trouver ; le plugin l'indique si aucun PDF ne reste.
 
 ## Confidentialité
 

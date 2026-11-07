@@ -1,5 +1,6 @@
 import { normalizeHistory } from "./search/searchHistory";
 import { DEFAULT_SORT, isRecord, sortFromValue, type SortSpec } from "./search/resultOptions";
+import { normalizeCriteriaList, removeCriteria, upsertCriteria, type SaveCriteriaResult, type SavedCriteria } from "./search/savedCriteria";
 
 /**
  * Réglages persistés du plugin (indexation automatique). Module pur : le chargement et l'enregistrement
@@ -24,6 +25,8 @@ export interface DocSeekerSettings {
   readonly history: readonly string[];
   /** Ouverture de la recherche par l'icône de la barre et la commande « Rechercher dans les PDF ». */
   readonly openMode: OpenMode;
+  /** Critères de recherche enregistrés (30 au plus, noms uniques) ; champ absent d'un ancien fichier : liste vide. */
+  readonly savedCriteria: readonly SavedCriteria[];
 }
 
 export const DEFAULT_SETTINGS: DocSeekerSettings = {
@@ -33,18 +36,25 @@ export const DEFAULT_SETTINGS: DocSeekerSettings = {
   groupByDocument: true,
   history: [],
   openMode: "tab",
+  savedCriteria: [],
 };
 
 type Warn = (message: string, error?: unknown) => void;
 
 /** Réglages validés ; `raw` absent (premier lancement) donne les défauts sans avertissement. */
-export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings {
+export function normalizeSettings(
+  raw: unknown,
+  onWarn: Warn,
+  onCriteriaIgnored?: (count: number) => void,
+  /** Avertissements sur les critères ignorés ; par défaut `onWarn`. Séparés pour que l'appelant sache si SEULS des critères sont en cause. */
+  onCriteriaWarn: Warn = onWarn,
+): DocSeekerSettings {
   if (raw === undefined || raw === null || raw === "") return DEFAULT_SETTINGS;
   if (!isRecord(raw) || Array.isArray(raw)) {
     onWarn("Réglages illisibles : valeurs par défaut utilisées (indexation automatique activée, vérification toutes les 5 minutes)");
     return DEFAULT_SETTINGS;
   }
-  const { autoIndex, intervalMinutes, sort, groupByDocument, history, openMode } = raw;
+  const { autoIndex, intervalMinutes, sort, groupByDocument, history, openMode, savedCriteria } = raw;
   let nextAuto = DEFAULT_SETTINGS.autoIndex;
   if (autoIndex !== undefined) {
     if (typeof autoIndex === "boolean") nextAuto = autoIndex;
@@ -85,6 +95,10 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
     if (isOpenMode(openMode)) nextOpenMode = openMode;
     else onWarn("Réglage « ouverture de la recherche » invalide : défaut utilisé (onglet)");
   }
+  // Champ absent (ancien fichier) : liste vide sans avertissement ; chaque critère ignoré est signalé (précisément).
+  const criteria = normalizeCriteriaList(savedCriteria);
+  for (const warning of criteria.warnings) onCriteriaWarn(warning);
+  if (criteria.ignored > 0) onCriteriaIgnored?.(criteria.ignored);
   return {
     autoIndex: nextAuto,
     intervalMinutes: nextInterval,
@@ -92,13 +106,24 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
     groupByDocument: nextGroup,
     history: nextHistory.history,
     openMode: nextOpenMode,
+    savedCriteria: criteria.list,
   };
+}
+
+/** `settings.json` n'est plus un objet à la relecture : on refuse d'écrire par-dessus (les critères qu'il contenait seraient perdus). */
+export class SettingsFileUnreadableError extends Error {
+  constructor() {
+    super("settings.json illisible à la relecture : enregistrement annulé");
+    this.name = "SettingsFileUnreadableError";
+  }
 }
 
 export interface SettingsDeps {
   readonly load: () => Promise<unknown>;
   readonly save: (value: DocSeekerSettings) => Promise<unknown>;
   readonly onWarn: Warn;
+  /** Appelé UNE fois, à la lecture initiale, si des critères enregistrés ont été ignorés (message visible, une fois par session). */
+  readonly onCriteriaIgnored?: (count: number) => void;
 }
 
 export interface SettingsStore {
@@ -107,9 +132,17 @@ export interface SettingsStore {
   load(): Promise<DocSeekerSettings>;
   /** Résolue quand le fichier est lu (lance le chargement au besoin). Avant, `get()` renvoie les défauts. */
   readonly ready: Promise<void>;
-  /** Attend `ready` s'il n'est pas résolu (jamais d'écriture des défauts par-dessus le fichier), puis applique et notifie, puis enregistre ; rejette si l'enregistrement échoue (valeur gardée en mémoire). */
+  /** Attend `ready` s'il n'est pas résolu (jamais d'écriture des défauts par-dessus le fichier), puis applique et notifie, puis enregistre ; rejette si l'enregistrement échoue (valeur gardée en mémoire). Les critères enregistrés ne sont jamais écrasés : ils sont relus dans le fichier juste avant l'écriture (rejet si le fichier est illisible). */
   update(patch: Partial<DocSeekerSettings>): Promise<void>;
   subscribe(listener: () => void): () => void;
+  /**
+   * Enregistre (ou remplace, même nom) un critère. RELIT le fichier et applique le changement à la liste lue, pour ne pas écraser
+   * ce qu'une autre fenêtre y a écrit ; opérations sérialisées avec les autres écritures. Refus (`error`) sans écriture ; rejette si
+   * la relecture ou l'écriture échoue (en cas d'échec d'écriture, la liste en mémoire est restaurée et les écouteurs notifiés).
+   */
+  saveCriteria(criteria: SavedCriteria): Promise<SaveCriteriaResult>;
+  /** Retire un critère (relecture et fusion comme `saveCriteria`) ; vrai s'il existait. */
+  deleteCriteria(name: string): Promise<boolean>;
 }
 
 export function createSettings(deps: SettingsDeps): SettingsStore {
@@ -130,11 +163,36 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
     }
   };
 
-  /** File d'enregistrements : un seul à la fois, toujours la valeur la plus récente, rien si déjà enregistrée. */
-  const persist = (): Promise<void> => {
+  /** Critères du fichier tel qu'il est MAINTENANT (une autre fenêtre a pu y écrire) ; rejette si la lecture échoue ou si le fichier n'est pas un objet. */
+  const readFileCriteria = async (): Promise<readonly SavedCriteria[]> => {
+    const raw = await deps.load();
+    if (raw === undefined || raw === null || raw === "") return [];
+    if (!isRecord(raw) || Array.isArray(raw)) {
+      const error = new SettingsFileUnreadableError();
+      deps.onWarn("Réglages illisibles à la relecture : écriture annulée", error);
+      throw error;
+    }
+    const { list, warnings } = normalizeCriteriaList(raw["savedCriteria"]);
+    for (const warning of warnings) deps.onWarn(warning);
+    return list;
+  };
+
+  /**
+   * File d'enregistrements : un seul à la fois, toujours la valeur la plus récente, rien si déjà enregistrée. Les critères
+   * enregistrés sont relus dans le fichier juste avant l'écriture (`mergeCriteria`) : un autre réglage modifié dans cette fenêtre
+   * n'efface pas un critère enregistré ou supprimé dans une autre.
+   */
+  const persist = (mergeCriteria = true): Promise<void> => {
     const task = chain.then(async () => {
       if (savedVersion === version) return;
       const target = version;
+      if (mergeCriteria) {
+        const fresh = await readFileCriteria();
+        if (JSON.stringify(fresh) !== JSON.stringify(current.savedCriteria)) {
+          current = { ...current, savedCriteria: fresh };
+          notify();
+        }
+      }
       await deps.save(current);
       savedVersion = Math.max(savedVersion, target);
     });
@@ -146,15 +204,30 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
   let loaded = false;
 
   const doLoad = async (): Promise<DocSeekerSettings> => {
+    // `warned` : un réglage (hors critères) était corrompu, le fichier sera réécrit corrigé. Des critères seuls ignorés ne
+    // déclenchent PAS de réécriture : ceux qu'on n'a pas pu lire (autre version, corruption) restent sur disque.
     let warned = false;
     const warn: Warn = (message, error) => {
       warned = true;
       deps.onWarn(message, error);
     };
     try {
-      current = normalizeSettings(await deps.load(), warn);
+      current = normalizeSettings(
+        await deps.load(),
+        warn,
+        (count) => {
+          try {
+            deps.onCriteriaIgnored?.(count);
+          } catch (error) {
+            deps.onWarn("Message sur les critères ignorés impossible", error);
+          }
+        },
+        deps.onWarn,
+      );
     } catch (error) {
-      warn("Lecture des réglages en échec : valeurs par défaut utilisées", error);
+      // Lecture en échec (E/S passagère) : défauts en mémoire, mais rien n'est écrit tant qu'un réglage n'est pas modifié,
+      // sinon le fichier (et ses critères) serait remplacé par les défauts.
+      deps.onWarn("Lecture des réglages en échec : valeurs par défaut utilisées, fichier laissé intact", error);
       current = DEFAULT_SETTINGS;
     }
     // Aucun update() n'a pu s'appliquer avant `loaded` : les compteurs repartent de zéro sans rien écraser.
@@ -165,7 +238,7 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
       // Fichier corrompu : on le réécrit avec les valeurs valides pour que l'avertissement ne revienne pas.
       version = 1;
       try {
-        await persist();
+        await persist(false); // le fichier vient d'être lu : pas de relecture
       } catch (error) {
         deps.onWarn("Réécriture des réglages corrigés en échec", error);
       }
@@ -188,6 +261,41 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
     await persist(); // si le précédent enregistrement a échoué, cette modification (même identique) le retente
   };
 
+  /**
+   * Lecture-modification-écriture des critères, dans la file des enregistrements. `change` renvoie la nouvelle liste (ou `undefined`
+   * si rien ne change) et le résultat à rendre.
+   */
+  const mutateCriteria = <R>(change: (fresh: readonly SavedCriteria[]) => { next?: SavedCriteria[]; result: R }): Promise<R> => {
+    const run = (): Promise<R> => {
+      const task = chain.then(async () => {
+        const out = change(await readFileCriteria());
+        if (out.next === undefined) return out.result;
+        const previous = current.savedCriteria;
+        current = { ...current, savedCriteria: out.next };
+        version += 1;
+        notify();
+        const target = version;
+        try {
+          await deps.save(current);
+        } catch (error) {
+          // Écriture échouée : la liste en mémoire doit rester celle du fichier (un critère supprimé ne doit pas disparaître du menu
+          // pour revenir au redémarrage). Seule la clé des critères est restaurée : un autre réglage modifié entre-temps est gardé.
+          current = { ...current, savedCriteria: previous };
+          notify();
+          throw error;
+        }
+        savedVersion = Math.max(savedVersion, target);
+        return out.result;
+      });
+      chain = task.then(
+        () => undefined,
+        () => undefined,
+      );
+      return task;
+    };
+    return loaded ? run() : load().then(run);
+  };
+
   return {
     get: () => current,
     load,
@@ -202,5 +310,16 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    saveCriteria: (criteria) =>
+      mutateCriteria<SaveCriteriaResult>((fresh) => {
+        const out = upsertCriteria(fresh, criteria);
+        return "error" in out ? { result: out } : { next: out.list, result: { replaced: out.replaced } };
+      }),
+    deleteCriteria: (name) =>
+      mutateCriteria((fresh) => {
+        const next = removeCriteria(fresh, name);
+        const existed = next.length !== fresh.length;
+        return existed ? { next, result: true } : { result: false };
+      }),
   };
 }

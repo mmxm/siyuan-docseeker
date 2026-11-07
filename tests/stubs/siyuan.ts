@@ -62,6 +62,8 @@ export interface StubMenuItem {
   disabled?: boolean;
   click?: (element: HTMLElement, event: MouseEvent) => boolean | void | Promise<boolean | void>;
   submenu?: StubMenuItem[];
+  /** Comme `bind` de SiYuan : reçoit l'élément créé pour l'item. */
+  bind?: (element: HTMLElement) => void;
 }
 
 const CURRENT = "b3-menu__item--current";
@@ -218,6 +220,7 @@ export class Menu {
       });
     }
     b.innerHTML = `<svg class="b3-menu__icon"><use xlink:href="#${item.icon ?? ""}"></use></svg><span class="b3-menu__label">${item.label || "&nbsp;"}</span>`;
+    item.bind?.(b);
     if (item.submenu) {
       const sub = document.createElement("div");
       sub.className = "b3-menu__submenu";

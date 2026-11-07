@@ -23,6 +23,9 @@
 - Fenêtre flottante, au choix dans les paramètres (« Ouverture de la recherche ») ; l'onglet reste le réglage par défaut. La fenêtre a la même taille que la recherche de SiYuan. Ouvrir un PDF la ferme ; à la réouverture, la dernière recherche est relancée avec ses options. Un bouton permet d'ouvrir la recherche dans un nouvel onglet.
 - Trois nouvelles commandes SiYuan : « Rechercher dans les PDF (fenêtre flottante) », « Rechercher dans les PDF (onglet) » et « Aller au champ de recherche PDF ». Aucune n'a de raccourci par défaut : un raccourci se choisit dans les paramètres de SiYuan.
 - Quand le tri n'est pas celui de la pertinence, le statut indique « Pages classées par proximité et taille de police ».
+- Filtre par document SiYuan : le menu « Spécifier le chemin » propose aussi les cahiers et les documents SiYuan, en plus des dossiers de fichiers. Seuls les PDF cités par le document choisi restent dans les résultats. Les sous-documents sont inclus, sauf si l'on décoche « Inclure les documents enfants » ; pour un cahier, seuls ses documents de premier niveau restent. Un seul chemin est actif à la fois. Tant que ce filtre est actif, les PDF qu'aucun document ne cite sont exclus.
+- Un filtre par document qui ne peut pas être appliqué (noyau de SiYuan pas encore prêt juste après son démarrage, chemin introuvable) affiche un message au lieu d'être ignoré en silence, avec « Réessayer ».
+- Critères enregistrés (bouton « Critères enregistrés ») : enregistrer la requête, le chemin, les filtres, le tri et le regroupement sous un nom (30 critères au plus), rappeler un critère (la recherche est relancée) ou le supprimer. Un critère illisible est ignoré, avec un avertissement dans le journal des paramètres.
 
 ## 0.2.0 — 2026-11-05
 

@@ -97,7 +97,7 @@ const applyFilters = (host: HTMLElement, fields: Readonly<Record<string, string>
   return dialog.confirm();
 };
 const filtersLabel = (host: HTMLElement): string => host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")!;
-/** Dossiers proposés par le menu « Spécifier le chemin » (valeurs filtrées : libellés sans « Tous les dossiers »). */
+/** Dossiers proposés par le menu « Spécifier le chemin » (valeurs filtrées : libellés sans « Tous les chemins »). */
 const folderMenu = (host: HTMLElement): string[] => {
   iconBtn(host, "Spécifier le chemin").click();
   return fakes.lastMenu().items.map((i) => (i.label ?? "").replace(/\u00a0/g, ""));
@@ -1194,7 +1194,7 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     expect(h.host.querySelector(".docseeker-icons")).not.toBeNull();
-    expect(folderMenu(h.host)).toEqual(["Tous les dossiers", "assets"]);
+    expect(folderMenu(h.host)).toEqual(["Tous les chemins", "assets"]);
     tab.dispose();
   });
 
@@ -1259,7 +1259,7 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    expect(folderMenu(h.host)).toEqual(["Tous les dossiers", "assets", "a", "b"]);
+    expect(folderMenu(h.host)).toEqual(["Tous les chemins", "assets", "a", "b"]);
     tab.dispose();
   });
 
@@ -1734,7 +1734,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
   /** Réglages chargés, dont `get()` reflète les `update()` (comme le vrai magasin). */
   function liveSettings(history: string[] = []) {
     let state = {
-      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history, openMode: "tab",
+      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history, openMode: "tab", savedCriteria: [],
     } as DocSeekerSettings;
     const update = vi.fn(async (patch: Partial<DocSeekerSettings>) => {
       state = { ...state, ...patch };
@@ -1818,7 +1818,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
       throw new Error("disque plein");
     });
     const settings = {
-      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" }) as DocSeekerSettings,
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab", savedCriteria: [] }) as DocSeekerSettings,
       update,
     };
     return { settings, update };
@@ -1857,7 +1857,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
       if (fail) throw new Error("disque plein");
     });
     const settings = {
-      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" }) as DocSeekerSettings,
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab", savedCriteria: [] }) as DocSeekerSettings,
       update,
     };
     const tab = mountSearchTab(h.host, withSettings(h, settings));
@@ -1874,7 +1874,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
   it("update qui lève de façon synchrone : onWarn, pas d'exception", async () => {
     const h = harness();
     const settings = {
-      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" }) as DocSeekerSettings,
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab", savedCriteria: [] }) as DocSeekerSettings,
       update: () => {
         throw new Error("sync");
       },

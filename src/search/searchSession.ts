@@ -22,7 +22,13 @@ export interface SearchSessionStore {
 
 const copy = (state: SearchSessionState): SearchSessionState => ({
   query: state.query,
-  options: { sort: { ...state.options.sort }, filters: { ...state.options.filters } },
+  options: {
+    sort: { ...state.options.sort },
+    filters: {
+      ...state.options.filters,
+      ...(state.options.filters.scope ? { scope: { ...state.options.filters.scope } } : {}),
+    },
+  },
 });
 
 export function createSearchSessionStore(): SearchSessionStore {

@@ -886,6 +886,76 @@ describe("fidélité du faux Menu : ce que le stub garantit à tous les tests (b
   });
 });
 
+describe("openMenu : infobulle d'un élément (title, posée par le rappel `bind` de SiYuan)", () => {
+  it("un title est posé sur l'élément via bind, en attribut (jamais interprété comme HTML)", () => {
+    openMenu([{ label: "A", disabled: true, title: `Rien <b>à</b> "faire"` }, { label: "B" }], { x: 0, y: 0 });
+    const buttons = [...document.querySelectorAll<HTMLElement>(".b3-menu__item")];
+    expect(buttons[0]?.getAttribute("title")).toBe(`Rien <b>à</b> "faire"`);
+    expect(buttons[0]?.querySelector("b")).toBeNull();
+    expect(buttons[1]?.hasAttribute("title")).toBe(false);
+  });
+  it("sans title : aucune clé bind transmise", () => {
+    openMenu([{ label: "A" }], { x: 0, y: 0 });
+    expect(lastMenu().items[0]).not.toHaveProperty("bind");
+  });
+});
+
+describe("openDialog : setConfirmLabel (renommer le bouton de confirmation)", () => {
+  it("change le texte du bouton de confirmation, en texte brut", () => {
+    const handle = openDialog({ title: "T", build: () => undefined, onConfirm: () => undefined, labels: { cancel: "Annuler", confirm: "Enregistrer" } });
+    handle.setConfirmLabel?.("<i>Remplacer</i>");
+    const confirm = lastDialog().element.querySelector<HTMLButtonElement>("button.b3-button--text")!;
+    expect(confirm.textContent).toBe("<i>Remplacer</i>");
+    expect(confirm.querySelector("i")).toBeNull();
+  });
+  it("après la destruction : sans effet et sans erreur", () => {
+    const handle = openDialog({ title: "T", build: () => undefined, onConfirm: () => undefined, labels: { cancel: "Annuler", confirm: "Ok" } });
+    handle.close();
+    expect(() => handle.setConfirmLabel?.("X")).not.toThrow();
+  });
+});
+
 // Vérifie que NativeMenuItem reste utilisable en lecture seule.
 const _typecheck: readonly NativeMenuItem[] = [{ label: "x" }];
 void _typecheck;
+
+describe("faux Menu (tests/stubs/siyuan.ts) : fidèle au Menu de SiYuan sur ce dont dépendent les critères", () => {
+  const items = () => Array.from(lastMenu().element.querySelectorAll<HTMLElement>(".b3-menu__item"));
+
+  it("le clic d'une entrée désactivée ne déclenche rien et ne ferme pas le menu (MenuItem : `if (disabled) return`)", () => {
+    const click = vi.fn();
+    openMenu([{ label: "Gris", disabled: true, click }, { label: "Actif", click: vi.fn() }], { x: 0, y: 0 });
+    const gray = items()[0]!;
+    expect(gray.getAttribute("disabled")).toBe("disabled");
+    gray.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); // dispatchEvent : jsdom ignore `click()` sur un bouton désactivé
+    expect(click).not.toHaveBeenCalled();
+    expect(lastMenu().opened).toBe(true);
+  });
+
+  it("une entrée active ferme le menu après son clic", () => {
+    const click = vi.fn();
+    openMenu([{ label: "A", click }], { x: 0, y: 0 });
+    items()[0]!.click();
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(lastMenu().opened).toBe(false);
+  });
+
+  it("ouvrir un menu d'un autre identifiant ferme le précédent (rappel de fermeture appelé, un seul menu ouvert)", () => {
+    const closed = vi.fn();
+    openMenu([{ label: "A" }], { x: 0, y: 0 }, closed, "premier");
+    const first = lastMenu();
+    openMenu([{ label: "B" }], { x: 0, y: 0 }, undefined, "second");
+    expect(first.opened).toBe(false);
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(stubs.Menu.instances.filter((m) => m.opened)).toHaveLength(1);
+    expect(document.querySelectorAll(".b3-menu:not(.fn__none)")).toHaveLength(1);
+  });
+
+  it("même identifiant : la bascule referme l'ancien menu et le nouveau ne s'ouvre pas", () => {
+    openMenu([{ label: "A" }], { x: 0, y: 0 }, undefined, "criteres");
+    const first = lastMenu();
+    openMenu([{ label: "A" }], { x: 0, y: 0 }, undefined, "criteres");
+    expect(first.opened).toBe(false);
+    expect(stubs.Menu.instances.filter((m) => m.opened)).toHaveLength(0);
+  });
+});

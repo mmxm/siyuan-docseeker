@@ -976,6 +976,14 @@ describe("filtres dans la vue", () => {
     expect(host.querySelector<HTMLElement>(".docseeker-actions")!.hidden).toBe(false);
   });
 
+  it("portée non résolue : « Chargement du chemin… » à la place de « aucun résultat », sans bouton de réinitialisation", () => {
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+    mount({ options: optionsDeps() });
+    update({ ...(noResult(4) as Extract<SearchViewModel, { kind: "no-result" }>), scopeUnresolved: true });
+    expect(status()).toBe("Chargement du chemin…");
+    expect(resetButton()!.hidden).toBe(true);
+  });
+
   it("zéro résultat : singulier pour 1 filtre et 1 document masqué", () => {
     opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
     mount({ options: optionsDeps() });

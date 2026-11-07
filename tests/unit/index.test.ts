@@ -89,6 +89,7 @@ vi.mock("siyuan", () => ({
       openTabFailed: "Impossible d'ouvrir l'onglet de recherche",
       transferTabFailed: "Impossible d'ouvrir la recherche dans un onglet : la fenêtre reste ouverte",
       highlightUnavailable: "Surlignage indisponible",
+      criteriaLoadFailed: "Critères illisibles : ils sont ignorés",
     };
     setting: unknown;
     loadData = h.loadData;
@@ -646,7 +647,7 @@ describe("indexation automatique", () => {
   const settle = async (ms: number): Promise<void> => {
     await vi.advanceTimersByTimeAsync(ms);
   };
-  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" } as const;
+  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab", savedCriteria: [] } as const;
   const startPlugin = async (stored: unknown = "") => {
     h.loadData.mockResolvedValue(stored);
     const s = setup();
@@ -693,6 +694,26 @@ describe("indexation automatique", () => {
     await settle(3100);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("réglages"), expect.any(Error));
     expect(h.start).toHaveBeenCalledTimes(1);
+  });
+
+  describe("critères enregistrés illisibles", () => {
+    const GOOD = { name: "ok", query: "chat", filters: { folder: "", includeSubfolders: true, nameContains: "" }, sort: { key: "relevance", direction: "desc" }, groupByDocument: true };
+
+    it("message visible UNE seule fois par session (même après plusieurs lectures), une trace par critère ignoré", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      await startPlugin({ savedCriteria: [GOOD, { name: 1 }, "x"] });
+      await settle(100);
+      expect(h.showMessage).toHaveBeenCalledTimes(1);
+      expect(h.showMessage).toHaveBeenCalledWith("Critères illisibles : ils sont ignorés", expect.any(Number), "error");
+      expect(warn.mock.calls.filter(([m]) => String(m).includes("Critère n°"))).toHaveLength(2);
+    });
+
+    it("critères valides ou absents : aucun message", async () => {
+      await startPlugin({ savedCriteria: [GOOD] });
+      await startPlugin({ autoIndex: true });
+      await settle(100);
+      expect(h.showMessage).not.toHaveBeenCalled();
+    });
   });
 
   it("removeStaleTmp : le rapport (.bak orphelin restauré, échecs) est journalisé et ne bloque pas le démarrage", async () => {
@@ -920,7 +941,7 @@ describe("indexation automatique", () => {
     expect(tabSettings.get().groupByDocument).toBe(false);
     await tabSettings.update({ sort: { key: "modified", direction: "desc" } });
     expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
-      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false, history: [], openMode: "tab",
+      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false, history: [], openMode: "tab", savedCriteria: [],
     });
   });
 
@@ -940,7 +961,7 @@ describe("indexation automatique", () => {
     const pending = h.mountDeps[0]!.settings!.update({ groupByDocument: false });
     await pending;
     expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
-      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false, history: [], openMode: "tab",
+      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false, history: [], openMode: "tab", savedCriteria: [],
     });
   });
 

@@ -42,6 +42,18 @@ export interface AssetHead {
   readonly size: number;
 }
 
+/** Résultat de `/api/query/sql` : lignes (objets colonne -> valeur) et indicateur de troncature par le noyau. */
+export interface SqlResult {
+  readonly rows: readonly Record<string, unknown>[];
+  readonly truncated: boolean;
+}
+
+export interface NotebookInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly closed: boolean;
+}
+
 export interface KernelApi {
   /**
    * Chaque méthode accepte un `signal` optionnel (annulation par l'appelant, propagée telle quelle) et
@@ -54,6 +66,10 @@ export interface KernelApi {
   removeFile(path: string, signal?: AbortSignal): Promise<void>;
   renameFile(path: string, newPath: string, signal?: AbortSignal): Promise<void>;
   headAsset(url: string, signal?: AbortSignal): Promise<AssetHead>;
+  /** SQL en lecture du noyau. Sans LIMIT explicite le noyau tronque à 64 lignes : l'appelant fixe toujours un LIMIT. */
+  sql(stmt: string, signal?: AbortSignal): Promise<SqlResult>;
+  /** Liste des cahiers (fermés compris). */
+  lsNotebooks(signal?: AbortSignal): Promise<readonly NotebookInfo[]>;
 }
 
 export interface KernelApiOptions {
@@ -116,6 +132,14 @@ export class MalformedResponseError extends KernelApiError {
   }
 }
 
+/** Le noyau n'a pas encore indexé les métadonnées des documents (requête SQL impossible pour l'instant). */
+export class IndexUnavailableError extends KernelApiError {
+  constructor(status: number, code: number, message: string) {
+    super(status, code, message);
+    this.name = "IndexUnavailableError";
+  }
+}
+
 /** Le noyau n'a pas répondu dans le délai imparti. */
 export class KernelTimeoutError extends Error {
   constructor(public readonly timeoutMs: number) {
@@ -128,9 +152,19 @@ interface Envelope {
   readonly code: number;
   readonly msg: string;
   readonly data: unknown;
+  readonly truncated: unknown;
 }
 
-function toError(status: number, code: number, message: string): KernelApiError {
+const INDEX_UNAVAILABLE_REASON = "indexUnavailable";
+const INDEX_UNAVAILABLE_MESSAGE = "document metadata is not ready";
+
+function isIndexUnavailable(message: string, data: unknown): boolean {
+  const reason = typeof data === "object" && data !== null ? (data as Record<string, unknown>).reason : undefined;
+  return reason === INDEX_UNAVAILABLE_REASON || message.includes(INDEX_UNAVAILABLE_MESSAGE);
+}
+
+function toError(status: number, code: number, message: string, data?: unknown): KernelApiError {
+  if (isIndexUnavailable(message, data)) return new IndexUnavailableError(status, code, message);
   if (code === CODE_NOT_FOUND) return new NotFoundError(status, message);
   if (code === CODE_CONFLICT) return new ConflictError(status, message);
   return new KernelApiError(status, code, message);
@@ -142,7 +176,7 @@ function parseEnvelope(text: string): Envelope | null {
     if (typeof value !== "object" || value === null) return null;
     const record = value as Record<string, unknown>;
     if (typeof record.code !== "number") return null;
-    return { code: record.code, msg: typeof record.msg === "string" ? record.msg : "", data: record.data };
+    return { code: record.code, msg: typeof record.msg === "string" ? record.msg : "", data: record.data, truncated: record.truncated };
   } catch {
     return null;
   }
@@ -158,7 +192,7 @@ async function failureFrom(response: Response, rawNotFoundIsAbsence = false): Pr
   const text = await response.text();
   const envelope = parseEnvelope(text);
   if (envelope !== null && envelope.code !== CODE_OK) {
-    return toError(response.status, envelope.code, truncate(envelope.msg));
+    return toError(response.status, envelope.code, truncate(envelope.msg), envelope.data);
   }
   const message = truncate(text || `HTTP ${response.status}`);
   if (rawNotFoundIsAbsence && response.status === HTTP_NOT_FOUND) return new NotFoundError(response.status, message);
@@ -170,7 +204,7 @@ async function readEnvelope(response: Response): Promise<Envelope> {
   const text = await response.text();
   const envelope = parseEnvelope(text);
   if (envelope === null) throw new KernelApiError(response.status, CODE_UNKNOWN, "invalid JSON envelope");
-  if (envelope.code !== CODE_OK) throw toError(response.status, envelope.code, truncate(envelope.msg));
+  if (envelope.code !== CODE_OK) throw toError(response.status, envelope.code, truncate(envelope.msg), envelope.data);
   return envelope;
 }
 
@@ -218,6 +252,31 @@ function parseDirEntries(data: unknown): readonly DirEntry[] {
     isSymlink: entry.isSymlink,
     updated: entry.updated,
   }));
+}
+
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+function parseSqlResult(envelope: Envelope): SqlResult {
+  const { data, truncated } = envelope;
+  const rows = data === null || data === undefined ? [] : data;
+  if (!Array.isArray(rows) || !rows.every(isPlainRecord)) {
+    throw new MalformedResponseError(HTTP_OK, "unexpected sql payload (array of row objects required)");
+  }
+  if (truncated !== undefined && typeof truncated !== "boolean") {
+    throw new MalformedResponseError(HTTP_OK, "unexpected sql payload (truncated must be a boolean)");
+  }
+  return { rows: rows.map((row) => ({ ...row })), truncated: truncated === true };
+}
+
+function parseNotebooks(data: unknown): readonly NotebookInfo[] {
+  const list = isPlainRecord(data) ? data.notebooks : undefined;
+  if (
+    !Array.isArray(list) ||
+    !list.every((n) => isPlainRecord(n) && typeof n.id === "string" && typeof n.name === "string" && typeof n.closed === "boolean")
+  ) {
+    throw new MalformedResponseError(HTTP_OK, "unexpected lsNotebooks payload (notebooks[{id,name,closed}] required)");
+  }
+  return (list as NotebookInfo[]).map((n) => ({ id: n.id, name: n.name, closed: n.closed }));
 }
 
 /** Encode chaque segment sans toucher aux `/` (les noms de PDF contiennent espaces, accents). */
@@ -333,5 +392,11 @@ export function createKernelApi(options: KernelApiOptions = {}): KernelApi {
       await postJson("/api/file/renameFile", { path, newPath }, signal);
     },
     headAsset,
+    async sql(stmt, signal) {
+      return parseSqlResult(await postJson("/api/query/sql", { stmt }, signal));
+    },
+    async lsNotebooks(signal) {
+      return parseNotebooks((await postJson("/api/notebook/lsNotebooks", {}, signal)).data);
+    },
   };
 }

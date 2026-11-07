@@ -3,6 +3,7 @@
  * soumission explicite (`submit`), jamais à la frappe ; exécute la requête sur l'index de la source et produit un view-model.
  */
 import { groupByDocument, searchPages, type Bm25Index } from "../core/bm25";
+import { scopeKey, type DocumentScope } from "./docScope";
 import type { ProximityResult } from "./proximityRanker";
 import { isSearchable, titleBonuses } from "./queryMatch";
 import { applyFilters, DEFAULT_OPTIONS, normalizeSearchOptions, sameOptions, sortDocs, type SearchOptions } from "./resultOptions";
@@ -44,6 +45,8 @@ export type SearchViewModel =
       readonly failedCount: number;
       /** Documents trouvés mais masqués par les filtres (0 sans filtre). */
       readonly hiddenByFilters: number;
+      /** Vrai : la portée de documents active n'est pas (encore) résolue ; ce n'est PAS un vrai « aucun résultat ». */
+      readonly scopeUnresolved?: true;
     }
   | { readonly kind: "error"; readonly message: string }
   | {
@@ -79,6 +82,11 @@ export interface SearchControllerOptions {
   readonly loadingRefreshMs?: number;
   /** Re-classement (proximité et police) de toute requête ; absent : ordre BM25 seul. */
   readonly rerank?: RerankPort;
+  /**
+   * PDF cités par la portée de documents (chemins NFC), s'ils sont connus ; `undefined` : pas (encore) résolue. Le
+   * contrôleur reste synchrone : la résolution (asynchrone, en cache) est faite par l'appelant.
+   */
+  readonly scopePaths?: (scope: DocumentScope, includeChildren: boolean) => ReadonlySet<string> | undefined;
   /** Options de départ (filtres, tri) ; en session seulement, jamais persistées. */
   readonly initialOptions?: SearchOptions;
 }
@@ -112,12 +120,20 @@ function describeError(error: unknown): string {
 }
 
 /** Normalise puis gèle (sort et filters compris) : `getOptions` peut renvoyer l'état sans copie ni risque de mutation. */
-function frozenOptions(input: unknown): SearchOptions {
-  const o = normalizeSearchOptions(input);
-  return Object.freeze({ sort: Object.freeze(o.sort), filters: Object.freeze(o.filters) });
+function frozenOptions(input: unknown, onWarn?: SearchControllerOptions["onWarn"]): SearchOptions {
+  const o = normalizeSearchOptions(input, (raw) => onWarn?.("invalid document scope removed from the options", raw));
+  const filters = o.filters.scope ? { ...o.filters, scope: Object.freeze({ ...o.filters.scope }) } : o.filters;
+  return Object.freeze({ sort: Object.freeze(o.sort), filters: Object.freeze(filters) });
 }
 
-function compute(source: SearchSource, query: string, options: SearchOptions): SearchViewModel {
+interface ComputeDeps {
+  readonly scopePaths: SearchControllerOptions["scopePaths"];
+  readonly onWarn: SearchControllerOptions["onWarn"];
+  /** Clé de la portée déjà signalée non résolue : un seul avertissement par clé tant qu'elle le reste. */
+  readonly warned: { key: string | undefined };
+}
+
+function compute(source: SearchSource, query: string, options: SearchOptions, deps: ComputeDeps): SearchViewModel {
   if (!isSearchable(query)) return EMPTY;
   const phase = source.getPhase();
   if (phase === "error") return { kind: "error", message: source.getLastError() ?? DEFAULT_ERROR_MESSAGE };
@@ -147,8 +163,23 @@ function compute(source: SearchSource, query: string, options: SearchOptions): S
     });
   }
   // Filtres après BM25 et AVANT le re-classement : sa fenêtre de documents ne contient aucun document exclu.
-  const { kept, hidden } = applyFilters(docs, options.filters, (id) => source.getDoc(id));
-  if (kept.length === 0) return { kind: "no-result", query, partial, failedCount, hiddenByFilters: hidden };
+  const { scope, includeSubfolders } = options.filters;
+  const scopePaths = scope ? deps.scopePaths?.(scope, includeSubfolders) : undefined;
+  // Portée non résolue : applyFilters ne garde rien (jamais de filtre ignoré en silence) ; on le signale une fois par clé.
+  const unresolved = scope !== undefined && scopePaths === undefined;
+  if (scope && unresolved) {
+    const key = scopeKey(scope, includeSubfolders);
+    if (deps.warned.key !== key) {
+      deps.warned.key = key;
+      deps.onWarn?.("document scope not resolved; no result shown");
+    }
+  } else {
+    deps.warned.key = undefined;
+  }
+  const { kept, hidden } = applyFilters(docs, options.filters, (id) => source.getDoc(id), scopePaths);
+  if (kept.length === 0) {
+    return { kind: "no-result", query, partial, failedCount, hiddenByFilters: hidden, ...(unresolved ? { scopeUnresolved: true as const } : {}) };
+  }
   return { kind: "results", query, docs: kept, partial, total: kept.length, failedCount, ranking: "bm25", hiddenByFilters: hidden };
 }
 
@@ -193,14 +224,16 @@ export function createSearchController(options: SearchControllerOptions): Search
     onWarn,
     loadingRefreshMs = DEFAULT_LOADING_REFRESH_MS,
     rerank,
+    scopePaths,
   } = options;
-  let searchOptions: SearchOptions = frozenOptions(options.initialOptions ?? DEFAULT_OPTIONS);
+  let searchOptions: SearchOptions = frozenOptions(options.initialOptions ?? DEFAULT_OPTIONS, onWarn);
   /** Dernière requête soumise (pas le texte en cours de frappe). */
   let query = "";
   let current: SearchViewModel = EMPTY;
   let coalescing: { handle: unknown } | undefined;
   let requestNumber = 0;
   let disposed = false;
+  const warned: { key: string | undefined } = { key: undefined };
 
   const cancelCoalescing = (): void => {
     if (coalescing) clear(coalescing.handle);
@@ -315,7 +348,7 @@ export function createSearchController(options: SearchControllerOptions): Search
     cancelCoalescing(); // ce run recalcule déjà tout : une relance coalescée en attente devient inutile
     let vm: SearchViewModel;
     try {
-      vm = compute(source, query, searchOptions);
+      vm = compute(source, query, searchOptions, { scopePaths, onWarn, warned });
     } catch (error) {
       vm = { kind: "error", message: describeError(error) };
       onWarn?.("search failed", error);
@@ -377,7 +410,7 @@ export function createSearchController(options: SearchControllerOptions): Search
     },
     setOptions(next) {
       if (disposed) return;
-      const normalized = frozenOptions(next);
+      const normalized = frozenOptions(next, onWarn);
       if (sameOptions(normalized, searchOptions)) return;
       const sortOnly = sameOptions({ sort: searchOptions.sort, filters: normalized.filters }, searchOptions);
       searchOptions = normalized;

@@ -31,6 +31,12 @@ function createFake(extraEntries: readonly string[] = []): FakeKernel {
     log,
     failWhen: () => undefined,
     api: {
+      async sql() {
+        throw new Error("sql is not used by the petal store");
+      },
+      async lsNotebooks() {
+        throw new Error("lsNotebooks is not used by the petal store");
+      },
       async readDir(path) {
         log.push(`readDir ${path}`);
         const failure = kernel.failWhen("readDir", path);

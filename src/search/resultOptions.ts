@@ -6,6 +6,7 @@
  * - Le tri (`sortDocs`) ne touche qu'à l'ordre des DOCUMENTS ; l'ordre des pages d'un document reste celui du classement.
  */
 import { tokenize } from "../core/normalize";
+import { normalizedScope, type DocumentScope } from "./docScope";
 import type { DocInfo } from "./searchStore";
 
 /**
@@ -32,6 +33,11 @@ export interface ResultFilters {
   readonly maxPages?: number;
   /** Date de modification du PDF minimale (incluse), en millisecondes. */
   readonly modifiedAfterMs?: number;
+  /**
+   * Portée de documents SiYuan : seuls les PDF cités par ce cahier ou ce document sont gardés. `includeSubfolders`
+   * vaut alors « inclure les sous-documents ». Exclusive avec `folder` (la portée l'emporte à la normalisation).
+   */
+  readonly scope?: DocumentScope;
 }
 
 export interface SearchOptions {
@@ -56,6 +62,11 @@ const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Num
 /** NFC : les noms macOS (NFD) et les saisies (NFC) se comparent comme égaux. */
 const nfc = (s: string): string => s.normalize("NFC");
 
+/** Plafond des textes de filtre lus d'un fichier non fiable (points de code). */
+export const MAX_FILTER_TEXT = 200;
+/** Coupe par points de code (jamais au milieu d'une paire de substitution). */
+const capText = (s: string): string => (s.length <= MAX_FILTER_TEXT ? s : Array.from(s).slice(0, MAX_FILTER_TEXT).join(""));
+
 /**
  * Forme canonique d'un dossier : espaces rognés, NFC, exactement un « / » final ; « », « / » et « assets// »
  * donnent respectivement « », « » et « assets/ ». La casse est conservée (comparaison sensible à la casse).
@@ -79,8 +90,11 @@ export function isValidPageRange(min: number | undefined, max: number | undefine
   return min === undefined || max === undefined || min <= max;
 }
 
-/** Reconstruit des options sûres à partir d'une entrée inconnue : valeurs invalides ramenées aux défauts. */
-export function normalizeSearchOptions(input: unknown): SearchOptions {
+/**
+ * Reconstruit des options sûres à partir d'une entrée inconnue : valeurs invalides ramenées aux défauts. Une portée présente
+ * mais invalide est retirée ; `onInvalidScope` (optionnel) en est alors informé, pour que ce retrait ne soit jamais silencieux.
+ */
+export function normalizeSearchOptions(input: unknown, onInvalidScope?: (raw: unknown) => void): SearchOptions {
   const src = isRecord(input) ? input : {};
   const sortSrc = isRecord(src["sort"]) ? src["sort"] : {};
   const knownKey = SORT_KEYS.find((k) => k === sortSrc["key"]);
@@ -95,15 +109,29 @@ export function normalizeSearchOptions(input: unknown): SearchOptions {
     maxPages = undefined;
   }
   const modifiedAfterMs = isFiniteNumber(f["modifiedAfterMs"]) ? f["modifiedAfterMs"] : undefined;
+  const scope = normalizedScope(f["scope"]);
+  if (scope === undefined && f["scope"] !== undefined) onInvalidScope?.(f["scope"]);
   const filters: ResultFilters = {
-    folder: typeof f["folder"] === "string" ? normalizedFolder(f["folder"]) : NO_FILTERS.folder,
+    // Exclusion mutuelle : une portée active vide le dossier.
+    folder: scope === undefined && typeof f["folder"] === "string" ? normalizedFolder(capText(f["folder"].trim())) : NO_FILTERS.folder,
     includeSubfolders: typeof f["includeSubfolders"] === "boolean" ? f["includeSubfolders"] : NO_FILTERS.includeSubfolders,
-    nameContains: typeof f["nameContains"] === "string" ? f["nameContains"].trim() : NO_FILTERS.nameContains,
+    nameContains: typeof f["nameContains"] === "string" ? capText(f["nameContains"].trim()) : NO_FILTERS.nameContains,
     ...(minPages !== undefined ? { minPages } : {}),
     ...(maxPages !== undefined ? { maxPages } : {}),
     ...(modifiedAfterMs !== undefined ? { modifiedAfterMs } : {}),
+    ...(scope !== undefined ? { scope } : {}),
   };
   return { sort: { key, direction }, filters };
+}
+
+function sameScope(a: DocumentScope | undefined, b: DocumentScope | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.kind === b.kind &&
+    a.box === b.box &&
+    a.label === b.label &&
+    (a.kind === "document" ? a.docPath : undefined) === (b.kind === "document" ? b.docPath : undefined)
+  );
 }
 
 /** Égalité champ par champ (indépendante de l'ordre des clés) ; à appliquer à des options normalisées. */
@@ -116,7 +144,8 @@ export function sameOptions(a: SearchOptions, b: SearchOptions): boolean {
     a.filters.nameContains === b.filters.nameContains &&
     a.filters.minPages === b.filters.minPages &&
     a.filters.maxPages === b.filters.maxPages &&
-    a.filters.modifiedAfterMs === b.filters.modifiedAfterMs
+    a.filters.modifiedAfterMs === b.filters.modifiedAfterMs &&
+    sameScope(a.filters.scope, b.filters.scope)
   );
 }
 
@@ -130,6 +159,7 @@ export function countActiveFilters(filters: ResultFilters): number {
     if (filters.maxPages !== undefined) n++;
   }
   if (filters.modifiedAfterMs !== undefined) n++;
+  if (filters.scope !== undefined) n++;
   return n;
 }
 
@@ -141,14 +171,21 @@ export interface FilterOutcome<T> {
 
 /**
  * Garde les documents qui passent tous les filtres (ET), dans l'ordre d'entrée. Un document absent de `getInfo`
- * est conservé (impossible à filtrer). `kept` est toujours une nouvelle liste.
+ * est conservé (impossible à filtrer), sauf avec une portée : sans chemin connu il ne peut être prouvé cité. `kept` est
+ * toujours une nouvelle liste.
+ *
+ * Portée : `scopePaths` est l'ensemble NFC des PDF cités (déjà résolu, enfants compris ou non). Une portée active sans
+ * `scopePaths` (résolution absente ou en cours) ne garde AUCUN document : jamais d'ignorance silencieuse du filtre.
  */
 export function applyFilters<T extends { readonly docId: string }>(
   docs: readonly T[],
   filters: ResultFilters,
   getInfo: (docId: string) => DocInfo | undefined,
+  scopePaths?: ReadonlySet<string>,
 ): FilterOutcome<T> {
   if (countActiveFilters(filters) === 0) return { kept: [...docs], hidden: 0 };
+  const scoped = filters.scope !== undefined;
+  if (scoped && scopePaths === undefined) return { kept: [], hidden: docs.length };
   const prefix = normalizedFolder(filters.folder);
   const needle = normalizedNeedle(filters.nameContains);
   const rangeOk = isValidPageRange(filters.minPages, filters.maxPages);
@@ -157,11 +194,12 @@ export function applyFilters<T extends { readonly docId: string }>(
   for (const doc of docs) {
     const info = getInfo(doc.docId);
     if (!info) {
-      kept.push(doc);
+      if (scoped) hidden++;
+      else kept.push(doc);
       continue;
     }
-    let ok = true;
-    if (prefix !== "") {
+    let ok = !scoped || (scopePaths?.has(nfc(info.path)) ?? false);
+    if (ok && prefix !== "") {
       const path = nfc(info.path);
       ok = path.startsWith(prefix) && (filters.includeSubfolders || !path.slice(prefix.length).includes("/"));
     }

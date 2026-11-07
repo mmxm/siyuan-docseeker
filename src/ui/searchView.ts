@@ -12,6 +12,8 @@ import {
   resolveKey,
   type Rect,
 } from "./keyboardNav";
+import type { DocTree } from "../search/docTree";
+import type { CriteriaHost } from "./criteriaMenu";
 import { containingFolder } from "./pathLabel";
 import { makeIconButton, svgIcon } from "./icons";
 import { MENU_ID_HISTORY, type MenuHandle, type NativeMenuItem, type OpenDialog, type OpenMenu } from "./nativeUiTypes";
@@ -68,7 +70,11 @@ export interface SearchViewDeps {
     getOptions(): SearchOptions;
     setOptions(next: SearchOptions): void;
     getFolders(): readonly string[];
+    /** Arbre des cahiers et documents SiYuan pour le menu « Spécifier le chemin » (absent : dossiers de fichiers seulement). */
+    getDocTree?(signal?: AbortSignal): Promise<DocTree>;
   };
+  /** Critères de recherche enregistrés (bouton dans la barre, avec `options`). Absent : pas de bouton. */
+  readonly criteria?: CriteriaHost;
   /** Regroupement par document au montage (défaut : oui). État de VUE : changer de mode ne relance aucune recherche. */
   readonly initialGroupByDocument?: boolean;
   /** Mode fenêtre flottante : Échap sur un champ vide ferme la fenêtre ; bouton « Ouvrir dans un nouvel onglet ». */
@@ -150,9 +156,27 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   filtersLabel: "Filtres",
   filtersActiveOne: "Filtres (1 actif)",
   filtersActiveMany: "Filtres ({n} actifs)",
-  filterAllFolders: "Tous les dossiers",
+  filterAllFolders: "Tous les chemins",
   foldersMoreOne: "… {n} autre dossier",
   foldersMoreMany: "… {n} autres dossiers",
+  pathSectionFolders: "Dossiers de fichiers",
+  pathSectionDocs: "Documents SiYuan",
+  docsLoading: "Chargement des documents…",
+  docsNotReady: "L'index de SiYuan n'est pas prêt.",
+  docsRetry: "Réessayer",
+  docsTooLarge: "Trop de documents pour les afficher tous. Affinez avec le filtre « Nom du document ».",
+  docsFailed: "Les documents n'ont pas pu être lus (détails dans le journal).",
+  docsNone: "Aucun document ne cite de PDF.",
+  docsMoreOne: "… {n} autre document masqué",
+  docsMoreMany: "… {n} autres documents masqués",
+  docFilterNoPdf: "Les PDF qu'aucun document ne cite sont exclus.",
+  scopeLoading: "Chargement du chemin…",
+  scopeNotReady: "L'index de SiYuan n'est pas prêt : le filtre par document n'a pas pu être appliqué. Réessayez dans un instant.",
+  scopeTooLarge: "Ce chemin cite trop de PDF pour être filtré (plus de 50 000 références). Choisissez un chemin plus précis.",
+  scopeFailed: "Le filtre par document n'a pas pu être appliqué (détails dans le journal).",
+  scopeRefreshFailed: "Les documents n'ont pas pu être relus : les résultats utilisent la liste précédente.",
+  scopeInvalid: "Le chemin enregistré n'est pas valide : la recherche s'est lancée sans lui.",
+  kernelUnavailable: "Le noyau de SiYuan n'est pas disponible.",
   filterName: "Nom du document contient",
   filterMinPages: "Pages au moins",
   filterMaxPages: "Pages au plus",
@@ -192,6 +216,31 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   dialogCancel: "Annuler",
   dialogConfirm: "Confirmer",
   openInNewTab: "Ouvrir dans un nouvel onglet",
+  criteriaMenu: "Critères enregistrés",
+  criteriaApplied: "Critères : {name}",
+  criteriaSave: "Enregistrer les critères actuels…",
+  criteriaSaveTitle: "Enregistrer les critères",
+  criteriaName: "Nom du critère",
+  criteriaSaveConfirm: "Enregistrer",
+  criteriaReplaceConfirm: "Remplacer",
+  criteriaReplaceAsk: "Un critère nommé « {name} » existe déjà. Remplacez-le ou changez le nom.",
+  criteriaSummary: "Requête : {query}",
+  criteriaDelete: "Supprimer un critère",
+  criteriaEmpty: "Aucun critère enregistré",
+  criteriaSaved: "Critères enregistrés : {name}",
+  criteriaReplaced: "Critères remplacés : {name}",
+  criteriaDeleted: "Critère supprimé : {name}",
+  criteriaErrEmpty: "Saisissez un nom pour ces critères.",
+  criteriaErrTooLong: "Le nom ne peut pas dépasser 80 caractères.",
+  criteriaErrQuery: "La requête ne peut pas dépasser 200 caractères.",
+  criteriaErrLimit: "Vous avez déjà 30 critères. Supprimez-en un pour enregistrer celui-ci.",
+  criteriaErrNothing: "Rien à enregistrer : saisissez une requête ou choisissez un filtre.",
+  criteriaSaveFailed: "Impossible d'enregistrer les critères (voir le journal dans les paramètres)",
+  criteriaDeleteFailed: "Impossible de supprimer le critère (voir le journal dans les paramètres)",
+  criteriaLoadFailed: "Critères illisibles : ils sont ignorés (voir le journal dans les paramètres)",
+  criteriaMissingPath: "Le chemin de ce critère n'existe plus. La recherche s'est lancée sans lui.",
+  criteriaAlreadyDeleted: "Ce critère était déjà supprimé.",
+  criteriaRecallFailed: "Impossible d'appliquer ce critère (voir le journal dans les paramètres)",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -761,6 +810,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         setStatus(tr("loadingPartial", { loaded: vm.progress.loaded, total: vm.progress.total }));
         break;
       case "no-result": {
+        if (vm.scopeUnresolved) {
+          // Portée en résolution : ni « aucun résultat » ni bouton de réinitialisation (rien n'est encore filtré pour de bon).
+          setStatus(tr("scopeLoading"));
+          break;
+        }
         const byFilters = vm.hiddenByFilters > 0 && opts !== undefined;
         const partialNote = vm.partial ? tr("partialSuffix") : "";
         const base = opts !== undefined && byFilters
@@ -809,6 +863,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   input.addEventListener("input", () => {
     syncClear();
     submitIfCleared();
+    toolbar?.refresh(); // le bouton « Critères enregistrés » compare la requête du champ à celle du critère rappelé
   });
 
   // --- Historique des requêtes : menu natif de SiYuan (le champ garde son focus ; plus de liste maison).
@@ -1041,14 +1096,29 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
 
   if (opts && toolbarEl && openMenu && openDialog) {
     // Fonctions liées explicitement : pas de spread de méthodes (qui perdrait `this` d'un objet à classe).
+    const { criteria } = deps;
     toolbar = mountSearchToolbar(toolbarEl, {
       getOptions: () => opts.getOptions(),
       setOptions: (next) => opts.setOptions(next),
       getFolders: () => opts.getFolders(),
+      ...(opts.getDocTree ? { getDocTree: (signal?: AbortSignal) => opts.getDocTree?.(signal) as Promise<DocTree> } : {}),
+      ...(deps.onWarn ? { onWarn: (message: string, error?: unknown) => deps.onWarn?.(message, error) } : {}),
       t: (key, vars) => tr(key, vars),
       openMenu,
       openDialog,
       ...(deps.floating ? { openInTab: () => deps.floating?.openInTab() } : {}),
+      ...(criteria
+        ? {
+            criteria: {
+              list: () => criteria.list(),
+              save: (c) => criteria.save(c),
+              remove: (name) => criteria.remove(name),
+              recall: (c) => criteria.recall(c),
+              notify: (text) => criteria.notify(text),
+              getQuery: () => input.value,
+            },
+          }
+        : {}),
       getGroupByDocument: () => groupByDocument,
       setGroupByDocument: (next) => {
         if (disposed || next === groupByDocument) return;

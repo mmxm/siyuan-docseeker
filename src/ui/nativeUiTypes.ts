@@ -10,6 +10,8 @@ export interface NativeMenuItem {
   /** Élément choisi (rendu par SiYuan avec la classe `b3-menu__item--selected`). */
   readonly current?: boolean;
   readonly disabled?: boolean;
+  /** Infobulle de l'élément (texte brut posé en attribut `title`, p. ex. pourquoi il est désactivé). Texte fixe du plugin, pas une donnée. */
+  readonly title?: string;
   readonly separator?: boolean;
   readonly submenu?: readonly NativeMenuItem[];
   readonly click?: () => void;
@@ -54,6 +56,8 @@ export interface DialogHandle {
   close(): void;
   /** Vrai tant que le dialogue est à l'écran, destruction différée comprise ; faux dès qu'il est détruit (même sans callback). */
   isOpen(): boolean;
+  /** Renomme le bouton de confirmation (texte brut), p. ex. « Enregistrer » -> « Remplacer ». Sans effet une fois détruit. */
+  setConfirmLabel?(label: string): void;
 }
 
 /**
@@ -91,6 +95,7 @@ export interface FloatingDialogHandle {
 export const MENU_ID_PATH = "docseeker-path";
 export const MENU_ID_MORE = "docseeker-more";
 export const MENU_ID_HISTORY = "docseeker-history";
+export const MENU_ID_CRITERIA = "docseeker-criteria";
 
 /**
  * `id` (optionnel) : identifiant du menu, un par bouton. SiYuan n'ouvre qu'un menu à la fois : rouvrir le même

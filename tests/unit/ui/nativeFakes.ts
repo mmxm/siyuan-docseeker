@@ -21,6 +21,8 @@ export interface OpenedDialog {
   cancel(): void;
   /** Handle renvoyé à l'appelant (`close()` annule comme SiYuan). */
   readonly handle: DialogHandle;
+  /** Texte courant du bouton de confirmation (change avec `setConfirmLabel`). */
+  readonly confirmLabel: string;
   /** SiYuan retire le dialogue de l'écran SANS rappeler `destroyCallback` : ni onCancel ni onDestroyed. */
   vanish(): void;
 }
@@ -58,11 +60,21 @@ export function createNativeFakes() {
       if (!confirmed) options.onCancel?.();
       options.onDestroyed?.();
     };
-    const handle: DialogHandle = { close: () => destroy(false), isOpen: () => !done };
+    let confirmLabel = options.labels.confirm;
+    const handle: DialogHandle = {
+      close: () => destroy(false),
+      isOpen: () => !done,
+      setConfirmLabel: (label) => {
+        if (!done) confirmLabel = label;
+      },
+    };
     dialogs.push({
       options,
       container,
       handle,
+      get confirmLabel() {
+        return confirmLabel;
+      },
       confirm() {
         if (done) return false;
         const result = options.onConfirm();

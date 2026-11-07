@@ -160,7 +160,7 @@ describe("un menu ouvert par un clic reste ouvert (le clic remonte jusqu'à wind
 describe("clavier : le premier élément est focalisé à l'ouverture", () => {
   it.each([
     ["Plus", "Tri", () => icon("Plus")],
-    ["Spécifier le chemin", "Tous les dossiers", () => icon("Spécifier le chemin")],
+    ["Spécifier le chemin", "Tous les chemins", () => icon("Spécifier le chemin")],
     ["icône d'historique", "chat", historyIcon],
   ])("« %s » : l'élément actif est « %s » (et il porte la classe courante)", (_name, expected, button) => {
     button().click();
@@ -177,7 +177,7 @@ describe("clavier : le premier élément est focalisé à l'ouverture", () => {
   it("Bas puis Entrée dans le menu des dossiers : le dossier est choisi, le focus revient au bouton", () => {
     icon("Spécifier le chemin").focus();
     icon("Spécifier le chemin").click();
-    press("ArrowDown"); // « Tous les dossiers » -> « assets »
+    press("ArrowDown"); // « Tous les chemins » -> « assets »
     press("Enter");
     expect(opts.filters.folder).toBe("assets/");
     expect(current()).toBeUndefined();

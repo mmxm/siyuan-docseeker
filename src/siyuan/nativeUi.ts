@@ -54,6 +54,9 @@ function toMenuItem(item: NativeMenuItem): IMenu {
   if (item.icon !== undefined && ICON_ID.test(item.icon)) result.icon = item.icon;
   if (item.current === true) result.current = true;
   if (item.disabled === true) result.disabled = true;
+  // `bind` de SiYuan reçoit l'élément créé : l'infobulle y est posée en attribut, jamais interprétée comme HTML.
+  const { title } = item;
+  if (title !== undefined) result.bind = (element) => element.setAttribute("title", title);
   if (item.submenu) {
     result.type = "submenu";
     result.submenu = item.submenu.map(toMenuItem);
@@ -205,7 +208,14 @@ export function openDialog(options: NativeDialogOptions): DialogHandle {
   }
   // « Ouvert » tant que SiYuan ne l'a pas détruit : destruction différée comprise (pas de réouverture pendant le délai), et
   // faux dès que l'élément a quitté le document, même si SiYuan ne rappelle pas `destroyCallback`.
-  return { close, isOpen: () => !closed && dialog.element.isConnected };
+  const confirmButton = dialog.element.querySelector<HTMLButtonElement>("button.b3-button--text");
+  return {
+    close,
+    isOpen: () => !closed && dialog.element.isConnected,
+    setConfirmLabel: (label) => {
+      if (!closed && confirmButton) confirmButton.textContent = label;
+    },
+  };
 }
 
 // --- Fenêtre flottante -----------------------------------------------------------------------------------------

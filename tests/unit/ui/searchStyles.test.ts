@@ -24,6 +24,12 @@ describe("SEARCH_CSS", () => {
     expect(rulesFor(selector).join(" ")).toContain(FOCUS);
   });
 
+  it("un bouton de la barre occupé (lecture des documents) est visiblement atténué avec le curseur d'attente", () => {
+    const rule = rulesFor('.docseeker-icons .block__icon[aria-busy="true"]').join(" ");
+    expect(rule).toContain("cursor: progress");
+    expect(rule).toContain("opacity");
+  });
+
   it("la fenêtre flottante a une marge intérieure (le corps du dialogue de SiYuan défile et n'en a pas)", () => {
     expect(rulesFor(".docseeker-floating-body").join(" ")).toMatch(/padding:\s*8px 16px 16px/);
   });
@@ -338,5 +344,14 @@ describe("ensureSearchStyle : la feuille sert aussi aux dialogues (hors de la vu
     one.dispose();
     two.dispose();
     expect(countStyles()).toBe(1);
+  });
+});
+
+describe("SEARCH_CSS : dialogue des critères enregistrés", () => {
+  it("le résumé est discret, retourne à la ligne et reste lisible (couleur du thème, pas de débordement)", () => {
+    const rule = rulesFor(".docseeker-criteria-summary").join(" ");
+    expect(rule).toContain("overflow-wrap: anywhere");
+    expect(rule).toContain("var(--b3-theme-on-surface)");
+    expect(rule).toMatch(/font-size:\s*12px/);
   });
 });

@@ -271,12 +271,12 @@ describe("compteur", () => {
 });
 
 describe("« Spécifier le chemin » : menu des dossiers", () => {
-  it("ouvre UN menu : « Tous les dossiers » puis les dossiers indentés (espaces insécables), « Tous » courant", () => {
+  it("ouvre UN menu : « Tous les chemins » puis les dossiers indentés (espaces insécables), « Tous » courant", () => {
     btn(PATH).click();
     expect(fakes.openMenu).toHaveBeenCalledTimes(1);
     const items = fakes.lastMenu().items;
     expect(items.map((i) => i.label)).toEqual([
-      "Tous les dossiers",
+      "Tous les chemins",
       "assets",
       "  a",
       "    sub",
@@ -326,10 +326,10 @@ describe("« Spécifier le chemin » : menu des dossiers", () => {
     expect(setOptions).not.toHaveBeenCalled();
   });
 
-  it("« Tous les dossiers » vide le dossier", () => {
+  it("« Tous les chemins » vide le dossier", () => {
     withFolder("assets/a/");
     btn(PATH).click();
-    pick(fakes.lastMenu(), "Tous les dossiers");
+    pick(fakes.lastMenu(), "Tous les chemins");
     expect(lastFilters().folder).toBe("");
   });
 
@@ -344,7 +344,7 @@ describe("« Spécifier le chemin » : menu des dossiers", () => {
     btn(PATH).click();
     folders = ["x/"];
     btn(PATH).click();
-    expect(fakes.lastMenu().items.map((i) => i.label)).toEqual(["Tous les dossiers", "x"]);
+    expect(fakes.lastMenu().items.map((i) => i.label)).toEqual(["Tous les chemins", "x"]);
   });
 
   it("200 dossiers : tous listés (le menu natif défile), sans troncature", () => {
@@ -479,7 +479,7 @@ describe("étiquette de chemin et croix « Supprimer »", () => {
     expect(label().querySelector("img")).toBeNull();
   });
 
-  it("« Supprimer » remet « Tous les dossiers » (une seule application), cache l'étiquette et rend le focus à « Spécifier le chemin »", () => {
+  it("« Supprimer » remet « Tous les chemins » (une seule application), cache l'étiquette et rend le focus à « Spécifier le chemin »", () => {
     withFolder("assets/a/", { includeSubfolders: false });
     btn(REMOVE).focus();
     btn(REMOVE).click();

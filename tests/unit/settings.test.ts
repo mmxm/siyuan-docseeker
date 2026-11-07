@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, FREQUENCY_MINUTES, SETTINGS_FILE, createSettings, normalizeSettings } from "../../src/settings";
 
 /** Valeurs par défaut des champs de présentation (tri et regroupement), ajoutés après les deux premiers réglages. */
-const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" } as const;
+const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab", savedCriteria: [] } as const;
 
 describe("normalizeSettings", () => {
   it("défauts : indexation automatique activée, 5 minutes", () => {
@@ -164,8 +164,7 @@ describe("createSettings : enregistrement sérialisé", () => {
     });
     await store.ready;
     const a = store.update({ intervalMinutes: 15 });
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0)); // la relecture des critères précède l'écriture : quelques microtâches
     expect(saved).toHaveLength(1); // le premier enregistrement est en vol
     const b = store.update({ intervalMinutes: 60 });
     const c = store.update({ autoIndex: false });
@@ -290,7 +289,7 @@ describe("réglages de présentation : tri et regroupement", () => {
     await store.update({ sort: { key: "modified", direction: "desc" } });
     expect(store.get().sort).toEqual({ key: "modified", direction: "desc" });
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" });
+    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab", savedCriteria: [] });
   });
 
   it("update({ groupByDocument }) : applique, notifie, enregistre", async () => {
@@ -368,7 +367,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     gate.resolve(STORED);
     await pending;
     expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], openMode: "tab", sort: { key: "modified", direction: "desc" } });
+    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], openMode: "tab", savedCriteria: [], sort: { key: "modified", direction: "desc" } });
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60, groupByDocument: false });
   });
 
@@ -380,7 +379,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     const p2 = store.update({ sort: { key: "path", direction: "asc" } });
     gate.resolve(STORED);
     await Promise.all([p1, p2]);
-    expect(save).toHaveBeenLastCalledWith({ ...STORED, history: [], openMode: "tab", groupByDocument: true, sort: { key: "path", direction: "asc" } });
+    expect(save).toHaveBeenLastCalledWith({ ...STORED, history: [], openMode: "tab", savedCriteria: [], groupByDocument: true, sort: { key: "path", direction: "asc" } });
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60 });
   });
 
@@ -388,7 +387,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     const save = vi.fn(async (_v: unknown) => undefined);
     const store = createSettings({ load: async () => STORED, save, onWarn: vi.fn() });
     await store.update({ groupByDocument: true });
-    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], openMode: "tab", groupByDocument: true });
+    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], openMode: "tab", savedCriteria: [], groupByDocument: true });
   });
 
   it("une fois chargé, update() applique et notifie toujours de façon synchrone (pas d'attente inutile)", async () => {
@@ -414,9 +413,10 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     });
     await store.ready;
     const first = store.update({ groupByDocument: true });
-    await Promise.resolve();
-    await store.load(); // pendant que le premier enregistrement est en vol
-    expect(load).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(load).toHaveBeenCalledTimes(2); // lecture initiale + relecture des critères avant l'écriture
+    await store.load(); // pendant que le premier enregistrement est en vol : aucune lecture de plus
+    expect(load).toHaveBeenCalledTimes(2);
     expect(store.get().groupByDocument).toBe(true); // la modification de l'utilisateur n'est pas écrasée
     gate.resolve();
     await first;
