@@ -37,6 +37,15 @@ function createFake(extraEntries: readonly string[] = []): FakeKernel {
       async lsNotebooks() {
         throw new Error("lsNotebooks is not used by the petal store");
       },
+      async listDocsByPath() {
+        throw new Error("listDocsByPath is not used by the petal store");
+      },
+      async searchDocs() {
+        throw new Error("searchDocs is not used by the petal store");
+      },
+      async getHPathsByPaths() {
+        throw new Error("getHPathsByPaths is not used by the petal store");
+      },
       async readDir(path) {
         log.push(`readDir ${path}`);
         const failure = kernel.failWhen("readDir", path);

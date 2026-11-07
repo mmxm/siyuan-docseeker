@@ -1,5 +1,5 @@
 import { Plugin, Setting, confirm, openTab, showMessage } from "siyuan";
-import { openDialog, openFloatingDialog, openMenu } from "./siyuan/nativeUi";
+import { openConfirmDialog, openCustomDialog, openDialog, openFloatingDialog, openInputDialog, openMenu } from "./siyuan/nativeUi";
 import { createFloatingSearch, type FloatingMountOptions, type FloatingSearch } from "./siyuan/floatingSearch";
 import { createSearchSessionStore, type SearchSessionState } from "./search/searchSession";
 import { createKernelApi } from "./siyuan/kernelApi";
@@ -597,11 +597,15 @@ export default class DocSeekerPlugin extends Plugin {
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     return mountSearchTab(host, {
       store: this.getPetalStore(kernel),
-      kernel, // filtre « portée de documents » (arbre et PDF cités, SQL du noyau)
+      kernel, // filtre « portée de documents » (PDF cités par SQL, arbre des cahiers et documents)
       sharedIndex,
       onOpenSettings: () => this.openSetting(),
       openMenu,
       openDialog,
+      openCustomDialog,
+      openInputDialog,
+      openConfirmDialog,
+      toast: (message) => this.toast(message), // échec d'écriture d'un critère après la fermeture de l'onglet
       settings: this.settings, // tri et regroupement mémorisés
       indexActivity: this.getActivity(),
       openTab: openTab as unknown as OpenTabFn,

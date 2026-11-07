@@ -29,7 +29,18 @@ let assets: { mode: "auto"; paths: string[] } | { mode: "manual" } | { mode: "fa
 
 const ok = (rows: Record<string, unknown>[]): SqlResult => ({ rows, truncated: false });
 const kernel = () => ({
-  lsNotebooks: vi.fn(async () => [{ id: NB, name: "Cahier A", closed: false }]),
+  lsNotebooks: vi.fn(async () => [{ id: NB, name: "Cahier A", closed: false, icon: "" }]),
+  listDocsByPath: vi.fn(async (_box: string, path: string) =>
+    path === "/"
+      ? [{ path: `/${DOC1}.sy`, name: "Parent", icon: "", subFileCount: 1 }]
+      : path === `/${DOC1}.sy`
+        ? [{ path: `/${DOC1}/${DOC2}.sy`, name: "Enfant", icon: "", subFileCount: 0 }]
+        : [],
+  ),
+  searchDocs: vi.fn(async () => []),
+  getHPathsByPaths: vi.fn(async (paths: readonly string[]) =>
+    paths.map((p) => (p === `/${DOC1}.sy` ? "Cahier A/Parent" : "Cahier A/Parent/Enfant")),
+  ),
   sql: vi.fn((stmt: string, signal?: AbortSignal): Promise<SqlResult> => {
     sqlCalls.push(stmt);
     if (stmt.includes("from blocks")) {
@@ -50,24 +61,34 @@ const kernel = () => ({
 
 const harness = (over: Partial<SearchTabDeps> = {}) => baseHarness({ kernel: kernel(), ...over }, fakes);
 const opts = (over: Partial<SearchOptions["filters"]> = {}): SearchOptions => ({ sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, ...over } });
-const DOC_SCOPE = { kind: "document", box: NB, docPath: `/${DOC1}.sy`, label: "Cahier A / Parent" } as const;
+const DOC_SCOPE = { kind: "document", box: NB, docPath: `/${DOC1}.sy`, label: "Cahier A/Parent" } as const;
 const message = (host: HTMLElement): string => host.querySelector(".docseeker-message")!.textContent ?? "";
 const pathLabel = (host: HTMLElement): HTMLElement => host.querySelector<HTMLElement>("span.search__path")!;
 
-async function openPathMenu(host: HTMLElement) {
+/** Parcourt le vrai dialogue « Spécifier le chemin » (faux Dialog, vrai contenu) et confirme ; `which` : ligne à choisir. */
+async function choosePath(host: HTMLElement, which: "notebook" | "parent" | "child"): Promise<void> {
   button(host, "Spécifier le chemin")!.click();
   await flush();
-  return fakes.lastMenu();
-}
-async function chooseDoc(host: HTMLElement, label: string): Promise<void> {
-  const menu = await openPathMenu(host);
-  menu.items.find((i) => i.label === label)!.click!();
-  menu.close();
+  const body = fakes.lastCustomDialog().container;
+  const row = (path: string): HTMLElement => body.querySelector<HTMLElement>(`li.b3-list-item[data-path="${path}"]`)!;
+  if (which !== "notebook") {
+    row("/").querySelector<HTMLElement>(".b3-list-item__toggle")!.click();
+    await flush();
+  }
+  if (which === "child") {
+    row(`/${DOC1}.sy`).querySelector<HTMLElement>(".b3-list-item__toggle")!.click();
+    await flush();
+  }
+  const target = which === "notebook" ? "/" : which === "parent" ? `/${DOC1}.sy` : `/${DOC1}/${DOC2}.sy`;
+  row(target).querySelector<HTMLElement>(".b3-list-item__text")!.click();
+  body.querySelector<HTMLElement>(".b3-button--text")!.click();
   await flush();
 }
-const CHILD = `${NBSP2}Parent`;
-const GRANDCHILD = `${NBSP2}${NBSP2}Enfant`;
-
+/** La croix de l'étiquette retire le chemin. */
+async function clearPath(host: HTMLElement): Promise<void> {
+  pathLabel(host).querySelector<SVGElement>("svg.search__rmpath")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  await flush();
+}
 beforeEach(() => {
   fakes = createNativeFakes();
   sqlCalls = [];
@@ -81,23 +102,25 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-describe("menu du chemin : arbre des documents", () => {
-  it("lit les cahiers et documents (kernel) et les propose sous « Documents SiYuan »", async () => {
+describe("bouton du chemin : dialogue natif", () => {
+  it("avec le noyau : le bouton « Spécifier le chemin » ouvre le dialogue et lit les cahiers ; aucun menu", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    const menu = await openPathMenu(h.host);
-    const labels = menu.items.map((i) => i.label);
-    expect(labels).toEqual(expect.arrayContaining(["Tous les chemins", "Documents SiYuan", "Cahier A", CHILD, GRANDCHILD]));
+    button(h.host, "Spécifier le chemin")!.click();
+    await flush();
+    expect(fakes.openMenu).not.toHaveBeenCalled();
+    expect(fakes.lastCustomDialog().options.title).toBe("Spécifier le chemin");
+    expect(fakes.lastCustomDialog().container.querySelector('li[data-path="/"] .b3-list-item__text')!.textContent).toBe("Cahier A");
     tab.dispose();
   });
 
-  it("sans kernel : pas de section « Documents SiYuan »", async () => {
+  it("sans noyau : ni « Spécifier le chemin » ni « Inclure les documents enfants »", async () => {
     const h = baseHarness({}, fakes);
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    const menu = await openPathMenu(h.host);
-    expect(menu.items.some((i) => i.label === "Documents SiYuan")).toBe(false);
+    expect(button(h.host, "Spécifier le chemin")).toBeNull();
+    expect(button(h.host, "Inclure les documents enfants")).toBeNull();
     tab.dispose();
   });
 });
@@ -108,14 +131,14 @@ describe("choix d'une portée", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(message(h.host)).toBe("Chargement du chemin…");
     expect(pathLabel(h.host).hidden).toBe(false);
-    expect(pathLabel(h.host).textContent).toBe("Cahier A / Parent");
+    expect(pathLabel(h.host).textContent).toBe("Cahier A/Parent");
     pending[0]!.resolve([PDF_A]);
     await flush();
     expect(message(h.host)).toBe("");
-    expect(pathLabel(h.host).textContent).toBe("Cahier A / Parent");
+    expect(pathLabel(h.host).textContent).toBe("Cahier A/Parent");
     tab.dispose();
   });
 
@@ -125,7 +148,7 @@ describe("choix d'une portée", () => {
     await flush();
     await submitQuery(h.host, "chat");
     expect(cards(h.host).length).toBeGreaterThan(0);
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(cards(h.host).length).toBeGreaterThan(0);
     tab.dispose();
   });
@@ -137,7 +160,7 @@ describe("choix d'une portée", () => {
     await flush();
     await submitQuery(h.host, "chat");
     expect(cards(h.host).length).toBeGreaterThan(0);
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(cards(h.host)).toHaveLength(0);
     expect(pathLabel(h.host).hidden).toBe(false);
     tab.dispose();
@@ -147,10 +170,10 @@ describe("choix d'une portée", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(sqlCalls.filter((s) => s.includes("from assets"))).toHaveLength(1);
-    await chooseDoc(h.host, "Cahier A"); // autre portée
-    await chooseDoc(h.host, CHILD); // retour : cache
+    await choosePath(h.host, "notebook"); // autre portée
+    await choosePath(h.host, "parent"); // retour : cache
     expect(sqlCalls.filter((s) => s.includes("from assets"))).toHaveLength(2);
     tab.dispose();
   });
@@ -159,7 +182,7 @@ describe("choix d'une portée", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     const first = sqlCalls.filter((s) => s.includes("from assets")).at(-1)!;
     expect(first).toContain("docpath like");
     button(h.host, "Inclure les documents enfants")!.click();
@@ -175,12 +198,10 @@ describe("choix d'une portée", () => {
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     await submitQuery(h.host, "chat");
-    await chooseDoc(h.host, CHILD); // en attente
+    await choosePath(h.host, "parent"); // en attente
     const stale = pending[0]!;
     // Le choix est remplacé avant la fin : « Tous les chemins ».
-    const menu = await openPathMenu(h.host);
-    menu.items.find((i) => i.label === "Tous les chemins")!.click!();
-    menu.close();
+    await clearPath(h.host);
     await flush();
     expect(stale.signal?.aborted).toBe(true);
     expect(pathLabel(h.host).hidden).toBe(true);
@@ -197,14 +218,14 @@ describe("choix d'une portée", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
-    await chooseDoc(h.host, GRANDCHILD);
+    await choosePath(h.host, "parent");
+    await choosePath(h.host, "child");
     expect(pending).toHaveLength(2);
     pending[1]!.resolve([PDF_A]);
     await flush();
     pending[0]!.resolve([PDF_OTHER]);
     await flush();
-    expect(pathLabel(h.host).textContent).toBe("Cahier A / Parent / Enfant");
+    expect(pathLabel(h.host).textContent).toBe("Cahier A/Parent/Enfant");
     expect(message(h.host)).toBe("");
     tab.dispose();
   });
@@ -214,7 +235,7 @@ describe("choix d'une portée", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     tab.dispose();
     await flush();
     expect(pending[0]!.signal?.aborted).toBe(true);
@@ -230,7 +251,7 @@ describe("échecs de résolution : message clair, trace, jamais de filtre ignor�
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(message(h.host)).toBe(
       "L'index de SiYuan n'est pas prêt : le filtre par document n'a pas pu être appliqué. Réessayez dans un instant.",
     );
@@ -238,9 +259,9 @@ describe("échecs de résolution : message clair, trace, jamais de filtre ignor�
     expect(h.onWarn).toHaveBeenCalledWith(expect.any(String), error);
     // Réessayer : nouveau choix, qui réussit.
     assets = { mode: "auto", paths: [PDF_A] };
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(message(h.host)).toBe("");
-    expect(pathLabel(h.host).textContent).toBe("Cahier A / Parent");
+    expect(pathLabel(h.host).textContent).toBe("Cahier A/Parent");
     tab.dispose();
   });
 
@@ -249,7 +270,7 @@ describe("échecs de résolution : message clair, trace, jamais de filtre ignor�
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, "Cahier A");
+    await choosePath(h.host, "notebook");
     expect(message(h.host)).toBe(
       "Ce chemin cite trop de PDF pour être filtré (plus de 50 000 références). Choisissez un chemin plus précis.",
     );
@@ -263,24 +284,21 @@ describe("échecs de résolution : message clair, trace, jamais de filtre ignor�
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     expect(message(h.host)).toBe("Le filtre par document n'a pas pu être appliqué (détails dans le journal). (réseau coupé)");
     expect(h.onWarn).toHaveBeenCalledWith(expect.any(String), error);
     tab.dispose();
   });
 
-  it("l'échec rétablit les options précédentes (dossier choisi avant, filtres conservés)", async () => {
+  it("l'échec retire la portée demandée (jamais appliquée) et garde le tri et les autres filtres demandés", async () => {
     assets = { mode: "fail", error: new Error("x") };
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    button(h.host, "Spécifier le chemin")!.click();
-    await flush();
-    fakes.lastMenu().items.find((i) => i.label === "assets")!.click!();
-    fakes.lastMenu().close();
-    expect(pathLabel(h.host).textContent).toBe("assets/");
-    await chooseDoc(h.host, CHILD);
-    expect(pathLabel(h.host).textContent).toBe("assets/");
+    await choosePath(h.host, "parent");
+    expect(pathLabel(h.host).hidden).toBe(true);
+    expect(h.onWarn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "x" }));
+    expect(message(h.host)).toContain("Le filtre par document n'a pas pu être appliqué");
     tab.dispose();
   });
 });
@@ -290,7 +308,7 @@ describe("soumission : rafraîchissement du cache périmé", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await submitQuery(h.host, "chat");
     expect(cards(h.host).length).toBeGreaterThan(0);
     const before = sqlCalls.filter((s) => s.includes("from assets")).length;
@@ -306,7 +324,7 @@ describe("soumission : rafraîchissement du cache périmé", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     const before = sqlCalls.filter((s) => s.includes("from assets")).length;
     await submitQuery(h.host, "chat");
     expect(sqlCalls.filter((s) => s.includes("from assets")).length).toBe(before);
@@ -317,7 +335,7 @@ describe("soumission : rafraîchissement du cache périmé", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await vi.advanceTimersByTimeAsync(31_000);
     const error = new Error("noyau indisponible");
     assets = { mode: "fail", error };
@@ -333,15 +351,13 @@ describe("soumission : rafraîchissement du cache périmé", () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await vi.advanceTimersByTimeAsync(31_000);
     assets = { mode: "manual" };
     await submitQuery(h.host, "chat"); // rafraîchissement en attente
     const refresh = pending.at(-1)!;
     assets = { mode: "auto", paths: [PDF_A] };
-    const menu = await openPathMenu(h.host);
-    menu.items.find((i) => i.label === "Tous les chemins")!.click!();
-    menu.close();
+    await clearPath(h.host);
     await flush();
     refresh.reject(new Error("tardif"));
     await flush();
@@ -351,7 +367,7 @@ describe("soumission : rafraîchissement du cache périmé", () => {
 });
 
 describe("restauration de session avec une portée", () => {
-  const session = (query: string) => ({ initial: { query, options: opts({ scope: DOC_SCOPE }) }, save: vi.fn() });
+  const session = (query: string) => ({ initial: { query, options: opts({ scopes: [DOC_SCOPE] }) }, save: vi.fn() });
 
   it("repasse par la résolution : tant qu'elle dure, « Chargement du chemin… » et AUCUN résultat non filtré", async () => {
     assets = { mode: "manual" };
@@ -366,7 +382,7 @@ describe("restauration de session avec une portée", () => {
     await flush();
     expect(message(h.host)).toBe("");
     expect(cards(h.host).length).toBeGreaterThan(0);
-    expect(pathLabel(h.host).textContent).toBe("Cahier A / Parent");
+    expect(pathLabel(h.host).textContent).toBe("Cahier A/Parent");
     tab.dispose();
   });
 
@@ -410,8 +426,55 @@ describe("restauration de session avec une portée", () => {
     const h = harness({ session: { initial: undefined, save } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
-    expect(save.mock.calls.at(-1)![0].options.filters.scope).toMatchObject({ kind: "document", label: "Cahier A / Parent" });
+    await choosePath(h.host, "parent");
+    expect(save.mock.calls.at(-1)![0].options.filters.scopes?.[0]).toMatchObject({ kind: "document", label: "Cahier A/Parent" });
+    tab.dispose();
+  });
+});
+
+describe("plusieurs portées (liste)", () => {
+  const NB_SCOPE = { kind: "notebook", box: NB, label: "Cahier A" } as const;
+
+  it("session à deux portées : restaurées et résolues ENSEMBLE par une seule requête, étiquette jointe par un espace", async () => {
+    assets = { mode: "manual" };
+    const h = harness({ session: { initial: { query: "chat", options: opts({ scopes: [NB_SCOPE, DOC_SCOPE] }) }, save: vi.fn() } });
+    const tab = mountSearchTab(h.host, h.deps);
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.stmt).toContain(`(box = '${NB}') or (box = '${NB}' and (docpath = '/${DOC1}.sy'`);
+    pending[0]!.resolve([PDF_A]);
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(sqlCalls.filter((q) => q.includes("from assets"))).toHaveLength(1);
+    expect(pathLabel(h.host).textContent).toBe("Cahier A Cahier A/Parent");
+    expect(cards(h.host).length).toBeGreaterThan(0);
+    tab.dispose();
+  });
+
+  it("ancien format de session (`scope` singulier) : lu comme une liste d'un élément et résolu", async () => {
+    assets = { mode: "auto", paths: [PDF_A] };
+    const legacy = { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, scope: DOC_SCOPE } } as unknown as SearchOptions;
+    const h = harness({ session: { initial: { query: "chat", options: legacy }, save: vi.fn() } });
+    const tab = mountSearchTab(h.host, h.deps);
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(pathLabel(h.host).textContent).toBe("Cahier A/Parent");
+    expect(cards(h.host).length).toBeGreaterThan(0);
+    tab.dispose();
+  });
+
+  it("une portée invalide dans la liste : toute la liste est écartée avec message et trace, aucun SQL", async () => {
+    const bad = { kind: "notebook", box: "x' or '1'='1", label: "L" };
+    const forged = opts({ scopes: [DOC_SCOPE, bad] as never });
+    const h = harness({ session: { initial: { query: "chat", options: forged }, save: vi.fn() } });
+    const tab = mountSearchTab(h.host, h.deps);
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(message(h.host)).toBe("Le chemin enregistré n'est pas valide : la recherche s'est lancée sans lui.");
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Portée"), expect.anything());
+    expect(sqlCalls.filter((q) => q.includes("from assets"))).toHaveLength(0);
+    expect(pathLabel(h.host).hidden).toBe(true);
     tab.dispose();
   });
 });
@@ -424,13 +487,13 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
   };
 
   it("A : une portée invalide en session (kind inconnu) est retirée AVEC un message et une trace, sans requête au noyau", async () => {
-    const forged = opts({ scope: { kind: "x", box: NB, label: "L" } as never });
+    const forged = opts({ scopes: [{ kind: "x", box: NB, label: "L" }] as never });
     const h = harness({ session: SESSION_KEEP("chat", forged) });
     const tab = mountSearchTab(h.host, h.deps);
     await vi.advanceTimersByTimeAsync(500);
     await flush();
     expect(message(h.host)).toBe("Le chemin enregistré n'est pas valide : la recherche s'est lancée sans lui.");
-    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Portée"), forged.filters.scope);
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Portée"), forged.filters.scopes);
     expect(sqlCalls.filter((s) => s.includes("from assets"))).toHaveLength(0);
     expect(pathLabel(h.host).hidden).toBe(true);
     expect(cards(h.host).length).toBeGreaterThan(0); // requête quand même restaurée
@@ -443,13 +506,13 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
     ["document sans docPath", { kind: "document", box: NB, label: "L" }],
     ["libellé absent", { kind: "notebook", box: NB }],
   ])("A bis : portée de session corrompue (%s) : écartée avec message et trace, la requête repart, aucun SQL", async (_n, bad) => {
-    const forged = opts({ scope: bad as never });
+    const forged = opts({ scopes: [bad] as never });
     const h = harness({ session: SESSION_KEEP("chat", forged) });
     const tab = mountSearchTab(h.host, h.deps);
     await vi.advanceTimersByTimeAsync(500);
     await flush();
     expect(message(h.host)).toBe("Le chemin enregistré n'est pas valide : la recherche s'est lancée sans lui.");
-    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Portée"), bad);
+    expect(h.onWarn).toHaveBeenCalledWith(expect.stringContaining("Portée"), [bad]);
     expect(sqlCalls.filter((s) => s.includes("from assets"))).toHaveLength(0);
     expect(pathLabel(h.host).hidden).toBe(true);
     expect(cards(h.host).length).toBeGreaterThan(0);
@@ -461,7 +524,7 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await submitQuery(h.host, "chat");
     expect(cards(h.host)).toHaveLength(0); // pas de résultats hors portée
     expect(message(h.host)).toBe("Chargement du chemin…");
@@ -478,7 +541,7 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await submitQuery(h.host, "chat");
     pending[0]!.resolve([PDF_A]);
     await vi.advanceTimersByTimeAsync(500);
@@ -491,10 +554,10 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await vi.advanceTimersByTimeAsync(31_000); // cache périmé
     assets = { mode: "manual" };
-    await chooseDoc(h.host, GRANDCHILD); // nouvelle portée en attente (pending[0])
+    await choosePath(h.host, "child"); // nouvelle portée en attente (pending[0])
     await submitQuery(h.host, "chat");
     expect(pending).toHaveLength(1);
     pending[0]!.reject(new Error("noyau")); // l'échec ne doit pas laisser « relues » à la place de l'erreur de la portée choisie
@@ -507,7 +570,7 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD);
+    await choosePath(h.host, "parent");
     await vi.advanceTimersByTimeAsync(31_000);
     assets = { mode: "fail", error: new Error("noyau indisponible") };
     await submitQuery(h.host, "chat");
@@ -521,13 +584,11 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
 
   it("E : une restauration de session dépassée par un choix de l'utilisateur relance quand même la requête", async () => {
     assets = { mode: "manual" };
-    const h = harness({ session: SESSION_KEEP("chat", opts({ scope: DOC_SCOPE })) });
+    const h = harness({ session: SESSION_KEEP("chat", opts({ scopes: [DOC_SCOPE] })) });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     expect(cards(h.host)).toHaveLength(0);
-    const menu = await openPathMenu(h.host);
-    menu.items.find((i) => i.label === "Tous les chemins")!.click!();
-    menu.close();
+    await clearPath(h.host);
     await vi.advanceTimersByTimeAsync(500);
     await flush();
     expect(cards(h.host).length).toBeGreaterThan(0);
@@ -540,20 +601,20 @@ describe("correctifs de revue : portée invalide, soumission pendant la résolut
     const h = harness({ session: { initial: undefined, save } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    await chooseDoc(h.host, CHILD); // en attente
+    await choosePath(h.host, "parent"); // en attente
     sortTo(h.host, "Nom décroissant"); // nouvelle demande : tri + portée en attente
     expect(pending).toHaveLength(1); // même clé : la requête en vol est partagée
     pending[0]!.reject(new Error("noyau"));
     await flush();
     const last = save.mock.calls.at(-1)![0].options;
     expect(last.sort).toEqual({ key: "name", direction: "desc" });
-    expect(last.filters.scope).toBeUndefined();
+    expect(last.filters.scopes).toBeUndefined();
     tab.dispose();
   });
 
   it("L : l'absence de noyau passe par le système de libellés", async () => {
     const t = (key: string): string => (key === "kernelUnavailable" ? "LIBELLE-NOYAU" : key);
-    const h = baseHarness({ session: { initial: { query: "", options: opts({ scope: DOC_SCOPE }) }, save: vi.fn() }, t }, fakes);
+    const h = baseHarness({ session: { initial: { query: "", options: opts({ scopes: [DOC_SCOPE] }) }, save: vi.fn() }, t }, fakes);
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     expect(message(h.host)).toContain("LIBELLE-NOYAU");

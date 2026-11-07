@@ -133,7 +133,7 @@ vi.mock("../../src/indexer/autoSync", async (orig) => {
   };
 });
 vi.mock("../../src/siyuan/kernelApi", () => ({ createKernelApi: () => ({}) }));
-vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.fn(), openFloatingDialog: (o: unknown) => h.openFloating(o) }));
+vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.fn(), openCustomDialog: vi.fn(), openInputDialog: vi.fn(), openConfirmDialog: vi.fn(), openFloatingDialog: (o: unknown) => h.openFloating(o) }));
 vi.mock("../../src/siyuan/petalStore", () => ({ createPetalStore: () => ({ clear: h.clear, removeStaleTmp: h.stale }) }));
 vi.mock("../../src/siyuan/discovery", () => ({ discoverPdfs: vi.fn() }));
 vi.mock("../../src/indexer/loadPdf", () => ({ createLoadPdf: () => vi.fn() }));

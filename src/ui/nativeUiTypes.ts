@@ -56,8 +56,6 @@ export interface DialogHandle {
   close(): void;
   /** Vrai tant que le dialogue est à l'écran, destruction différée comprise ; faux dès qu'il est détruit (même sans callback). */
   isOpen(): boolean;
-  /** Renomme le bouton de confirmation (texte brut), p. ex. « Enregistrer » -> « Remplacer ». Sans effet une fois détruit. */
-  setConfirmLabel?(label: string): void;
 }
 
 /**
@@ -91,11 +89,87 @@ export interface FloatingDialogHandle {
   isOpen(): boolean;
 }
 
+/**
+ * Dialogue à contenu libre (comme « Spécifier le chemin » de SiYuan) : le plugin fournit tout le corps, boutons compris, déjà
+ * construit en DOM. Ni « Annuler » ni « Confirmer » ajoutés par l'adaptateur : Échap, voile et croix ferment comme pour tout
+ * dialogue SiYuan, et le contenu ferme lui-même via le handle.
+ */
+export interface CustomDialogOptions {
+  /** Texte brut ; l'adaptateur l'échappe et le place dans le gabarit de titre natif. */
+  readonly title: string;
+  /** « 50vw », « 420px » : nombre de 1 à 4 chiffres suivi de px, vw ou vh. */
+  readonly width: string;
+  readonly height: string;
+  /** Posé en `data-key` sur la racine du dialogue (a-z, 0-9, tiret). */
+  readonly dataKey: string;
+  /** Nœuds ajoutés au corps du dialogue (DOM seulement, jamais de chaîne HTML). */
+  readonly content: Node;
+  /** Appelé UNE fois, quand SiYuan a réellement détruit le dialogue (après son délai), quelle que soit l'origine de la fermeture. */
+  onDestroyed?(): void;
+}
+
+export interface CustomDialogHandle {
+  /** Détruit le dialogue (sans effet s'il est déjà en cours de destruction ou détruit). */
+  close(): void;
+  /** Vrai tant que le dialogue est à l'écran, destruction différée comprise ; faux dès qu'il est détruit (même sans callback). */
+  isOpen(): boolean;
+}
+
+/**
+ * Dialogue d'entrée (équivalent de `openInputDialog` de SiYuan) : un champ texte, « Annuler » et « Confirmer ». Le dialogue reste
+ * ouvert après « Confirmer » (ou Entrée) : c'est l'appelant qui le ferme (`close()`), une fois la saisie validée.
+ */
+export interface InputDialogOptions {
+  /** Texte brut ; l'adaptateur l'échappe. */
+  readonly title: string;
+  /** Valeur initiale (posée par propriété, jamais en HTML) ; sélectionnée à l'ouverture. */
+  readonly value: string;
+  readonly placeholder: string;
+  /** Posé en `data-key` sur la racine du dialogue (a-z, 0-9, tiret). */
+  readonly dataKey: string;
+  /** « 520px » : nombre de 1 à 4 chiffres suivi de px. Défaut : 520px. */
+  readonly width?: string;
+  readonly labels: { readonly cancel: string; readonly confirm: string };
+  /** « Confirmer » ou Entrée ; reçoit le texte du champ tel quel (non rogné). */
+  onConfirm(value: string): void;
+  /** Erreur levée par `onConfirm` (jamais propagée à l'écouteur DOM) ; défaut : console.error. */
+  onError?(error: unknown): void;
+  /** Appelé UNE fois, quand SiYuan a réellement détruit le dialogue, quelle qu'en soit la cause. */
+  onDestroyed?(): void;
+}
+
+export interface InputDialogHandle {
+  close(): void;
+  isOpen(): boolean;
+}
+
+/**
+ * Dialogue de confirmation (équivalent de `confirmDialog` de SiYuan) : un texte, « Annuler » et « Confirmer ». Il se ferme après
+ * l'une ou l'autre.
+ */
+export interface ConfirmDialogOptions {
+  /** Texte brut ; l'adaptateur l'échappe. */
+  readonly title: string;
+  /** Texte brut (poser en `textContent`) : peut contenir des noms venus des données. */
+  readonly text: string;
+  readonly labels: { readonly cancel: string; readonly confirm: string };
+  onConfirm(): void;
+  /** Erreur levée par `onConfirm` (le dialogue est quand même fermé) ; défaut : console.error. */
+  onError?(error: unknown): void;
+  /** Annuler, Échap ou toute fermeture autre que « Confirmer ». */
+  onCancel?(): void;
+  /** Appelé UNE fois, quand le dialogue est détruit (après onConfirm ou onCancel). */
+  onDestroyed?(): void;
+}
+
+export interface ConfirmDialogHandle {
+  close(): void;
+  isOpen(): boolean;
+}
+
 /** Identifiants de menu, un par bouton : SiYuan n'a qu'un menu ouvert, rouvrir le même identifiant le referme. */
-export const MENU_ID_PATH = "docseeker-path";
 export const MENU_ID_MORE = "docseeker-more";
 export const MENU_ID_HISTORY = "docseeker-history";
-export const MENU_ID_CRITERIA = "docseeker-criteria";
 
 /**
  * `id` (optionnel) : identifiant du menu, un par bouton. SiYuan n'ouvre qu'un menu à la fois : rouvrir le même
@@ -105,4 +179,7 @@ export const MENU_ID_CRITERIA = "docseeker-criteria";
  */
 export type OpenMenu = (items: readonly NativeMenuItem[], anchor: MenuAnchor, onClose?: () => void, id?: string) => MenuHandle;
 export type OpenDialog = (options: NativeDialogOptions) => DialogHandle;
+export type OpenInputDialog = (options: InputDialogOptions) => InputDialogHandle;
+export type OpenConfirmDialog = (options: ConfirmDialogOptions) => ConfirmDialogHandle;
+export type OpenCustomDialog = (options: CustomDialogOptions) => CustomDialogHandle;
 export type OpenFloatingDialog = (options: FloatingDialogOptions) => FloatingDialogHandle;

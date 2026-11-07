@@ -26,7 +26,7 @@ const copy = (state: SearchSessionState): SearchSessionState => ({
     sort: { ...state.options.sort },
     filters: {
       ...state.options.filters,
-      ...(state.options.filters.scope ? { scope: { ...state.options.filters.scope } } : {}),
+      ...(state.options.filters.scopes ? { scopes: state.options.filters.scopes.map((s) => ({ ...s })) } : {}),
     },
   },
 });

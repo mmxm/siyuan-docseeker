@@ -86,14 +86,14 @@ describe("KernelApi.sql", () => {
 });
 
 describe("KernelApi.lsNotebooks", () => {
-  it("POST /api/notebook/lsNotebooks et renvoie id, name, closed", async () => {
+  it("POST /api/notebook/lsNotebooks et renvoie id, name, closed, icon", async () => {
     const k = recording({
       code: 0,
       msg: "",
       data: { notebooks: [{ id: "20210808180117-6v0mkxr", name: "Cahier", closed: false, icon: "1f4d4", sort: 0 }] },
     });
     const api = createKernelApi({ fetch: k.fetch });
-    expect(await api.lsNotebooks()).toEqual([{ id: "20210808180117-6v0mkxr", name: "Cahier", closed: false }]);
+    expect(await api.lsNotebooks()).toEqual([{ id: "20210808180117-6v0mkxr", name: "Cahier", closed: false, icon: "1f4d4" }]);
     expect(k.calls[0]?.url).toBe("/api/notebook/lsNotebooks");
     expect(JSON.parse(String(k.calls[0]?.init.body))).toEqual({});
   });

@@ -33,7 +33,6 @@ let setOptions: ReturnType<typeof vi.fn>;
 let submit: ReturnType<typeof vi.fn>;
 let history: string[];
 let historyClear: ReturnType<typeof vi.fn>;
-let folders: string[];
 
 const vm: SearchViewModel = { kind: "empty-query" };
 
@@ -50,7 +49,6 @@ beforeEach(() => {
   });
   submit = vi.fn();
   history = ["chat", "chien"];
-  folders = ["assets/", "assets/a/"];
   historyClear = vi.fn();
   view = mountSearchView(host, {
     controller: { submit: submit as (q: string) => void, getViewModel: () => vm },
@@ -58,7 +56,7 @@ beforeEach(() => {
     thumbnails: { attach: () => () => undefined },
     onOpen: vi.fn(),
     getDocMeta: () => undefined,
-    options: { getOptions: () => opts, setOptions: setOptions as (o: SearchOptions) => void, getFolders: () => folders },
+    options: { getOptions: () => opts, setOptions: setOptions as (o: SearchOptions) => void },
     history: { get: () => history, add: vi.fn(), clear: historyClear as () => void },
     openMenu,
     openDialog,
@@ -92,7 +90,6 @@ const itemByLabel = (text: string): HTMLElement => {
 };
 const BUTTONS: [string, () => HTMLButtonElement, string, () => HTMLElement][] = [
   ["Plus", () => icon("Plus"), "docseeker-more", () => icon("Plus")],
-  ["Spécifier le chemin", () => icon("Spécifier le chemin"), "docseeker-path", () => icon("Spécifier le chemin")],
   // L'icône d'historique remet le focus au champ (le menu appartient au champ).
   ["icône d'historique", historyIcon, "docseeker-history", input],
 ];
@@ -160,7 +157,6 @@ describe("un menu ouvert par un clic reste ouvert (le clic remonte jusqu'à wind
 describe("clavier : le premier élément est focalisé à l'ouverture", () => {
   it.each([
     ["Plus", "Tri", () => icon("Plus")],
-    ["Spécifier le chemin", "Tous les chemins", () => icon("Spécifier le chemin")],
     ["icône d'historique", "chat", historyIcon],
   ])("« %s » : l'élément actif est « %s » (et il porte la classe courante)", (_name, expected, button) => {
     button().click();
@@ -172,16 +168,6 @@ describe("clavier : le premier élément est focalisé à l'ouverture", () => {
     input().focus();
     input().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
     expect(labelOf(document.activeElement)).toBe("chat");
-  });
-
-  it("Bas puis Entrée dans le menu des dossiers : le dossier est choisi, le focus revient au bouton", () => {
-    icon("Spécifier le chemin").focus();
-    icon("Spécifier le chemin").click();
-    press("ArrowDown"); // « Tous les chemins » -> « assets »
-    press("Enter");
-    expect(opts.filters.folder).toBe("assets/");
-    expect(current()).toBeUndefined();
-    expect(document.activeElement).toBe(icon("Spécifier le chemin"));
   });
 
   it("Plus > Tri au clavier : Entrée ouvre le sous-menu, Bas descend, Entrée choisit ; le focus revient à « Plus »", () => {
@@ -217,16 +203,6 @@ describe("fermeture par Échap : le focus revient à l'élément ouvrant", () =>
 });
 
 describe("un choix applique, ferme, et rend le focus (SiYuan appelle closeCB avant de vider le menu : le focus tombait sur BODY)", () => {
-  it("choisir un dossier : filtre appliqué une fois, menu fermé, focus sur « Spécifier le chemin »", () => {
-    icon("Spécifier le chemin").focus();
-    icon("Spécifier le chemin").click();
-    itemByLabel("  a").click();
-    expect(setOptions).toHaveBeenCalledTimes(1);
-    expect(opts.filters.folder).toBe("assets/a/");
-    expect(current()).toBeUndefined();
-    expect(document.activeElement).toBe(icon("Spécifier le chemin"));
-  });
-
   it("choisir un tri via Plus > Tri : setOptions une fois, focus sur « Plus »", () => {
     icon("Plus").focus();
     icon("Plus").click();
@@ -267,16 +243,6 @@ describe("un choix applique, ferme, et rend le focus (SiYuan appelle closeCB ava
 });
 
 describe("libellés issus des données : du texte, jamais du HTML (SiYuan insère les libellés en innerHTML)", () => {
-  it("dossiers « A & B » et « <i>x</i> » : le texte est affiché tel quel, aucune balise créée dans le menu", () => {
-    folders = ["A & B/", "<i>x</i>/"]; // le « / » de « </i> » fait de la seconde entrée un dossier à deux segments
-    icon("Spécifier le chemin").click();
-    const menu = current()!.element;
-    expect(labelOf(itemByLabel("A & B"))).toBe("A & B");
-    expect(labelOf(itemByLabel("\u00a0\u00a0<i>x</i>"))).toBe("\u00a0\u00a0<i>x</i>");
-    expect(menu.querySelector("i")).toBeNull();
-    expect(menu.querySelector("b")).toBeNull();
-  });
-
   it("requête d'historique « <b>x</b> & y » : texte tel quel, aucune balise", () => {
     history = ["<b>x</b> & y"];
     historyIcon().click();
@@ -285,11 +251,8 @@ describe("libellés issus des données : du texte, jamais du HTML (SiYuan insèr
     expect(menu.querySelector("b")).toBeNull();
   });
 
-  it("caractères bidi et de contrôle retirés des dossiers comme de l'historique", () => {
-    folders = ["fi‮gp.exe/"];
+  it("caractères bidi et de contrôle retirés de l'historique", () => {
     history = ["req⁦uete\u0007"];
-    icon("Spécifier le chemin").click();
-    expect(itemByLabel("figp.exe")).toBeTruthy();
     historyIcon().click();
     expect(itemByLabel("requete ")).toBeTruthy();
   });
@@ -415,14 +378,16 @@ describe("dialogue « Filtres » ouvert par un clic", () => {
     expect(stubs.Dialog.instances).toHaveLength(2);
   });
 
-  it("un setOptions externe pendant le dialogue : le dossier modifié entre-temps n'est pas écrasé par Confirmer", () => {
-    opts = { ...opts, filters: { ...NO_FILTERS, folder: "assets/a/" } };
+  it("un setOptions externe pendant le dialogue : la portée modifiée entre-temps n'est pas écrasée par Confirmer", () => {
+    const scopeA = { kind: "notebook", box: "20240101000000-aaaaaaa", label: "A" } as const;
+    const scopeB = { kind: "notebook", box: "20240101000000-bbbbbbb", label: "B" } as const;
+    opts = { ...opts, filters: { ...NO_FILTERS, scopes: [scopeA] } };
     icon("Filtres").click();
     const d = stubs.Dialog.instances[0]!;
-    opts = { ...opts, filters: { ...opts.filters, folder: "assets/" } }; // changement externe
+    opts = { ...opts, filters: { ...opts.filters, scopes: [scopeB] } }; // changement externe
     nameField(d).value = "abc";
     confirmButton(d).click();
-    expect(opts.filters.folder).toBe("assets/");
+    expect(opts.filters.scopes).toEqual([scopeB]);
     expect(opts.filters.nameContains).toBe("abc");
   });
 });

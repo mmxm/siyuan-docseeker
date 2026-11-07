@@ -36,7 +36,7 @@ function mount(extra: Partial<SearchViewDeps> = {}, withOptions = true) {
     onOpen: onOpen as (d: string, p: number, q: string) => void,
     getDocMeta: () => ({ pdfSize: 10, pdfModifiedMs: 20 }),
     ...(withOptions
-      ? { options: { getOptions: () => opts, setOptions: setOptions as (o: SearchOptions) => void, getFolders: () => [] } }
+      ? { options: { getOptions: () => opts, setOptions: setOptions as (o: SearchOptions) => void } }
       : {}),
     onGroupByDocumentChange: onGroup as (v: boolean) => void,
     openMenu: fakes.openMenu,

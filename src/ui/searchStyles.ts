@@ -25,9 +25,11 @@ export const SEARCH_CSS = `
 .docseeker-icons .block__icon svg { height: 16px; width: 16px; }
 .docseeker-count { font-size: 12px; margin-right: 8px; }
 .docseeker-count[hidden] { display: none; }
-.docseeker-icons .search__path { flex: 0 1 auto; min-width: 0; max-width: 100%; padding-right: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.docseeker-icons .search__path { flex: 0 1 auto; min-width: 0; max-width: 100%; padding-right: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docseeker-icons .search__path[hidden] { display: none; }
-.docseeker-path-text { direction: ltr; unicode-bidi: bidi-override; }
+.docseeker-icons .search__rmpath { cursor: pointer; }
+.docseeker-icons .search__rmpath:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-icons .fn__space[hidden] { display: none; }
 .docseeker-filter-field input { width: 100%; box-sizing: border-box; min-height: 32px; }
 .docseeker-floating-body { box-sizing: border-box; padding: 8px 16px 16px; }
 .docseeker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
@@ -39,7 +41,11 @@ export const SEARCH_CSS = `
 .docseeker-filter-field [aria-invalid="true"] { border-color: var(--b3-theme-error); box-shadow: 0 0 0 1px var(--b3-theme-error); }
 .docseeker-filter-error { margin: 0; font-size: 12px; color: var(--b3-theme-error); overflow-wrap: anywhere; }
 .docseeker-filter-error[hidden] { display: none; }
-.docseeker-criteria-summary { margin: 4px 0 0; font-size: 12px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
+.docseeker-search .search__header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; min-width: 0; }
+.docseeker-search .search__header .b3-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.docseeker-search .search__header .b3-chips.fn__none { display: none; }
+.docseeker-search .search__header .b3-chip { max-width: 100%; overflow-wrap: anywhere; }
+.docseeker-search .search__header .b3-chip:focus-visible, .docseeker-search .search__header button:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-filter-actions { display: flex; align-items: flex-end; }
 .docseeker-filter-reset, .docseeker-reset-filters { min-height: 32px; min-width: 32px; }
 .docseeker-filter-reset:focus-visible, .docseeker-reset-filters:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }

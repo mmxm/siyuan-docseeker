@@ -1005,8 +1005,8 @@ function filterSetup(initialOptions?: SearchOptions) {
 describe("searchController : filtres", () => {
   it("getOptions renvoie les options par défaut, puis celles de initialOptions", () => {
     expect(filterSetup().controller.getOptions().filters).toEqual(NO_FILTERS);
-    const opts = withFilters({ folder: "assets/x/" });
-    expect(filterSetup(opts).controller.getOptions().filters.folder).toBe("assets/x/");
+    const opts = withFilters({ minPages: 8 });
+    expect(filterSetup(opts).controller.getOptions().filters.minPages).toBe(8);
   });
 
   it("setOptions normalise ce qu'il reçoit", () => {
@@ -1017,14 +1017,14 @@ describe("searchController : filtres", () => {
 
   it("sans requête soumise, setOptions mémorise sans rien publier ni rechercher", () => {
     const { controller, seen, calls } = filterSetup();
-    controller.setOptions(withFilters({ folder: "assets/x/" }));
+    controller.setOptions(withFilters({ minPages: 8 }));
     expect(seen).toHaveLength(0);
     expect(calls).toHaveLength(0);
-    expect(controller.getOptions().filters.folder).toBe("assets/x/");
+    expect(controller.getOptions().filters.minPages).toBe(8);
   });
 
   it("le re-classement ne reçoit que les documents gardés par les filtres", async () => {
-    const { controller, calls } = filterSetup(withFilters({ folder: "assets/x/" }));
+    const { controller, calls } = filterSetup(withFilters({ minPages: 8 }));
     controller.submit("alpha");
     await flushMicro();
     expect(calls).toHaveLength(1);
@@ -1059,7 +1059,7 @@ describe("searchController : filtres", () => {
     const { controller, seen } = setup(new FakeSource(RR_PAGES, FILTER_DOCS));
     controller.submit("alpha");
     expect(resultOf(seen[0]!).hiddenByFilters).toBe(0);
-    controller.setOptions(withFilters({ folder: "assets/y/" }));
+    controller.setOptions(withFilters({ maxPages: 5 }));
     const vm = resultOf(seen[seen.length - 1]!);
     expect(vm.docs.map((d) => d.docId)).toEqual(["b"]);
     expect(vm.hiddenByFilters).toBe(2);
@@ -1100,7 +1100,7 @@ describe("searchController : filtres", () => {
       clear: clock.clear,
       onChange: (vm) => seen.push(vm),
       rerank: { rank: ((...a: unknown[]) => (calls.push(a), new Promise(() => undefined))) as unknown as RerankPort["rank"] },
-      initialOptions: withFilters({ folder: "assets/x/" }),
+      initialOptions: withFilters({ minPages: 8 }),
     });
     controller.submit("alpha");
     await flushMicro();
@@ -1217,7 +1217,7 @@ describe("searchController : filtres, courses et états", () => {
     source.progress = { loaded: 3, total: 5, failed: [] };
     controller.submit("alpha");
     expect(docIdsOf(seen[0]!)).toHaveLength(3);
-    controller.setOptions(withFilters({ folder: "assets/y/" }));
+    controller.setOptions(withFilters({ maxPages: 5 }));
     const vm = resultOf(seen[seen.length - 1]!);
     expect(vm.docs.map((d) => d.docId)).toEqual(["b"]);
     expect(vm.partial).toBe(true);
@@ -1265,36 +1265,36 @@ describe("searchController : filtres, courses et états", () => {
   });
 
   it("getOptions renvoie un objet immuable : une mutation n'affecte pas l'état", () => {
-    const { controller } = filterSetup(withFilters({ folder: "assets/x/" }));
-    const o = controller.getOptions() as { filters: { folder: string }; sort: { key: string } };
+    const { controller } = filterSetup(withFilters({ minPages: 8 }));
+    const o = controller.getOptions() as { filters: { minPages: number }; sort: { key: string } };
     expect(() => {
-      o.filters.folder = "autre/";
+      o.filters.minPages = 99;
     }).toThrow(TypeError);
     expect(() => {
       o.sort.key = "name";
     }).toThrow(TypeError);
-    expect(controller.getOptions().filters.folder).toBe("assets/x/");
+    expect(controller.getOptions().filters.minPages).toBe(8);
     expect(controller.getOptions().sort.key).toBe("relevance");
   });
 
   it("initialOptions invalide est normalisé", () => {
     const bad = {
       sort: { key: "nope", direction: "up" },
-      filters: { folder: " assets/x ", nameContains: " a ", minPages: 9, maxPages: 2, modifiedAfterMs: Number.NaN },
+      filters: { nameContains: " a ", minPages: 9, maxPages: 2, modifiedAfterMs: Number.NaN },
     } as unknown as SearchOptions;
     const { controller } = filterSetup(bad);
     expect(controller.getOptions()).toEqual({
       sort: { key: "relevance", direction: "desc" },
-      filters: { folder: "assets/x/", includeSubfolders: true, nameContains: "a" },
+      filters: { includeSubfolders: true, nameContains: "a" },
     });
   });
 
-  it("des options équivalentes après normalisation (« assets/x » et « assets/x/ ») ne relancent rien", async () => {
-    const { controller, calls, seen } = controllableFilterSetup(withFilters({ folder: "assets/x/" }));
+  it("des options équivalentes après normalisation (texte du nom rogné) ne relancent rien", async () => {
+    const { controller, calls, seen } = controllableFilterSetup(withFilters({ minPages: 8 }));
     controller.submit("alpha");
     await flushMicro();
-    controller.setOptions(withFilters({ folder: "assets/x" }));
-    controller.setOptions(withFilters({ folder: "assets/x/ " }));
+    controller.setOptions(withFilters({ minPages: 8, nameContains: "" }));
+    controller.setOptions(withFilters({ minPages: 8, nameContains: "   " }));
     await flushMicro();
     expect(calls).toHaveLength(1);
     expect(seen).toHaveLength(0);
@@ -1305,7 +1305,7 @@ describe("searchController : filtres, courses et états", () => {
     controller.submit("alpha");
     await flushMicro();
     const reordered = {
-      filters: { nameContains: "a", minPages: 2, includeSubfolders: true, folder: "" },
+      filters: { nameContains: "a", minPages: 2, includeSubfolders: true },
       sort: { direction: "desc", key: "relevance" },
     } as SearchOptions;
     controller.setOptions(reordered);

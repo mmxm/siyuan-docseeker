@@ -49,22 +49,21 @@ describe("session : restauration au montage", () => {
   });
 
   it("sans requête soumise : seules les options sont restaurées, aucune recherche n'est lancée", async () => {
-    const h = harness({ session: { initial: { query: "", options: opts({ folder: "assets/a/" }) }, save: vi.fn() } });
+    const h = harness({ session: { initial: { query: "", options: opts({ nameContains: "rap" }) }, save: vi.fn() } });
     const tab = mountSearchTab(h.host, h.deps);
     await vi.advanceTimersByTimeAsync(500);
     await flush();
     expect(input(h.host).value).toBe("");
     expect(cards(h.host)).toHaveLength(0);
-    expect(h.host.querySelector(".docseeker-path-text")!.textContent).toBe("assets/a/");
+    expect(h.host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")).toBe("Filtres (1 actif)");
     tab.dispose();
   });
 
   it("restaure les filtres et le tri (affichés par la barre)", async () => {
-    const h = harness({ session: { initial: { query: "", options: opts({ folder: "assets/a/", nameContains: "rap", minPages: 2 }) }, save: vi.fn() } });
+    const h = harness({ session: { initial: { query: "", options: opts({ nameContains: "rap", minPages: 2 }) }, save: vi.fn() } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    expect(h.host.querySelector(".docseeker-path-text")!.textContent).toBe("assets/a/");
-    expect(h.host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")).toBe("Filtres (3 actifs)");
+    expect(h.host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")).toBe("Filtres (2 actifs)");
     tab.dispose();
   });
 
@@ -203,16 +202,17 @@ describe("session : mémorisation", () => {
     tab.dispose();
   });
 
-  it("un changement d'options (dossier choisi dans le menu) est mémorisé avec la requête déjà soumise", async () => {
+  it("un changement d'options (nom du document, dialogue Filtres) est mémorisé avec la requête déjà soumise", async () => {
     const save = vi.fn();
     const h = harness({ session: { initial: undefined, save } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     await submitQuery(h.host, "chat");
-    button(h.host, "Spécifier le chemin")!.click();
-    const folder = fakes.lastMenu().items.find((i) => i.click && i.label?.trim() === "assets")!;
-    folder.click!();
-    expect(save).toHaveBeenLastCalledWith({ query: "chat", options: expect.objectContaining({ filters: expect.objectContaining({ folder: "assets/" }) }) });
+    button(h.host, "Filtres")!.click();
+    const dialog = fakes.lastDialog();
+    dialog.container.querySelector<HTMLInputElement>("input[type=search]")!.value = "rap";
+    dialog.confirm();
+    expect(save).toHaveBeenLastCalledWith({ query: "chat", options: expect.objectContaining({ filters: expect.objectContaining({ nameContains: "rap" }) }) });
     tab.dispose();
   });
 

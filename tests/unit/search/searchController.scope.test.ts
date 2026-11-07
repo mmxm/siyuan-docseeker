@@ -23,10 +23,10 @@ const source: SearchSource = {
 
 const withScope = (over: Partial<SearchOptions["filters"]> = {}): SearchOptions => ({
   sort: { key: "relevance", direction: "desc" },
-  filters: { ...NO_FILTERS, scope, ...over },
+  filters: { ...NO_FILTERS, scopes: [scope], ...over },
 });
 
-function setup(initialOptions: SearchOptions, scopePaths?: (s: DocumentScope, include: boolean) => ReadonlySet<string> | undefined) {
+function setup(initialOptions: SearchOptions, scopePaths?: (s: readonly DocumentScope[], include: boolean) => ReadonlySet<string> | undefined) {
   const views: SearchViewModel[] = [];
   const onWarn = vi.fn();
   const controller = createSearchController({
@@ -51,14 +51,14 @@ describe("contrôleur : portée de documents", () => {
     if (vm?.kind !== "results") return;
     expect(vm.docs.map((d) => d.docId)).toEqual(["b"]);
     expect(vm.hiddenByFilters).toBe(2);
-    expect(scopePaths).toHaveBeenCalledWith(scope, true);
+    expect(scopePaths).toHaveBeenCalledWith([scope], true);
   });
 
   it("transmet l'inclusion des enfants (includeSubfolders)", () => {
     const scopePaths = vi.fn(() => new Set(["assets/a.pdf"]));
     const { controller } = setup(withScope({ includeSubfolders: false }), scopePaths);
     controller.submit("alpha");
-    expect(scopePaths).toHaveBeenCalledWith(scope, false);
+    expect(scopePaths).toHaveBeenCalledWith([scope], false);
   });
 
   it("portée citant aucun PDF indexé : no-result avec hiddenByFilters, sans avertissement", () => {
@@ -132,15 +132,51 @@ describe("contrôleur : portée de documents", () => {
     controller.setOptions(withScope());
     const vm = views.at(-1);
     expect(vm?.kind === "results" && vm.docs.map((d) => d.docId)).toEqual(["c"]);
-    expect(controller.getOptions().filters.scope).toEqual(scope);
+    expect(controller.getOptions().filters.scopes).toEqual([scope]);
+  });
+});
+
+const scope2: DocumentScope = { kind: "notebook", box: "20210808180120-bbbbbbb", label: "Cahier 2" };
+
+describe("contrôleur : plusieurs portées", () => {
+  it("transmet la liste entière à scopePaths en un seul appel par calcul", () => {
+    const scopePaths = vi.fn(() => new Set(["assets/a.pdf", "assets/c.pdf"]));
+    const { controller, views } = setup(withScope({ scopes: [scope, scope2] }), scopePaths);
+    controller.submit("alpha");
+    expect(scopePaths).toHaveBeenCalledExactlyOnceWith([scope, scope2], true);
+    const vm = views.at(-1);
+    expect(vm?.kind === "results" && vm.docs.map((d) => d.docId)).toEqual(["a", "c"]);
+  });
+
+  it("un seul avertissement pour la liste non résolue, un autre pour une autre liste", () => {
+    const { controller, onWarn } = setup(withScope({ scopes: [scope, scope2] }), () => undefined);
+    controller.submit("alpha");
+    controller.submit("alpha beta");
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    controller.setOptions(withScope({ scopes: [scope2, scope] })); // même clé (ordre indifférent) : pas de nouvel avertissement
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    controller.setOptions(withScope({ scopes: [scope2] }));
+    expect(onWarn).toHaveBeenCalledTimes(2);
+  });
+
+  it("une liste dont une portée est forgée est retirée en entier ET signalée", () => {
+    const { controller, onWarn } = setup({ sort: { key: "relevance", direction: "desc" }, filters: NO_FILTERS });
+    controller.setOptions(withScope({ scopes: [scope, { kind: "x", box: BOX, label: "L" } as never] }));
+    expect(controller.getOptions().filters.scopes).toBeUndefined();
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("scope"), expect.anything());
+  });
+
+  it("lit l'ancien format `scope` singulier", () => {
+    const { controller } = setup({ sort: { key: "relevance", direction: "desc" }, filters: { ...NO_FILTERS, scope } as never });
+    expect(controller.getOptions().filters.scopes).toEqual([scope]);
   });
 });
 
 describe("contrôleur : portée invalide", () => {
   it("setOptions avec une portée forgée la retire ET le journal le sait", () => {
     const { controller, onWarn } = setup({ sort: { key: "relevance", direction: "desc" }, filters: NO_FILTERS });
-    controller.setOptions({ sort: { key: "relevance", direction: "desc" }, filters: { ...NO_FILTERS, scope: { kind: "x", box: BOX, label: "L" } as never } });
-    expect(controller.getOptions().filters.scope).toBeUndefined();
+    controller.setOptions({ sort: { key: "relevance", direction: "desc" }, filters: { ...NO_FILTERS, scopes: [{ kind: "x", box: BOX, label: "L" } as never] } });
+    expect(controller.getOptions().filters.scopes).toBeUndefined();
     expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("scope"), expect.anything());
   });
 });
@@ -149,8 +185,10 @@ describe("contrôleur : immuabilité de la portée", () => {
   it("getOptions renvoie une portée gelée et indépendante de l'entrée", () => {
     const input = withScope();
     const { controller } = setup(input, () => new Set());
-    const got = controller.getOptions().filters.scope;
+    const got = controller.getOptions().filters.scopes;
     expect(Object.isFrozen(got)).toBe(true);
-    expect(got).not.toBe(scope);
+    expect(Object.isFrozen(got?.[0])).toBe(true);
+    expect(got?.[0]).not.toBe(scope);
+    expect(got).not.toBe(input.filters.scopes);
   });
 });

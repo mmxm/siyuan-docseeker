@@ -14,7 +14,7 @@ describe("createSearchSessionStore", () => {
 
   it("set puis get renvoie la requête et les options (tri et filtres compris)", () => {
     const store = createSearchSessionStore();
-    const full = options({ folder: "assets/a/", includeSubfolders: false, nameContains: "rapport", minPages: 2, maxPages: 9, modifiedAfterMs: 1_700_000_000_000 });
+    const full = options({ includeSubfolders: false, nameContains: "rapport", minPages: 2, maxPages: 9, modifiedAfterMs: 1_700_000_000_000 });
     store.set({ query: "chat noir", options: full });
     expect(store.get()).toEqual({ query: "chat noir", options: full });
   });
@@ -27,25 +27,25 @@ describe("createSearchSessionStore", () => {
 
   it("copie à l'écriture : modifier l'objet passé à set ensuite ne change pas l'état mémorisé", () => {
     const store = createSearchSessionStore();
-    const mutable = { query: "a", options: { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, folder: "assets/" } } } as unknown as {
+    const mutable = { query: "a", options: { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, nameContains: "assets" } } } as unknown as {
       query: string;
-      options: { sort: { key: string; direction: string }; filters: { folder: string } };
+      options: { sort: { key: string; direction: string }; filters: { nameContains: string } };
     };
     store.set(mutable as unknown as Parameters<typeof store.set>[0]);
     mutable.query = "autre";
-    mutable.options.filters.folder = "assets/b/";
+    mutable.options.filters.nameContains = "autre";
     mutable.options.sort.key = "path";
-    expect(store.get()).toEqual({ query: "a", options: { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, folder: "assets/" } } });
+    expect(store.get()).toEqual({ query: "a", options: { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, nameContains: "assets" } } });
   });
 
   it("copie à la lecture : modifier le résultat de get ne change pas le suivant", () => {
     const store = createSearchSessionStore();
-    store.set({ query: "a", options: options({ folder: "assets/" }) });
-    const first = store.get() as unknown as { query: string; options: { filters: { folder: string }; sort: { key: string } } };
+    store.set({ query: "a", options: options({ nameContains: "assets" }) });
+    const first = store.get() as unknown as { query: string; options: { filters: { nameContains: string }; sort: { key: string } } };
     first.query = "pirate";
-    first.options.filters.folder = "";
+    first.options.filters.nameContains = "";
     first.options.sort.key = "path";
-    expect(store.get()).toEqual({ query: "a", options: options({ folder: "assets/" }) });
+    expect(store.get()).toEqual({ query: "a", options: options({ nameContains: "assets" }) });
   });
 
   it("set remplace entièrement l'état précédent (aucun champ de filtre ne survit)", () => {

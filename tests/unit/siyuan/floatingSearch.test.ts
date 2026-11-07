@@ -201,10 +201,10 @@ describe("createFloatingSearch : session", () => {
 
   it("restaure la session mémorisée au montage (requête et options)", () => {
     const store = createSearchSessionStore();
-    store.set(state("chat", { folder: "assets/a/" }));
+    store.set(state("chat", { nameContains: "rap" }));
     const s = setup({ session: store });
     s.floating.open();
-    expect(s.views[0]!.mountOptions.initial).toEqual(state("chat", { folder: "assets/a/" }));
+    expect(s.views[0]!.mountOptions.initial).toEqual(state("chat", { nameContains: "rap" }));
   });
 
   it("mémorise la session à chaque appel de save, et la restitue à la réouverture suivante", () => {

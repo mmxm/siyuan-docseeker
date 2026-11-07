@@ -5,6 +5,7 @@ import type { SearchIndexData } from "../../../src/core/codec/format";
 import type { IndexerEvent } from "../../../src/indexer/indexer";
 import type { SearchTabDeps } from "../../../src/searchTab";
 import { createSharedIndex, type SharedIndex } from "../../../src/search/sharedIndex";
+import { openConfirmDialog, openInputDialog } from "../../../src/siyuan/nativeUi";
 import { createNativeFakes } from "../ui/nativeFakes";
 
 export const PDF_A = "assets/Alpha-20240101120000-abc1234.pdf";
@@ -30,7 +31,7 @@ const dataA = (): SearchIndexData => ({
 
 export const sharedInstances: SharedIndex[] = [];
 
-export function harness(over: Partial<SearchTabDeps> = {}, natives: Pick<SearchTabDeps, "openMenu" | "openDialog"> = createNativeFakes()) {
+export function harness(over: Partial<SearchTabDeps> = {}, natives: Pick<SearchTabDeps, "openMenu" | "openDialog" | "openCustomDialog"> = createNativeFakes()) {
   const files = new Map<string, Uint8Array>([["a.dsx", bytes("a")], ["manifest.json", bytes("{}")]]);
   const read = vi.fn(async (name: string) => files.get(name) ?? null);
   const onWarn = vi.fn();
@@ -69,6 +70,9 @@ export function harness(over: Partial<SearchTabDeps> = {}, natives: Pick<SearchT
     onWarn,
     openMenu: natives.openMenu,
     openDialog: natives.openDialog,
+    ...(natives.openCustomDialog ? { openCustomDialog: natives.openCustomDialog } : {}),
+    openInputDialog,
+    openConfirmDialog,
     ...over,
   };
   return { host, deps, onWarn, openPdfAtPage, handle, read };

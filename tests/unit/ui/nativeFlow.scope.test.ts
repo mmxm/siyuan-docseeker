@@ -1,28 +1,26 @@
 // @vitest-environment jsdom
-// Intégration du menu « Spécifier le chemin » avec l'arbre des documents : barre RÉELLE, adaptateur RÉEL (src/siyuan/nativeUi.ts)
-// et faux Menu de SiYuan fidèle (libellés insérés en innerHTML, closeCB avant le vidage, bascule sur le même identifiant).
-import { Menu } from "siyuan";
+// Intégration du dialogue « Spécifier le chemin » : barre RÉELLE, dialogue RÉEL (src/ui/pathDialog.ts), adaptateur RÉEL
+// (src/siyuan/nativeUi.ts `openCustomDialog`) et faux Dialog de SiYuan fidèle (destruction différée, Échap global, voile,
+// focus précédent rendu). Le noyau est simulé.
+import { Dialog, Menu } from "siyuan";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DocTree } from "../../../src/search/docTree";
 import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
-import { IndexUnavailableError } from "../../../src/siyuan/kernelApi";
-import { openDialog, openMenu } from "../../../src/siyuan/nativeUi";
+import { openCustomDialog, openDialog, openMenu } from "../../../src/siyuan/nativeUi";
+import type { PathKernel } from "../../../src/ui/pathDialog";
 import { mountSearchToolbar, type SearchToolbar } from "../../../src/ui/searchToolbar";
 import { DEFAULT_STRINGS } from "../../../src/ui/searchView";
 
-interface StubMenu {
-  opened: boolean;
+interface StubDialog {
   element: HTMLElement;
+  destroyCount: number;
+  destroyCalls: number;
 }
-const stubMenu = Menu as unknown as { current: StubMenu | undefined; reset(): void };
+const stubDialog = Dialog as unknown as { instances: StubDialog[]; stack: StubDialog[]; reset(): void; destroyDelayMs: number | undefined };
 const t = (key: string, vars: Readonly<Record<string, string | number>> = {}): string =>
   (DEFAULT_STRINGS[key] ?? key).replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? String(vars[n]) : m));
 const NB = "20240101000000-aaaaaaa";
+const DOC = "/20240102000000-0000001.sy";
 const EVIL = "<img src=x onerror=alert(1)>";
-const TREE: DocTree = [
-  { kind: "notebook", box: NB, hpath: "", label: EVIL, depth: 0 },
-  { kind: "document", box: NB, docPath: "/20240102000000-0000001.sy", hpath: `/${EVIL}`, label: EVIL, depth: 1 },
-];
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };
@@ -30,25 +28,31 @@ const flush = async (): Promise<void> => {
 let host: HTMLElement;
 let state: SearchOptions;
 let setOptions: ReturnType<typeof vi.fn>;
-let getDocTree: ReturnType<typeof vi.fn>;
+let kernel: { [K in keyof PathKernel]: ReturnType<typeof vi.fn> };
 let toolbar: SearchToolbar;
 
 beforeEach(() => {
   document.head.innerHTML = "";
   document.body.innerHTML = "";
-  stubMenu.reset();
+  (Menu as unknown as { reset(): void }).reset();
+  stubDialog.reset();
   host = document.createElement("div");
   document.body.appendChild(host);
   state = { sort: { key: "name", direction: "asc" }, filters: NO_FILTERS };
   setOptions = vi.fn((o: SearchOptions) => {
     state = o;
   });
-  getDocTree = vi.fn(async () => TREE);
+  kernel = {
+    lsNotebooks: vi.fn(async () => [{ id: NB, name: EVIL, closed: false, icon: "" }]),
+    listDocsByPath: vi.fn(async () => [{ path: DOC, name: EVIL, icon: "", subFileCount: 0 }]),
+    searchDocs: vi.fn(async () => []),
+    getHPathsByPaths: vi.fn(async () => [`${EVIL}/${EVIL}`]),
+  };
   toolbar = mountSearchToolbar(host, {
     getOptions: () => state,
     setOptions: setOptions as (o: SearchOptions) => void,
-    getFolders: () => [],
-    getDocTree: getDocTree as unknown as (signal?: AbortSignal) => Promise<DocTree>,
+    pathKernel: kernel as unknown as PathKernel,
+    openCustomDialog,
     t,
     openMenu,
     openDialog,
@@ -59,66 +63,117 @@ beforeEach(() => {
 });
 afterEach(() => {
   toolbar.dispose();
-  stubMenu.reset();
+  stubDialog.reset();
+  vi.useRealTimers();
 });
 
-const pathBtn = () => host.querySelector<HTMLButtonElement>("button[data-menu='true']")!;
-const current = (): StubMenu | undefined => stubMenu.current;
-const labelOf = (item: Element | null): string | null => item?.querySelector(":scope > .b3-menu__label")?.textContent ?? null;
-const itemByLabel = (text: string): HTMLElement => {
-  const found = [...current()!.element.querySelectorAll<HTMLElement>(".b3-menu__item")].find((b) => labelOf(b) === text);
-  if (!found) throw new Error(`item de menu introuvable : ${text}`);
-  return found;
+const pathBtn = () => host.querySelector<HTMLButtonElement>('button[aria-label="Spécifier le chemin"]')!;
+const root = (): HTMLElement => stubDialog.instances.at(-1)!.element;
+const body = (): HTMLElement => root().querySelector<HTMLElement>(".b3-dialog__body")!;
+const row = (path: string): HTMLElement => body().querySelector<HTMLElement>(`li.b3-list-item[data-path="${path}"]`)!;
+const confirmButton = (): HTMLElement => body().querySelector<HTMLElement>(".b3-button--text")!;
+const open = async (): Promise<void> => {
+  pathBtn().focus();
+  pathBtn().click();
+  await flush();
+};
+const escape = (): void => {
+  (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 };
 
-describe("menu des documents avec l'adaptateur réel", () => {
-  it("le titre d'un document contenant du HTML est affiché comme texte : aucune balise créée dans le menu", async () => {
-    pathBtn().focus();
-    pathBtn().click();
-    await flush();
-    const menu = current()!.element;
-    expect(labelOf(itemByLabel(EVIL))).toBe(EVIL);
-    expect(menu.querySelector("img")).toBeNull();
-    expect(menu.innerHTML).not.toContain("<img");
+describe("dialogue du chemin avec l'adaptateur réel", () => {
+  it("un vrai Dialog de 50vw x 70vh, data-key natif, titre échappé, champ de recherche focalisé", async () => {
+    await open();
+    const container = root().querySelector<HTMLElement>(".b3-dialog__container")!;
+    expect(container.style.width).toBe("50vw");
+    expect(container.style.height).toBe("70vh");
+    expect(root().getAttribute("data-key")).toBe("dialog-movepathto");
+    expect(root().querySelector(".b3-dialog__header")!.textContent).toBe("Spécifier le chemin");
+    expect(document.activeElement).toBe(body().querySelector("input"));
   });
 
-  it("choisir un document ferme le menu et rend le focus à « Spécifier le chemin »", async () => {
-    pathBtn().focus();
-    pathBtn().click();
+  it("noms de cahier et de document hostiles : du texte, aucune balise créée dans tout le dialogue", async () => {
+    await open();
+    row("/").querySelector<HTMLElement>(".b3-list-item__toggle")!.click();
     await flush();
-    itemByLabel(`  ${EVIL}`).click();
+    expect(root().querySelector("img")).toBeNull();
+    expect(root().innerHTML).not.toContain("<img");
+    expect(row(DOC).querySelector(".b3-list-item__text")!.textContent).toBe(EVIL);
+  });
+
+  it("choisir un document puis Confirmer : portée appliquée une fois, dialogue détruit une fois, focus sur « Spécifier le chemin »", async () => {
+    await open();
+    row("/").querySelector<HTMLElement>(".b3-list-item__toggle")!.click();
+    await flush();
+    row(DOC).querySelector<HTMLElement>(".b3-list-item__text")!.click();
+    confirmButton().click();
+    await flush();
     expect(setOptions).toHaveBeenCalledTimes(1);
-    expect(state.filters.scope).toMatchObject({ kind: "document", label: `${EVIL} / ${EVIL}` });
-    expect(current()).toBeUndefined();
+    expect(state.filters.scopes).toEqual([{ kind: "document", box: NB, docPath: DOC, label: `${EVIL}/${EVIL}` }]);
+    expect(stubDialog.instances).toHaveLength(1);
+    expect(stubDialog.instances[0]!.destroyCount).toBe(1);
+    expect(root().isConnected).toBe(false);
+    expect(document.activeElement).toBe(pathBtn());
+    expect(host.querySelector(".search__path")!.firstChild!.textContent).toBe(`${EVIL}/${EVIL}`);
+    expect(host.querySelector(".search__path img")).toBeNull();
+  });
+
+  it("Échap (gestionnaire global de SiYuan) : rien n'est appliqué, focus sur « Spécifier le chemin »", async () => {
+    await open();
+    escape();
+    expect(setOptions).not.toHaveBeenCalled();
+    expect(root().isConnected).toBe(false);
     expect(document.activeElement).toBe(pathBtn());
   });
 
-  it("un second clic sur le bouton referme le menu ouvert (bascule), sans relire l'arbre", async () => {
-    pathBtn().focus();
-    pathBtn().click();
-    await flush();
-    expect(current()).toBeDefined();
-    pathBtn().click();
-    await flush();
-    expect(current()).toBeUndefined();
-    expect(getDocTree).toHaveBeenCalledTimes(1);
+  it("clic sur le voile : annule de la même façon", async () => {
+    await open();
+    root().querySelector<HTMLElement>(".b3-dialog__scrim")!.click();
+    expect(setOptions).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(pathBtn());
   });
 
-  it("« Réessayer » : le menu se ferme, le focus est rendu au bouton, puis un nouveau menu s'ouvre avec l'arbre relu", async () => {
-    getDocTree.mockRejectedValueOnce(new IndexUnavailableError(200, -1, "document metadata is not ready"));
-    pathBtn().focus();
+  it("Entrée dans le champ confirme (le cahier présélectionné)", async () => {
+    await open();
+    body().querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await flush();
+    expect(state.filters.scopes).toEqual([{ kind: "notebook", box: NB, label: EVIL }]);
+  });
+
+  it("destruction différée (~190 ms) : un clic pendant le délai n'ouvre pas un second dialogue ; après, on peut rouvrir", async () => {
+    vi.useFakeTimers();
+    stubDialog.destroyDelayMs = 190;
+    await open();
+    escape();
     pathBtn().click();
     await flush();
-    expect(labelOf(itemByLabel("Réessayer"))).toBe("Réessayer");
-    itemByLabel("Réessayer").click();
-    await flush();
-    expect(getDocTree).toHaveBeenCalledTimes(2);
-    expect(current()).toBeDefined();
-    expect(labelOf(itemByLabel(EVIL))).toBe(EVIL);
-    // Fermer ce second menu (bascule) rend bien le focus au bouton.
-    pathBtn().click();
-    await flush();
+    expect(stubDialog.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
     expect(document.activeElement).toBe(pathBtn());
+    pathBtn().click();
+    await flush();
+    expect(stubDialog.instances).toHaveLength(2);
+  });
+
+  it("Confirmer pendant la lecture des libellés puis Échap : rien n'est appliqué", async () => {
+    let release: (v: string[]) => void = () => undefined;
+    kernel.getHPathsByPaths.mockReturnValueOnce(new Promise<string[]>((resolve) => (release = resolve)));
+    await open();
+    row("/").querySelector<HTMLElement>(".b3-list-item__toggle")!.click();
+    await flush();
+    row(DOC).querySelector<HTMLElement>(".b3-list-item__text")!.click();
+    confirmButton().click();
+    escape();
+    release(["X/Y"]);
+    await flush();
+    expect(setOptions).not.toHaveBeenCalled();
+  });
+
+  it("dispose de la barre : le dialogue est détruit (un seul destroy), rien n'est appliqué", async () => {
+    await open();
+    toolbar.dispose();
+    expect(stubDialog.instances[0]!.destroyCount).toBe(1);
+    expect(root().isConnected).toBe(false);
+    expect(setOptions).not.toHaveBeenCalled();
   });
 });

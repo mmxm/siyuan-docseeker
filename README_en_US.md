@@ -11,7 +11,7 @@ Full-text search inside the PDFs of your SiYuan workspace. Results are shown as 
 - **Opens on the right page**: a click opens the PDF in SiYuan's viewer, on the matching page, centred on the area, with a highlight overlay. This also works when the PDF is already open.
 - **Ranking by word proximity and font size**: for a query of several words, pages where the words are close together (on the same line) move up. Passages set in large type (headings) move up too, including for a single-word query. The ranking stays close to that of DocSeeker, the original application, but is not identical to it.
 - **Expandable pages**: each document first shows a few pages. "and N other pages" reveals 10 more at each click (200 pages at most per document).
-- **Filters, sorting and keyboard**: filter by folder, SiYuan document, name, number of pages or date; sort and group the results; navigate with the keyboard; reuse a previous search from the history or from the saved criteria.
+- **Filters, sorting and keyboard**: filter by SiYuan notebook or document, name, number of pages or date; sort and group the results; navigate with the keyboard; reuse a previous search from the history or from the saved criteria.
 - **Floating window or tab**: the search opens in a tab (by default) or in a floating window, as chosen in the plugin settings.
 
 ## Installation
@@ -71,23 +71,25 @@ Things to know:
 
 The **Filtres** (Filters) button of the toolbar opens a dialogue with:
 
-- the **folder**, chosen from the list (menu of the **Spécifier le chemin** / Specify path button), with or without its sub-folders (**Inclure les documents enfants** / Include child documents button; see "Filtering by SiYuan document");
 - the **document name**: part of the title is enough, case and accents are ignored;
 - the **number of pages**: at least and at most;
 - the **modification date**: PDF modified after a given date.
 
 **Confirmer** (Confirm) applies the filters, **Annuler** (Cancel) ignores them, **Réinitialiser les filtres** (Reset filters) clears them. Filters do not restrict the search: they hide documents from the results. They are not kept from one session to the next.
 
+The path is not chosen in this dialogue: it is set with the **Spécifier le chemin** (Specify path) button (see below).
+
 ### Filtering by SiYuan document
 
-The **Spécifier le chemin** (Specify path) menu offers, in addition to the file folders, two sections: **Dossiers de fichiers** (File folders) and **Documents SiYuan** (SiYuan documents). Documents are listed by notebook, then by document, with sub-documents indented (500 entries at most).
+The **Spécifier le chemin** (Specify path) button opens a dialogue that reproduces the one of SiYuan's search: same title, same **Recherche...** (Search...) field, a tree of notebooks and documents that unfolds on demand, and **Annuler** (Cancel) and **Confirmer** (Confirm) buttons.
 
 - Choosing a notebook or a document keeps only the PDFs cited by that document.
-- Sub-documents are included by default. The **Inclure les documents enfants** (Include child documents) button excludes them; for a notebook, only its top-level documents then remain.
-- Only one path is active at a time: a folder or a document.
-- While this filter is active, PDFs that no document cites are excluded. The tooltip of the label says so.
+- Several paths can be chosen: **Cmd+click** on Mac, **Ctrl+click** elsewhere (20 paths at most). A PDF stays in the results if one of the chosen paths cites it, and the other filters apply on top.
+- Sub-documents are included. The **Inclure les documents enfants** (Include child documents) button excludes them. It is disabled while no document is chosen, or if only notebooks are; a notebook always includes all its documents.
+- The chosen path is shown in the toolbar, with a cross to remove it. While it is active, PDFs that no document cites are excluded. The tooltip of the label says so.
+- The filter by file folder no longer exists. A session or a saved criterion that contained it applies without it, with a warning.
 
-The plugin reads the tree from your own SiYuan kernel. Right after SiYuan starts, its index is sometimes not ready yet: the plugin says so and offers **Réessayer** (Retry). A filter that cannot be applied is never ignored silently: a message explains why.
+The plugin reads the tree from your own SiYuan kernel. Right after SiYuan starts, its index is sometimes not ready yet: the plugin says so ("Réessayez dans un instant", try again in a moment). A filter that cannot be applied is never ignored silently: a message explains why.
 
 ### Sorting and grouping
 
@@ -123,13 +125,18 @@ The icon on the right of the field, or **Alt+↓**, shows the last 20 searches. 
 
 ### Saved criteria
 
-The **Critères enregistrés** (Saved criteria) button, a bookmark icon placed after **Spécifier le chemin** (Specify path), keeps a complete search: the query, the path, the filters, the sort and the grouping.
+A line below the search field shows the **Critères enregistrés** (Saved criteria) as chips. A criterion keeps a complete search: the query, the path, the filters, the sort and the grouping. The chip of the current criterion is highlighted.
 
-- **Enregistrer les critères actuels…** (Save the current criteria…): give it a name of 80 characters at most. The query is limited to 200 characters, and 30 criteria at most can be saved. A name already in use can be replaced, after confirmation (**Remplacer** / Replace button).
-- **Choosing a criterion** in the list: it is applied and the search runs again.
-- **Supprimer un critère** (Delete a criterion): submenu of the button.
+The same line has two buttons: **Enregistrer les critères de requête** (Save the query criteria) and **Réinitialiser les critères de recherche** (Reset the search criteria). Both actions are also in the **Plus** (More) menu.
 
-Criteria are kept in the plugin settings. An unreadable criterion is ignored, with a warning in the settings log.
+- **Save**: give it a name of 80 characters at most, in the dialogue that opens (field **Remarques**, Notes). The query is limited to 200 characters, and 30 criteria at most can be saved. If the name already exists, the plugin asks whether to overwrite it; renaming and merging follow SiYuan's rules.
+- **Recall**: clicking a chip applies the criterion, path included, and runs the search again. If a saved path no longer exists, it is removed and a message names it. A document that exists but cites no PDF stays applied: the result is empty.
+- **Delete**: the cross on the chip deletes the criterion, without confirmation.
+- **Reset**: clears the query, the sort, the grouping and the filters. The path is kept, as in SiYuan.
+
+Recalling a criterion also applies its path, whereas SiYuan keeps the current path: this is a choice of the plugin.
+
+Criteria are kept in the plugin settings (`settings.json`), not in SiYuan's search. An unreadable criterion is ignored, with a warning in the settings log; it stays in the file.
 
 ### Floating window or tab
 
@@ -153,13 +160,14 @@ No command has a shortcut by default. To assign one, open SiYuan's settings, go 
 ## Known limitations
 
 - **Target: the SiYuan webapp on a computer**, tested with SiYuan 3.8.9. Mobile is not supported. The desktop application is declared in the manifest but has not been tested.
-- **Filters, filtering by SiYuan document, saved criteria, sorting, keyboard, history and floating window** have been tried in the SiYuan 3.8.9 webapp, on a test workspace. They are not yet validated in the desktop application. The dark theme, the 320 px width, and the highlight in the panel opened on the right have not been checked yet. On macOS, **Alt+↓** may be captured by the system before it reaches the plugin.
+- **Filters, filtering by SiYuan document, saved criteria, sorting, keyboard, history and floating window** have been tried in the SiYuan 3.8.9 webapp, on a test workspace (the path dialogue and the criteria line were checked with screenshots). They are not yet validated in the desktop application. The dark theme, the 320 px width, the long path label and the highlight in the panel opened on the right have not been checked yet. The path dialogue has not been compared pixel by pixel with SiYuan's, and it does not have the input history chevron of SiYuan. On macOS, **Alt+↓** may be captured by the system before it reaches the plugin.
 - **PDFs without text are skipped**: a scanned PDF (an image with no text layer) is not indexed and is reported in the tab. There is no OCR.
 - **No substring search**: search works on whole words, with a prefix on the last word only. "pco" does not find "BPCO".
 - **Ranking close to DocSeeker, not identical**: font size is approximated by the height of the words as PDF.js reports it. On 3 PDFs only, this height turned out to be about 6 to 12% larger than the one PyMuPDF gives (PyMuPDF is the extraction engine of DocSeeker); this gap is not corrected. Only the 5 best pages of each document are measured for the ranking. Quoted phrases are not supported.
 - **Previous version of the plugin**: version 0.2.0 cannot read the updated indexes. Do not use both versions on the same SiYuan folder.
 - **Scope**: only PDFs in `data/assets` are indexed, not SiYuan documents. SiYuan documents are only used to filter the results.
 - **Moved document**: its path changes. A saved criterion that targeted it may then find nothing; the plugin says so if no PDF is left.
+- **Path too broad**: a path that cites more than 50,000 PDFs cannot be applied; the plugin says so instead of filtering partially.
 
 ## Privacy
 

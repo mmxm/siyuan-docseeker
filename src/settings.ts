@@ -1,6 +1,6 @@
 import { normalizeHistory } from "./search/searchHistory";
 import { DEFAULT_SORT, isRecord, sortFromValue, type SortSpec } from "./search/resultOptions";
-import { normalizeCriteriaList, removeCriteria, upsertCriteria, type SaveCriteriaResult, type SavedCriteria } from "./search/savedCriteria";
+import { MAX_CRITERIA, normalizeCriteriaList, removeCriteria, upsertCriteria, type SaveCriteriaResult, type SavedCriteria } from "./search/savedCriteria";
 
 /**
  * Réglages persistés du plugin (indexation automatique). Module pur : le chargement et l'enregistrement
@@ -136,11 +136,12 @@ export interface SettingsStore {
   update(patch: Partial<DocSeekerSettings>): Promise<void>;
   subscribe(listener: () => void): () => void;
   /**
-   * Enregistre (ou remplace, même nom) un critère. RELIT le fichier et applique le changement à la liste lue, pour ne pas écraser
+   * Enregistre un critère (remplace celui de même nom, retire aussi `removeNames` : renommage et fusion, en une seule écriture ; le
+   * critère enregistré passe en fin de liste, comme dans la recherche native). RELIT le fichier et applique le changement à la liste lue, pour ne pas écraser
    * ce qu'une autre fenêtre y a écrit ; opérations sérialisées avec les autres écritures. Refus (`error`) sans écriture ; rejette si
    * la relecture ou l'écriture échoue (en cas d'échec d'écriture, la liste en mémoire est restaurée et les écouteurs notifiés).
    */
-  saveCriteria(criteria: SavedCriteria): Promise<SaveCriteriaResult>;
+  saveCriteria(criteria: SavedCriteria, removeNames?: readonly string[]): Promise<SaveCriteriaResult>;
   /** Retire un critère (relecture et fusion comme `saveCriteria`) ; vrai s'il existait. */
   deleteCriteria(name: string): Promise<boolean>;
 }
@@ -152,6 +153,18 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
   let version = 0;
   let savedVersion = 0;
   let chain: Promise<void> = Promise.resolve();
+  /**
+   * Entrées de critères du fichier que cette version ne comprend pas (autre version du plugin, entrée corrompue), copiées TELLES
+   * QUELLES (30 au plus) après les critères valides à chaque écriture : elles ne sont jamais affichées, jamais comptées dans la limite
+   * des 30 critères et jamais perdues. Mises à jour à chaque lecture du fichier (initiale ou relecture avant écriture).
+   */
+  let unrecognized: readonly unknown[] = [];
+  const keepUnrecognized = (raw: readonly unknown[]): void => {
+    unrecognized = raw.slice(0, MAX_CRITERIA);
+  };
+  /** Valeur écrite sur disque : les réglages, plus les entrées de critères non reconnues après les critères valides. */
+  const forDisk = (value: DocSeekerSettings): DocSeekerSettings =>
+    unrecognized.length === 0 ? value : { ...value, savedCriteria: [...value.savedCriteria, ...unrecognized] as SavedCriteria[] };
 
   const notify = (): void => {
     for (const listener of [...listeners]) {
@@ -172,8 +185,9 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
       deps.onWarn("Réglages illisibles à la relecture : écriture annulée", error);
       throw error;
     }
-    const { list, warnings } = normalizeCriteriaList(raw["savedCriteria"]);
+    const { list, warnings, unrecognized: rejected } = normalizeCriteriaList(raw["savedCriteria"]);
     for (const warning of warnings) deps.onWarn(warning);
+    keepUnrecognized(rejected);
     return list;
   };
 
@@ -193,7 +207,7 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
           notify();
         }
       }
-      await deps.save(current);
+      await deps.save(forDisk(current));
       savedVersion = Math.max(savedVersion, target);
     });
     chain = task.catch(() => undefined);
@@ -212,8 +226,10 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
       deps.onWarn(message, error);
     };
     try {
+      const raw = await deps.load();
+      if (isRecord(raw) && !Array.isArray(raw)) keepUnrecognized(normalizeCriteriaList(raw["savedCriteria"]).unrecognized);
       current = normalizeSettings(
-        await deps.load(),
+        raw,
         warn,
         (count) => {
           try {
@@ -276,7 +292,7 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
         notify();
         const target = version;
         try {
-          await deps.save(current);
+          await deps.save(forDisk(current));
         } catch (error) {
           // Écriture échouée : la liste en mémoire doit rester celle du fichier (un critère supprimé ne doit pas disparaître du menu
           // pour revenir au redémarrage). Seule la clé des critères est restaurée : un autre réglage modifié entre-temps est gardé.
@@ -310,9 +326,9 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    saveCriteria: (criteria) =>
+    saveCriteria: (criteria, removeNames = []) =>
       mutateCriteria<SaveCriteriaResult>((fresh) => {
-        const out = upsertCriteria(fresh, criteria);
+        const out = upsertCriteria(fresh, criteria, removeNames);
         return "error" in out ? { result: out } : { next: out.list, result: { replaced: out.replaced } };
       }),
     deleteCriteria: (name) =>

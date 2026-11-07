@@ -2,13 +2,15 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FREQUENCY_MINUTES } from "../../src/settings";
+import { DEFAULT_STRINGS } from "../../src/ui/searchView";
 
 const fr = JSON.parse(readFileSync("i18n/fr_FR.json", "utf8")) as Record<string, string>;
 const NEW_KEYS = [
   "autoIndexRunning", "autoIndexCount", "autoIndexUpToDate", "autoIndexFailed", "autoIndexDiscoveryFailed",
   "autoIndexPartialOne", "autoIndexPartialMany", "indexingMayMiss", "clearDoneRebuilding", "clearDoneWillRebuild",
   "settingsSaveFailed", "autoIndexIntervalDisabledHint", "autoIndexMigrating",
-  "filtersLabel", "filtersActiveOne", "filtersActiveMany", "filterAllFolders",
+  "filtersLabel", "filtersActiveOne", "filtersActiveMany",
+  "pathSearchPlaceholder", "pathNoResult", "pathDialogError", "pathDialogTooMany",
   "filterName", "filterMinPages", "filterMaxPages", "filterModifiedAfter", "filterReset", "filterError",
   "filterErrMinMax", "filterErrInteger", "filterErrDate", "hiddenByFiltersOne", "hiddenByFiltersMany",
   "noResultFiltersOne", "noResultFiltersMany",
@@ -21,8 +23,7 @@ const NEW_KEYS = [
   "openInNewTab", "floatingTitle", "openMode", "openModeDesc", "openModeTab", "openModeDialog",
   "commandOpenSearchFloating", "commandOpenSearchTab",
   "highlightUnavailable", "floatingOpenFailed", "openTabFailed", "transferTabFailed",
-  "pathSectionFolders", "pathSectionDocs", "docsLoading", "docsNotReady", "docsRetry", "docsTooLarge", "docsFailed", "docsNone",
-  "docsMoreOne", "docsMoreMany", "docFilterNoPdf", "scopeLoading", "scopeNotReady", "scopeTooLarge", "scopeFailed", "scopeRefreshFailed",
+  "docFilterNoPdf", "scopeLoading", "scopeNotReady", "scopeTooLarge", "scopeFailed", "scopeRefreshFailed",
   "scopeInvalid", "kernelUnavailable",
   "traceKeys", "traceKeysRunning", "traceKeysDone", "traceKeysNoTab", "traceKeysFailed", "traceKeysNoKey",
 ];
@@ -133,7 +134,6 @@ describe("i18n/fr_FR.json", () => {
     expect(fr.filtersLabel).toBe("Filtres");
     expect(fr.filtersActiveOne).toBe("Filtres (1 actif)");
     expect(fr.filtersActiveMany).toBe("Filtres ({n} actifs)");
-    expect(fr.filterAllFolders).toBe("Tous les chemins");
     expect(fr.filterError).toBe("Erreur : ");
     expect(fr.hiddenByFiltersOne).toBe("1 document masqué par les filtres");
     expect(fr.hiddenByFiltersMany).toBe("{n} documents masqués par les filtres");
@@ -223,7 +223,7 @@ describe("i18n/fr_FR.json", () => {
     const keys = [
       "pathSpecify", "includeChildren", "moreMenu", "sortMenu", "groupMenu", "groupNone", "removePath", "clearField",
       "dialogCancel", "dialogConfirm", "historyEmpty", "historyIcon", "historyClear", "filtersLabel", "filtersActiveOne",
-      "filtersActiveMany", "filterAllFolders", "groupByDocument", "expandAll", "collapseAll",
+      "filtersActiveMany", "groupByDocument", "expandAll", "collapseAll",
       ...(["Desc", "Asc"].flatMap((d) => ["Relevance", "Modified", "Name"].map((k) => `sort${k}${d}`))),
     ];
     for (const key of keys.filter((k) => typeof fr[k] === "string")) expect(fr[key], key).not.toMatch(/[<>&]/);
@@ -250,17 +250,6 @@ describe("i18n/fr_FR.json", () => {
     // La définition de DEFAULT_STRINGS écrit les clés sans guillemets : seule une vraie utilisation les entoure.
     const unused = Object.keys(DEFAULT_STRINGS).filter((k) => !new RegExp(`["'\`]${k}["'\`]`).test(sources));
     expect(unused).toEqual([]);
-  });
-
-  it("menu des dossiers : « … N autre(s) dossier(s) », avec {n}, sans < > &, identique dans la vue et fr_FR.json", async () => {
-    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
-    for (const key of ["foldersMoreOne", "foldersMoreMany"]) {
-      expect(fr[key], key).toContain("{n}");
-      expect(fr[key], key).not.toMatch(/[<>&]/);
-      expect(DEFAULT_STRINGS[key], key).toBe(fr[key]);
-    }
-    expect(fr.foldersMoreOne).toBe("… {n} autre dossier");
-    expect(fr.foldersMoreMany).toBe("… {n} autres dossiers");
   });
 });
 
@@ -293,8 +282,7 @@ describe("libellés de la fenêtre flottante (J10 10d)", () => {
 
 describe("portée de documents SiYuan : textes", () => {
   const SCOPE_KEYS = [
-    "filterAllFolders", "pathSectionFolders", "pathSectionDocs", "docsLoading", "docsNotReady", "docsRetry", "docsTooLarge",
-    "docsFailed", "docsNone", "docsMoreOne", "docsMoreMany", "docFilterNoPdf", "scopeLoading", "scopeNotReady", "scopeTooLarge",
+    "docFilterNoPdf", "scopeLoading", "scopeNotReady", "scopeTooLarge",
     "scopeFailed", "scopeRefreshFailed", "scopeInvalid", "kernelUnavailable",
   ];
 
@@ -306,45 +294,44 @@ describe("portée de documents SiYuan : textes", () => {
   });
 
   it("textes exacts demandés", () => {
-    expect(fr.pathSectionFolders).toBe("Dossiers de fichiers");
-    expect(fr.pathSectionDocs).toBe("Documents SiYuan");
-    expect(fr.docsLoading).toBe("Chargement des documents…");
-    expect(fr.docsRetry).toBe("Réessayer");
     expect(fr.docFilterNoPdf).toBe("Les PDF qu'aucun document ne cite sont exclus.");
     expect(fr.scopeLoading).toBe("Chargement du chemin…");
-    expect(fr.docsMoreOne).toBe("… {n} autre document masqué");
-    expect(fr.docsMoreMany).toBe("… {n} autres documents masqués");
   });
 });
 
 describe("critères enregistrés : textes", () => {
   const EXPECTED: Record<string, string> = {
-    criteriaMenu: "Critères enregistrés",
-    criteriaApplied: "Critères : {name}",
-    criteriaSave: "Enregistrer les critères actuels…",
-    criteriaSaveTitle: "Enregistrer les critères",
-    criteriaName: "Nom du critère",
-    criteriaSaveConfirm: "Enregistrer",
-    criteriaReplaceConfirm: "Remplacer",
-    criteriaReplaceAsk: "Un critère nommé « {name} » existe déjà. Remplacez-le ou changez le nom.",
-    criteriaSummary: "Requête : {query}",
-    criteriaDelete: "Supprimer un critère",
-    criteriaEmpty: "Aucun critère enregistré",
-    criteriaSaved: "Critères enregistrés : {name}",
-    criteriaReplaced: "Critères remplacés : {name}",
-    criteriaDeleted: "Critère supprimé : {name}",
-    criteriaErrEmpty: "Saisissez un nom pour ces critères.",
+    criteriaSave: "Enregistrer les critères de requête",
+    criteriaReset: "Réinitialiser les critères de recherche",
+    criteriaResetHint: "Les conditions de requête actuelles ne seront plus utilisées pour la prochaine requête",
+    criteriaMemo: "Remarques",
+    criteriaErrEmpty: "L'entrée ne peut pas être vide",
+    criteriaOverwrite: "Le nom de la requête est dupliqué, voulez-vous l'écraser ?",
+    criteriaMerge: "Voulez-vous supprimer {x} et affecter sa condition de requête à {y} ?",
+    criteriaRename: "Mettre à jour le nom {x} en {y} ?",
     criteriaErrTooLong: "Le nom ne peut pas dépasser 80 caractères.",
     criteriaErrQuery: "La requête ne peut pas dépasser 200 caractères.",
     criteriaErrLimit: "Vous avez déjà 30 critères. Supprimez-en un pour enregistrer celui-ci.",
-    criteriaErrNothing: "Rien à enregistrer : saisissez une requête ou choisissez un filtre.",
     criteriaSaveFailed: "Impossible d'enregistrer les critères (voir le journal dans les paramètres)",
     criteriaDeleteFailed: "Impossible de supprimer le critère (voir le journal dans les paramètres)",
+    criteriaResetFailed: "Impossible de réinitialiser la recherche (voir le journal dans les paramètres)",
     criteriaLoadFailed: "Critères illisibles : ils sont ignorés (voir le journal dans les paramètres)",
-    criteriaMissingPath: "Le chemin de ce critère n'existe plus. La recherche s'est lancée sans lui.",
+    criteriaMissingPath: "Le chemin « {x} » de ce critère n'existe plus. Il a été retiré de la recherche.",
     criteriaAlreadyDeleted: "Ce critère était déjà supprimé.",
     criteriaRecallFailed: "Impossible d'appliquer ce critère (voir le journal dans les paramètres)",
   };
+
+  it("a retiré les clés de l'ancien bouton signet, de son menu et de l'ancien dialogue (nom, résumé, mode Remplacer)", () => {
+    const dead = [
+      "criteriaMenu", "criteriaApplied", "criteriaSaveTitle", "criteriaName", "criteriaSaveConfirm", "criteriaReplaceConfirm",
+      "criteriaReplaceAsk", "criteriaSummary", "criteriaDelete", "criteriaEmpty", "criteriaSaved", "criteriaReplaced",
+      "criteriaDeleted", "criteriaErrNothing",
+    ];
+    for (const key of dead) {
+      expect(fr, key).not.toHaveProperty(key);
+      expect(DEFAULT_STRINGS, key).not.toHaveProperty(key);
+    }
+  });
 
   it.each(Object.entries(EXPECTED))("%s : texte exact, identique dans la vue et fr_FR.json", async (key, text) => {
     const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
@@ -357,8 +344,41 @@ describe("critères enregistrés : textes", () => {
   });
 
   it("les variables attendues sont présentes exactement une fois", () => {
-    for (const [key, variable] of [["criteriaApplied", "name"], ["criteriaReplaceAsk", "name"], ["criteriaSummary", "query"], ["criteriaSaved", "name"], ["criteriaReplaced", "name"], ["criteriaDeleted", "name"]] as const) {
-      expect(String(fr[key]).match(new RegExp(`\\{${variable}\\}`, "g")), key).toHaveLength(1);
+    for (const [key, variable] of [["criteriaMerge", "x"], ["criteriaMerge", "y"], ["criteriaRename", "x"], ["criteriaRename", "y"]] as const) {
+      expect(String(fr[key]).match(new RegExp(`\\{${variable}\\}`, "g")), `${key} ${variable}`).toHaveLength(1);
     }
+  });
+
+  it("le dialogue « Spécifier le chemin » a les textes du dialogue natif, identiques en français et dans les textes par défaut", () => {
+    const expected: Record<string, string> = {
+      pathSpecify: "Spécifier le chemin",
+      pathSearchPlaceholder: "Recherche...",
+      pathNoResult: "Aucun contenu connexe trouvé",
+      dialogCancel: "Annuler",
+      dialogConfirm: "Confirmer",
+      includeChildren: "Inclure les documents enfants",
+      pathDialogError: "Impossible de lire les documents (voir le journal dans les paramètres).",
+    };
+    for (const [key, text] of Object.entries(expected)) {
+      expect(fr[key], key).toBe(text);
+      expect(DEFAULT_STRINGS[key], key).toBe(text);
+    }
+    expect(fr.pathDialogTooMany).toContain("{n}");
+    expect(DEFAULT_STRINGS["pathDialogTooMany"]).toBe(fr.pathDialogTooMany);
+  });
+
+  it("a retiré les clés de l'ancien menu du chemin et de l'arbre SQL (dossiers de fichiers, chargement, réessai...)", () => {
+    const dead = [
+      "filterAllFolders", "foldersMoreOne", "foldersMoreMany", "pathSectionFolders", "pathSectionDocs", "docsLoading",
+      "docsNotReady", "docsRetry", "docsTooLarge", "docsFailed", "docsNone", "docsMoreOne", "docsMoreMany",
+    ];
+    for (const key of dead) {
+      expect(fr, key).not.toHaveProperty(key);
+      expect(DEFAULT_STRINGS, key).not.toHaveProperty(key);
+    }
+  });
+
+  it("les messages d'erreur du dialogue du chemin sont du texte brut (aucune balise ni entité)", () => {
+    for (const key of ["pathDialogError", "pathDialogTooMany", "pathNoResult", "pathSearchPlaceholder"]) expect(fr[key], key).not.toMatch(/[<>&]/);
   });
 });

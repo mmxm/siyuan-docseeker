@@ -8,23 +8,22 @@ import { decodePageMatches as realDecodePageMatches, decodePagesMatches as realD
 import { rectToPercentStyle, wordBoxesToPageRects, type FractionBox, type PercentStyle } from "./core/crop";
 import { createPageMatchService } from "./search/pageMatches";
 import { createProximityRanker } from "./search/proximityRanker";
-import { ScopeTooLargeError, createScopeResolver, normalizedScope, scopeKey } from "./search/docScope";
-import { DEFAULT_OPTIONS, isProposedSort, listFolders, type SearchOptions } from "./search/resultOptions";
+import { ScopeTooLargeError, createScopeResolver, normalizedScopes, scopeKey, type DocumentScope } from "./search/docScope";
+import { DEFAULT_OPTIONS, isProposedSort, type SearchOptions } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
 import { addToHistory, clearHistory } from "./search/searchHistory";
 import type { SearchSessionState } from "./search/searchSession";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
-import { listDocTree } from "./siyuan/docQueries";
-import { IndexUnavailableError, type KernelApi } from "./siyuan/kernelApi";
+import { IndexUnavailableError, NotFoundError, type KernelApi } from "./siyuan/kernelApi";
 import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
 import type { SaveCriteriaResult, SavedCriteria } from "./search/savedCriteria";
 import type { DocSeekerSettings } from "./settings";
-import type { OpenDialog, OpenMenu } from "./ui/nativeUiTypes";
+import type { OpenConfirmDialog, OpenCustomDialog, OpenDialog, OpenInputDialog, OpenMenu } from "./ui/nativeUiTypes";
 import { DEFAULT_STRINGS, mountSearchView } from "./ui/searchView";
 
 export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
@@ -49,10 +48,10 @@ export interface SearchTabDeps {
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly onWarn: (message: string, error?: unknown) => void;
   /**
-   * Noyau SiYuan (SQL et liste des cahiers) pour le filtre « portée de documents ». Absent : le menu du chemin ne propose que les
-   * dossiers de fichiers, et une portée restaurée d'une session est retirée avec un message.
+   * Noyau SiYuan (SQL des PDF cités, cahiers, documents, recherche et chemins lisibles) pour le filtre « portée de documents ».
+   * Absent : pas de bouton « Spécifier le chemin », et une portée restaurée d'une session est retirée avec un message.
    */
-  readonly kernel?: Pick<KernelApi, "sql" | "lsNotebooks">;
+  readonly kernel?: Pick<KernelApi, "sql" | "lsNotebooks" | "listDocsByPath" | "searchDocs" | "getHPathsByPaths">;
   /** Horloge du cache des portées (30 s) ; `Date.now` par défaut. */
   readonly now?: () => number;
   /**
@@ -60,6 +59,11 @@ export interface SearchTabDeps {
    * raté après l'ouverture du PDF). Texte brut, sans `<`, `>` ni `&` (SiYuan l'insère comme HTML). Le journal reçoit toujours l'incident.
    */
   readonly notify?: (message: string) => void;
+  /**
+   * Notification globale de SiYuan (toast), qui survit à l'onglet : échec d'écriture d'un critère terminé après sa fermeture.
+   * Texte brut, sans `<`, `>` ni `&`. Absent : l'échec reste tracé mais pas montré.
+   */
+  readonly toast?: (message: string) => void;
   /** Activité d'indexation pour l'indicateur discret (fournie par le plugin ; l'onglet ne voit pas l'indexeur). */
   readonly indexActivity?: {
     getSnapshot(): IndexActivitySnapshot;
@@ -102,6 +106,11 @@ export interface SearchTabDeps {
   /** Menus et dialogues natifs de SiYuan (voir `src/siyuan/nativeUi.ts`), injectés par le plugin. */
   readonly openMenu: OpenMenu;
   readonly openDialog: OpenDialog;
+  /** Dialogue à contenu libre (« Spécifier le chemin ») ; absent : pas de bouton de chemin. */
+  readonly openCustomDialog?: OpenCustomDialog;
+  /** Dialogues d'entrée et de confirmation natifs (ligne des critères enregistrés) ; absents : pas de ligne de critères. */
+  readonly openInputDialog?: OpenInputDialog;
+  readonly openConfirmDialog?: OpenConfirmDialog;
   /**
    * Réglages persistés : le tri et le regroupement y sont lus au montage et réécrits à chaque changement.
    * Si le fichier n'est pas encore lu au montage (`ready` en attente), l'onglet démarre avec les défauts puis applique
@@ -114,8 +123,8 @@ export interface SearchTabDeps {
     get(): DocSeekerSettings;
     update(patch: Partial<DocSeekerSettings>): Promise<void>;
     readonly ready?: Promise<void>;
-    /** Critères enregistrés (relecture et fusion à l'écriture). Absents : pas de bouton « Critères enregistrés ». */
-    saveCriteria?(criteria: SavedCriteria): Promise<SaveCriteriaResult>;
+    /** Critères enregistrés (relecture et fusion à l'écriture). Absents : pas de ligne de critères. */
+    saveCriteria?(criteria: SavedCriteria, removeNames?: readonly string[]): Promise<SaveCriteriaResult>;
     deleteCriteria?(name: string): Promise<boolean>;
   };
 }
@@ -317,10 +326,10 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   let lastResolved: { readonly key: string; readonly paths: ReadonlySet<string> } | undefined;
   const controller = createSearchController({
     source: searchStore,
-    scopePaths: (scope, includeChildren) => {
-      const fresh = resolver.peek(scope, includeChildren);
+    scopePaths: (scopes, includeChildren) => {
+      const fresh = resolver.peek(scopes, includeChildren);
       if (fresh) return fresh;
-      return lastResolved?.key === scopeKey(scope, includeChildren) ? lastResolved.paths : undefined;
+      return lastResolved?.key === scopeKey(scopes, includeChildren) ? lastResolved.paths : undefined;
     },
     schedule,
     clear,
@@ -599,17 +608,8 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     controller.submit(query);
   };
   const withoutScopeOptions = (o: SearchOptions): SearchOptions => {
-    const { scope: _scope, ...filters } = o.filters;
+    const { scopes: _scopes, ...filters } = o.filters;
     return { sort: o.sort, filters };
-  };
-  /**
-   * Échec de résolution : tout ce qui était demandé (tri, autres filtres) est appliqué sauf la portée. Le choix d'une portée vide
-   * le dossier de la demande ; le dossier déjà actif est alors rétabli (il n'a pas été remplacé).
-   */
-  const withoutScopeKeepingFolder = (next: SearchOptions): SearchOptions => {
-    const rest = withoutScopeOptions(next);
-    if (rest.filters.folder !== "") return rest;
-    return { sort: rest.sort, filters: { ...rest.filters, folder: controller.getOptions().filters.folder } };
   };
   /** Applique au contrôleur ; mémorise le tri changé et la session (même si le rendu lève). */
   const commitOptions = (next: SearchOptions): void => {
@@ -636,8 +636,6 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     onFailure: () => SearchOptions,
     after?: (applied: boolean) => void,
     restoring = false,
-    /** Critère rappelé : une portée qui ne cite plus aucun PDF (document ou cahier disparu) est retirée, avec un message. */
-    recalled = false,
   ): void => {
     // Restauration de session : appliquée telle quelle, sans mémoriser le tri dans les réglages ni réécrire la session.
     const commit = restoring ? (o: SearchOptions): void => controller.setOptions(o) : commitOptions;
@@ -647,8 +645,8 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     scopeAbort?.abort();
     scopeAbort = undefined;
     const generation = ++scopeGeneration;
-    const rawScope = next.filters.scope;
-    if (rawScope !== undefined && normalizedScope(rawScope) === undefined) {
+    const rawScope = next.filters.scopes;
+    if (rawScope !== undefined && normalizedScopes(rawScope) === undefined) {
       // Portée illisible (session ou entrée altérée) : jamais retirée en silence, ni appliquée.
       onWarn("Portée de documents invalide retirée des options", rawScope);
       pendingOptions = undefined;
@@ -659,23 +657,11 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       flushDeferred();
       return;
     }
-    const { scope, includeSubfolders } = next.filters;
-    const cached = scope ? resolver.peek(scope, includeSubfolders) : undefined;
-    /** Rappel d'un critère dont le chemin n'existe plus : tout est appliqué sauf la portée, et l'utilisateur en est averti. */
-    const applyWithoutMissingPath = (): void => {
-      clearScopeMessage();
-      commit(withoutScopeOptions(next));
-      setScopeMessage(tr("criteriaMissingPath"));
-    };
-    if (scope === undefined || cached) {
+    const { scopes, includeSubfolders } = next.filters;
+    const cached = scopes ? resolver.peek(scopes, includeSubfolders) : undefined;
+    if (scopes === undefined || cached) {
       pendingOptions = undefined;
-      if (recalled && cached?.size === 0) {
-        applyWithoutMissingPath();
-        after?.(true);
-        flushDeferred();
-        return;
-      }
-      if (scope && cached) lastResolved = { key: scopeKey(scope, includeSubfolders), paths: cached };
+      if (scopes && cached) lastResolved = { key: scopeKey(scopes, includeSubfolders), paths: cached };
       clearScopeMessage();
       commit(next);
       after?.(true);
@@ -700,15 +686,11 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       flushDeferred();
     };
     resolver
-      .resolve(scope, includeSubfolders, mine.signal)
+      .resolve(scopes, includeSubfolders, mine.signal)
       .then(
         (paths) =>
           finish(() => {
-            if (recalled && paths.size === 0) {
-              applyWithoutMissingPath();
-              return;
-            }
-            lastResolved = { key: scopeKey(scope, includeSubfolders), paths };
+            lastResolved = { key: scopeKey(scopes, includeSubfolders), paths };
             clearScopeMessage();
             commit(next);
           }),
@@ -726,17 +708,17 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
    * utilise l'ensemble précédent puis est relancée. Un échec garde l'ensemble précédent, avec un message et une trace.
    */
   const refreshScope = (): void => {
-    const { scope, includeSubfolders } = controller.getOptions().filters;
+    const { scopes, includeSubfolders } = controller.getOptions().filters;
     // Une portée est en résolution : les options du contrôleur sont périmées et le message « Chargement » ne doit pas être écrasé.
-    if (disposed || pendingOptions !== undefined || scope === undefined || resolver.peek(scope, includeSubfolders)) return;
+    if (disposed || pendingOptions !== undefined || scopes === undefined || resolver.peek(scopes, includeSubfolders)) return;
     const generation = scopeGeneration;
     const mine = (scopeAbort ??= new AbortController());
     resolver
-      .resolve(scope, includeSubfolders, mine.signal)
+      .resolve(scopes, includeSubfolders, mine.signal)
       .then(
         (paths) => {
           if (generation !== scopeGeneration || disposed) return;
-          lastResolved = { key: scopeKey(scope, includeSubfolders), paths };
+          lastResolved = { key: scopeKey(scopes, includeSubfolders), paths };
           if (scopeMessage === tr("scopeRefreshFailed")) clearScopeMessage();
           controller.invalidate();
         },
@@ -744,7 +726,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
           if (generation !== scopeGeneration || disposed) return;
           onWarn("Documents du filtre non relus : l'ensemble précédent est conservé", error);
           // « Liste précédente conservée » n'est vrai que si elle correspond à cette portée ; sinon on décrit l'erreur.
-          const keptPrevious = lastResolved?.key === scopeKey(scope, includeSubfolders);
+          const keptPrevious = lastResolved?.key === scopeKey(scopes, includeSubfolders);
           setScopeMessage(keptPrevious ? tr("scopeRefreshFailed") : describeScopeError(error));
         },
       )
@@ -752,23 +734,80 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   };
 
   // --- Critères enregistrés : rappel (options, regroupement, puis requête) et branchement sur les réglages.
+  /** Le document existe-t-il ? « Introuvable » du noyau ou aucun chemin lisible : non ; toute autre erreur est relancée (vérification en échec). */
+  const documentExists = async (kernel: NonNullable<SearchTabDeps["kernel"]>, docPath: string, signal: AbortSignal): Promise<boolean> => {
+    try {
+      const answer = await kernel.getHPathsByPaths([docPath], signal);
+      return answer.length === 1 && answer[0] !== "";
+    } catch (error) {
+      if (error instanceof NotFoundError) return false;
+      throw error;
+    }
+  };
+  /** Portées dont le cahier ou le document n'existe plus (un document sans PDF existe : il n'est PAS ici). Rejette si le noyau échoue. */
+  const missingScopes = async (scopes: readonly DocumentScope[], signal: AbortSignal): Promise<readonly DocumentScope[]> => {
+    const kernel = deps.kernel;
+    if (!kernel) return []; // pas de noyau : la résolution de la portée échouera avec son propre message
+    const boxes = new Set((await kernel.lsNotebooks(signal)).map((n) => n.id));
+    const exists = await Promise.all(
+      scopes.map(async (scope) => boxes.has(scope.box) && (scope.kind === "notebook" || (await documentExists(kernel, scope.docPath, signal)))),
+    );
+    return scopes.filter((_scope, i) => !exists[i]);
+  };
+  let recallAbort: AbortController | undefined;
+  cleanups.push(() => recallAbort?.abort());
   const recallCriteria = (criteria: SavedCriteria): void => {
     if (disposed) return;
+    recallAbort?.abort();
+    recallAbort = undefined;
     // Comme un choix manuel : la portée de documents repasse par la résolution asynchrone. Si elle échoue, rien n'est appliqué (le
     // message de portée est affiché) : la recherche ne se relance pas sans un filtre que le critère demandait.
-    requestOptions(
-      { sort: criteria.sort, filters: criteria.filters },
-      () => controller.getOptions(),
-      (applied) => {
-        if (!applied || disposed) return;
-        groupTouched = true;
-        persist("regrouper par document", { groupByDocument: criteria.groupByDocument });
-        view.setGroupByDocument(criteria.groupByDocument);
-        view.restoreQuery(criteria.query); // champ rempli et recherche relancée, hors historique (la requête est déjà enregistrée)
+    const apply = (filters: SearchOptions["filters"], missing: readonly DocumentScope[]): void => {
+      requestOptions(
+        { sort: criteria.sort, filters },
+        () => controller.getOptions(),
+        (applied) => {
+          if (!applied || disposed) return;
+          // Seules les portées INEXISTANTES sont retirées, et nommées : une portée qui existe sans PDF reste appliquée.
+          if (missing.length > 0) setScopeMessage(tr("criteriaMissingPath").replace("{x}", () => missing.map((m) => m.label).join(", ")));
+          groupTouched = true;
+          persist("regrouper par document", { groupByDocument: criteria.groupByDocument });
+          view.setGroupByDocument(criteria.groupByDocument);
+          view.restoreQuery(criteria.query); // champ rempli et recherche relancée, hors historique (la requête est déjà enregistrée)
+        },
+      );
+    };
+    const scopes = criteria.filters.scopes;
+    if (scopes === undefined || normalizedScopes(scopes) === undefined) {
+      apply(criteria.filters, []); // pas de portée (ou illisible : requestOptions la signale)
+      return;
+    }
+    // Vérification d'existence AVANT la résolution : zéro PDF ne veut pas dire « inexistant ».
+    scopeAbort?.abort();
+    scopeAbort = undefined;
+    const generation = ++scopeGeneration;
+    const mine = new AbortController();
+    recallAbort = mine;
+    pendingOptions = { sort: criteria.sort, filters: criteria.filters }; // la barre l'affiche déjà ; une requête soumise attend
+    setScopeMessage(tr("scopeLoading"));
+    const superseded = (): boolean => disposed || mine.signal.aborted || generation !== scopeGeneration;
+    missingScopes(scopes, mine.signal).then(
+      (missing) => {
+        if (superseded()) return;
+        pendingOptions = undefined;
+        const kept = scopes.filter((s) => !missing.includes(s));
+        const { scopes: _scopes, ...rest } = criteria.filters;
+        apply(kept.length > 0 ? { ...rest, scopes: kept } : rest, missing);
       },
-      false,
-      true,
-    );
+      (error: unknown) => {
+        if (superseded()) return;
+        pendingOptions = undefined;
+        onWarn("Existence des chemins du critère non vérifiée : critère non appliqué", error);
+        setScopeMessage(describeScopeError(error));
+        view.refreshOptions();
+        flushDeferred();
+      },
+    ).catch((error: unknown) => onWarn("Rappel du critère en échec", error));
   };
   const criteriaStore = deps.settings;
   const saveCriteriaFn = criteriaStore?.saveCriteria?.bind(criteriaStore);
@@ -806,6 +845,8 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     },
     openMenu: deps.openMenu,
     openDialog: deps.openDialog,
+    ...(deps.openCustomDialog ? { openCustomDialog: deps.openCustomDialog } : {}),
+    notify: flashMessage,
     onWarn,
     ...(deps.onOpenSettings ? { onOpenSettings: deps.onOpenSettings } : {}),
     getDocMeta: (docId) => {
@@ -815,18 +856,20 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     // Filtres de la session : mémoire du contrôleur seulement. Seul le TRI est mémorisé dans les réglages.
     options: {
       getOptions: () => pendingOptions ?? controller.getOptions(),
-      setOptions: (next) => requestOptions(next, () => withoutScopeKeepingFolder(next)),
-      getFolders: () => listFolders(searchStore.listDocs()),
-      ...(deps.kernel ? { getDocTree: (signal?: AbortSignal) => listDocTree(deps.kernel as Pick<KernelApi, "sql" | "lsNotebooks">, signal) } : {}),
+      setOptions: (next) => requestOptions(next, () => withoutScopeOptions(next)),
+      ...(deps.kernel ? { pathKernel: deps.kernel } : {}),
     },
-    ...(criteriaStore && saveCriteriaFn && deleteCriteriaFn
+    ...(criteriaStore && saveCriteriaFn && deleteCriteriaFn && deps.openInputDialog && deps.openConfirmDialog
       ? {
+          openInputDialog: deps.openInputDialog,
+          openConfirmDialog: deps.openConfirmDialog,
           criteria: {
             list: () => criteriaStore.get().savedCriteria ?? [],
             save: saveCriteriaFn,
             remove: deleteCriteriaFn,
             recall: recallCriteria,
             notify: flashMessage,
+            ...(deps.toast ? { toast: deps.toast } : {}),
           },
         }
       : {}),

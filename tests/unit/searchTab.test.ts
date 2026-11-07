@@ -97,11 +97,6 @@ const applyFilters = (host: HTMLElement, fields: Readonly<Record<string, string>
   return dialog.confirm();
 };
 const filtersLabel = (host: HTMLElement): string => host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")!;
-/** Dossiers proposés par le menu « Spécifier le chemin » (valeurs filtrées : libellés sans « Tous les chemins »). */
-const folderMenu = (host: HTMLElement): string[] => {
-  iconBtn(host, "Spécifier le chemin").click();
-  return fakes.lastMenu().items.map((i) => (i.label ?? "").replace(/\u00a0/g, ""));
-};
 
 function harness(over: { ids?: string[]; autoStart?: boolean; paths?: Readonly<Record<string, string>> } = {}): Harness {
   const ids = over.ids ?? ["a"];
@@ -1189,12 +1184,13 @@ describe("mountSearchTab : résultats partiels pendant l'indexation", () => {
 });
 
 describe("mountSearchTab : filtres (J10 b)", () => {
-  it("monte la barre de filtres, dossiers lus dans l'index partagé, sans persistance", async () => {
+  it("monte la barre de filtres, sans persistance ; sans noyau, pas de bouton de chemin", async () => {
     const h = harness({ ids: ["a", "b"] });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     expect(h.host.querySelector(".docseeker-icons")).not.toBeNull();
-    expect(folderMenu(h.host)).toEqual(["Tous les chemins", "assets"]);
+    expect(h.host.querySelector('.docseeker-icons button[aria-label="Spécifier le chemin"]')).toBeNull();
+    expect(h.host.querySelector('.docseeker-icons button[aria-label="Filtres"]')).not.toBeNull();
     tab.dispose();
   });
 
@@ -1255,22 +1251,13 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     setItem.mockRestore();
   });
 
-  it("la liste des dossiers vient de searchStore.listDocs() (assets/a/ et assets/b/)", async () => {
-    const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
-    const tab = mountSearchTab(h.host, h.deps);
-    await flush();
-    expect(folderMenu(h.host)).toEqual(["Tous les chemins", "assets", "a", "b"]);
-    tab.dispose();
-  });
-
   it("sans requête soumise : ni lecture du store ni re-classement ; la soumission suivante applique le filtre mémorisé", async () => {
-    const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
+    const h = harness({ ids: ["a", "b"] });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     const reads = h.read.mock.calls.length;
     const decodes = h.decodePageMatches.mock.calls.length;
-    iconBtn(h.host, "Spécifier le chemin").click();
-    pick(fakes.lastMenu(), "\u00a0\u00a0a");
+    applyFilters(h.host, { "Nom du document contient": "beta" });
     await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS * 2);
     await flush();
     expect(h.read.mock.calls.length).toBe(reads);
@@ -1384,8 +1371,6 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     await flush();
     applyFilters(h.host, { "Nom du document contient": "beta" });
     applyFilters(h.host, { "Pages au moins": "2" });
-    iconBtn(h.host, "Spécifier le chemin").click();
-    pick(fakes.lastMenu(), "assets");
     await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
     await flush();
     expect(update).not.toHaveBeenCalled();

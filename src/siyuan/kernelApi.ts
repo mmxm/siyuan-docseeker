@@ -52,6 +52,29 @@ export interface NotebookInfo {
   readonly id: string;
   readonly name: string;
   readonly closed: boolean;
+  /** Icône du cahier : code Unicode hexadécimal (« 1f4d4 »), ou chaîne vide. */
+  readonly icon: string;
+}
+
+/** Document renvoyé par `listDocsByPath` (enfants directs d'un cahier ou d'un document). */
+export interface DocFile {
+  /** `blocks.path` complet (« /ID1/ID2.sy »). */
+  readonly path: string;
+  readonly name: string;
+  /** Icône : code Unicode hexadécimal, ou chaîne vide. */
+  readonly icon: string;
+  /** Nombre de documents enfants (0 : feuille). */
+  readonly subFileCount: number;
+}
+
+/** Résultat de `searchDocs`. `path` vaut « / » pour un cahier. */
+export interface DocSearchHit {
+  readonly path: string;
+  /** Chemin lisible, nom du cahier compris (« Cahier/Parent/Document »). */
+  readonly hPath: string;
+  readonly title: string;
+  readonly box: string;
+  readonly boxIcon: string;
 }
 
 export interface KernelApi {
@@ -70,6 +93,12 @@ export interface KernelApi {
   sql(stmt: string, signal?: AbortSignal): Promise<SqlResult>;
   /** Liste des cahiers (fermés compris). */
   lsNotebooks(signal?: AbortSignal): Promise<readonly NotebookInfo[]>;
+  /** Enfants directs de `path` (« / » : racine du cahier) ; l'arbre se lit paresseusement, un niveau à la fois. */
+  listDocsByPath(notebook: string, path: string, signal?: AbortSignal): Promise<readonly DocFile[]>;
+  /** Documents et cahiers dont le nom contient `k` (recherche de la boîte « Spécifier le chemin »). */
+  searchDocs(k: string, signal?: AbortSignal): Promise<readonly DocSearchHit[]>;
+  /** Chemins lisibles (« Cahier/Parent/Document ») des documents donnés ; une erreur de format si le noyau n'en renvoie pas autant. */
+  getHPathsByPaths(paths: readonly string[], signal?: AbortSignal): Promise<readonly string[]>;
 }
 
 export interface KernelApiOptions {
@@ -276,7 +305,47 @@ function parseNotebooks(data: unknown): readonly NotebookInfo[] {
   ) {
     throw new MalformedResponseError(HTTP_OK, "unexpected lsNotebooks payload (notebooks[{id,name,closed}] required)");
   }
-  return (list as NotebookInfo[]).map((n) => ({ id: n.id, name: n.name, closed: n.closed }));
+  return (list as Record<string, unknown>[]).map((n) => ({
+    id: n["id"] as string,
+    name: n["name"] as string,
+    closed: n["closed"] as boolean,
+    icon: typeof n["icon"] === "string" ? n["icon"] : "",
+  }));
+}
+
+const malformed = (what: string): MalformedResponseError => new MalformedResponseError(HTTP_OK, `unexpected ${what} payload`);
+
+function parseDocFiles(data: unknown): readonly DocFile[] {
+  const files = isPlainRecord(data) ? data["files"] : undefined;
+  if (files === null) return [];
+  if (!Array.isArray(files)) throw malformed("listDocsByPath (files[] required)");
+  return files.map((f: unknown): DocFile => {
+    if (!isPlainRecord(f) || typeof f["path"] !== "string" || typeof f["name"] !== "string") throw malformed("listDocsByPath (path, name required)");
+    const { icon, subFileCount } = f;
+    if ((icon !== undefined && typeof icon !== "string") || (subFileCount !== undefined && typeof subFileCount !== "number")) {
+      throw malformed("listDocsByPath (icon must be text, subFileCount a number)");
+    }
+    return { path: f["path"], name: f["name"], icon: icon ?? "", subFileCount: subFileCount ?? 0 };
+  });
+}
+
+function parseDocHits(data: unknown): readonly DocSearchHit[] {
+  if (data === null || data === undefined) return [];
+  if (!Array.isArray(data)) throw malformed("searchDocs (array required)");
+  return data.map((h: unknown): DocSearchHit => {
+    if (!isPlainRecord(h)) throw malformed("searchDocs (object entries required)");
+    const { path, hPath, title, box, boxIcon } = h;
+    if (typeof path !== "string" || typeof hPath !== "string" || typeof title !== "string" || typeof box !== "string") {
+      throw malformed("searchDocs (path, hPath, title, box required)");
+    }
+    if (boxIcon !== undefined && typeof boxIcon !== "string") throw malformed("searchDocs (boxIcon must be text)");
+    return { path, hPath, title, box, boxIcon: boxIcon ?? "" };
+  });
+}
+
+function parseHPaths(data: unknown): readonly string[] {
+  if (!Array.isArray(data) || !data.every((h) => typeof h === "string")) throw malformed("getHPathsByPaths (array of text required)");
+  return data as string[];
 }
 
 /** Encode chaque segment sans toucher aux `/` (les noms de PDF contiennent espaces, accents). */
@@ -304,7 +373,7 @@ export function createKernelApi(options: KernelApiOptions = {}): KernelApi {
   const guarded = <T>(external: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> =>
     withDeadline(timeoutMs, external, run);
 
-  const postJson = (endpoint: string, body: Record<string, string>, external?: AbortSignal): Promise<Envelope> =>
+  const postJson = (endpoint: string, body: Record<string, unknown>, external?: AbortSignal): Promise<Envelope> =>
     guarded(external, async (signal) => {
       const response = await doFetch(`${baseUrl}${endpoint}`, {
         method: "POST",
@@ -397,6 +466,15 @@ export function createKernelApi(options: KernelApiOptions = {}): KernelApi {
     },
     async lsNotebooks(signal) {
       return parseNotebooks((await postJson("/api/notebook/lsNotebooks", {}, signal)).data);
+    },
+    async listDocsByPath(notebook, path, signal) {
+      return parseDocFiles((await postJson("/api/filetree/listDocsByPath", { notebook, path, flashcard: false }, signal)).data);
+    },
+    async searchDocs(k, signal) {
+      return parseDocHits((await postJson("/api/filetree/searchDocs", { k, flashcard: false }, signal)).data);
+    },
+    async getHPathsByPaths(paths, signal) {
+      return parseHPaths((await postJson("/api/filetree/getHPathsByPaths", { paths: [...paths] }, signal)).data);
     },
   };
 }

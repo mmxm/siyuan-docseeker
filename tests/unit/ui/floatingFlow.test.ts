@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { createSearchSessionStore } from "../../../src/search/searchSession";
 import { mountSearchTab, type SearchTab, type SearchTabDeps } from "../../../src/searchTab";
 import { createFloatingSearch, type FloatingSearch } from "../../../src/siyuan/floatingSearch";
-import { openDialog, openFloatingDialog, openMenu } from "../../../src/siyuan/nativeUi";
+import { openCustomDialog, openDialog, openFloatingDialog, openMenu } from "../../../src/siyuan/nativeUi";
 import { cards, flush, harness, input, sharedInstances, submitQuery } from "../helpers/searchTabHarness";
 
 interface StubDialog {
@@ -31,8 +31,27 @@ let h: ReturnType<typeof harness>;
 let onOpenInTab: Mock<() => void>;
 let mounted: SearchTab[];
 
+const NB = "20240101000000-aaaaaaa";
+/** Noyau simulé : un cahier, aucun document ; les PDF cités sont tous ceux de l'index. */
+function pathKernel(): NonNullable<SearchTabDeps["kernel"]> {
+  return {
+    lsNotebooks: async () => [{ id: NB, name: "Cahier A", closed: false, icon: "" }],
+    listDocsByPath: async () => [],
+    searchDocs: async () => [],
+    getHPathsByPaths: async () => [],
+    sql: async () => ({ rows: [{ path: "assets/Alpha-20240101120000-abc1234.pdf" }], truncated: false }),
+  };
+}
+const openPathDialog = async (): Promise<HTMLElement> => {
+  const button = iconButton("Spécifier le chemin")!;
+  button.focus();
+  button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  await flush();
+  return stubs.Dialog.stack.at(-1)!.element.querySelector<HTMLElement>(".b3-dialog__body")!;
+};
+
 function build(over: Partial<SearchTabDeps> = {}): void {
-  h = harness(over, { openMenu, openDialog });
+  h = harness({ kernel: pathKernel(), ...over }, { openMenu, openDialog, openCustomDialog });
   floating = createFloatingSearch({
     openDialog: openFloatingDialog,
     title: "Recherche dans les PDF",
@@ -187,19 +206,20 @@ describe("Échap par couches (gestionnaire global de SiYuan actif)", () => {
     await settle();
   });
 
-  it("menu au-dessus avec le focus DANS le menu (menu des dossiers) : Échap global ferme le menu, pas la fenêtre ; le focus revient au bouton", () => {
+  it("dialogue du chemin ouvert au-dessus de la fenêtre : Échap global ferme ce dialogue, pas la fenêtre ; le focus revient au bouton", async () => {
     floating.open();
     const pathButton = iconButton("Spécifier le chemin")!;
-    pathButton.focus();
-    pathButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(stubs.Menu.current?.opened).toBe(true);
-    const menuEl = document.querySelector<HTMLElement>(".b3-menu")!;
-    expect(Number(menuEl.style.zIndex)).toBeGreaterThan(zOf(stubs.Dialog.stack[0]!));
-    expect(menuEl.contains(document.activeElement)).toBe(true);
+    const body = await openPathDialog();
+    expect(stubs.Dialog.stack).toHaveLength(2);
+    expect(document.activeElement).toBe(body.querySelector("input"));
     key(document.activeElement!, "Escape");
-    expect(stubs.Menu.current).toBeUndefined();
-    expect(stubs.Dialog.instances[0]!.destroyCalls).toBe(0);
+    await settle(DELAY);
+    expect(stubs.Dialog.stack).toHaveLength(1); // la fenêtre de recherche reste
+    expect(document.querySelector('[data-key="dialog-movepathto"]')).toBeNull();
     expect(document.activeElement).toBe(pathButton);
+    key(document.activeElement!, "Escape");
+    await settle(DELAY);
+    expect(stubs.Dialog.stack).toHaveLength(0);
   });
 
   it("focus sur un bouton de la barre : Échap n'est pas consommé par la vue, SiYuan ferme la fenêtre (une seule fois)", async () => {
@@ -298,16 +318,18 @@ describe("dialogue « Filtres » ouvert PAR-DESSUS la fenêtre", () => {
     expect(document.querySelector(".b3-dialog")).toBeNull();
   });
 
-  it("menu ouvert quand la fenêtre se ferme : il est fermé, et le focus n'est pas rendu à un bouton détaché", async () => {
+  it("dialogue du chemin ouvert quand la fenêtre se ferme : il est détruit aussi (la vue est libérée à la destruction de la fenêtre), aucun élément orphelin", async () => {
     floating.open();
     const pathButton = iconButton("Spécifier le chemin")!;
-    pathButton.click();
-    expect(stubs.Menu.current?.opened).toBe(true);
+    await openPathDialog();
+    expect(stubs.Dialog.stack).toHaveLength(2);
     floating.close();
     await settle();
-    expect(stubs.Menu.current).toBeUndefined();
+    await settle(); // le dialogue du chemin est détruit à son tour (sa propre destruction différée)
+    expect(stubs.Dialog.stack).toHaveLength(0);
+    expect(document.querySelector(".b3-dialog")).toBeNull();
     expect(document.contains(pathButton)).toBe(false);
-    expect(document.activeElement).toBe(opener);
+    expect(h.onWarn).not.toHaveBeenCalled(); // aucune trace d'erreur : fermeture propre
   });
 });
 
@@ -402,21 +424,21 @@ describe("ouverture d'un PDF depuis la fenêtre", () => {
 });
 
 describe("session et cycle de vie", () => {
-  it("la requête soumise et le dossier choisi reviennent à la réouverture, la recherche est relancée", async () => {
+  it("la requête soumise et le chemin choisi reviennent à la réouverture, la recherche est relancée", async () => {
     floating.open();
     await submitQuery(document.body, "chat");
-    const pathButton = iconButton("Spécifier le chemin")!;
-    pathButton.click();
-    const folder = [...document.querySelectorAll<HTMLElement>(".b3-menu__item")].find((i) => i.textContent?.trim() === "assets")!;
-    folder.click();
+    const body = await openPathDialog();
+    body.querySelector<HTMLElement>(".b3-button--text")!.click(); // cahier présélectionné
     await flush();
+    await settle(DELAY); // destruction différée du dialogue du chemin
+    expect(document.querySelector(".search__path")!.firstChild!.textContent).toBe("Cahier A");
     floating.close();
     await settle();
     expect(stubs.Dialog.stack).toHaveLength(0);
     floating.open();
     await settle(500);
     expect(field().value).toBe("chat");
-    expect(document.querySelector(".docseeker-path-text")!.textContent).toBe("assets/");
+    expect(document.querySelector(".search__path")!.firstChild!.textContent).toBe("Cahier A");
     expect(cards(document.body).length).toBeGreaterThan(0);
   });
 

@@ -900,21 +900,6 @@ describe("openMenu : infobulle d'un élément (title, posée par le rappel `bind
   });
 });
 
-describe("openDialog : setConfirmLabel (renommer le bouton de confirmation)", () => {
-  it("change le texte du bouton de confirmation, en texte brut", () => {
-    const handle = openDialog({ title: "T", build: () => undefined, onConfirm: () => undefined, labels: { cancel: "Annuler", confirm: "Enregistrer" } });
-    handle.setConfirmLabel?.("<i>Remplacer</i>");
-    const confirm = lastDialog().element.querySelector<HTMLButtonElement>("button.b3-button--text")!;
-    expect(confirm.textContent).toBe("<i>Remplacer</i>");
-    expect(confirm.querySelector("i")).toBeNull();
-  });
-  it("après la destruction : sans effet et sans erreur", () => {
-    const handle = openDialog({ title: "T", build: () => undefined, onConfirm: () => undefined, labels: { cancel: "Annuler", confirm: "Ok" } });
-    handle.close();
-    expect(() => handle.setConfirmLabel?.("X")).not.toThrow();
-  });
-});
-
 // Vérifie que NativeMenuItem reste utilisable en lecture seule.
 const _typecheck: readonly NativeMenuItem[] = [{ label: "x" }];
 void _typecheck;

@@ -916,7 +916,6 @@ describe("filtres dans la vue", () => {
   const optionsDeps = (): NonNullable<SearchViewDeps["options"]> => ({
     getOptions: () => opts,
     setOptions: setOptions as (o: SearchOptions) => void,
-    getFolders: () => ["assets/", "assets/a/"],
   });
   beforeEach(() => {
     opts = { sort: { key: "relevance", direction: "desc" }, filters: NO_FILTERS };
@@ -967,7 +966,7 @@ describe("filtres dans la vue", () => {
   });
 
   it("zéro résultat à cause des filtres : texte avec le nombre de filtres et bouton visible", () => {
-    opts = { ...opts, filters: { ...NO_FILTERS, folder: "assets/a/", minPages: 3 } };
+    opts = { ...opts, filters: { ...NO_FILTERS, nameContains: "rap", minPages: 3 } };
     mount({ options: optionsDeps() });
     update(noResult(4));
     expect(status()).toBe("Aucun résultat avec 2 filtres actifs. 4 documents masqués par les filtres.");
@@ -1083,9 +1082,9 @@ describe("filtres dans la vue", () => {
 
   it("la barre suit les options modifiées de l'extérieur à chaque rendu (chemin et résumé)", () => {
     mount({ options: optionsDeps() });
-    opts = { ...opts, filters: { ...NO_FILTERS, folder: "assets/a/", minPages: 2 } };
+    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 2, scopes: [{ kind: "notebook", box: "20240101000000-aaaaaaa", label: "Cahier A" }] } };
     update({ kind: "empty-query" });
-    expect(host.querySelector(".search__path")!.textContent).toBe("assets/a/");
+    expect(host.querySelector(".search__path")!.textContent).toBe("Cahier A");
     expect(host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")).toBe("Filtres (2 actifs)");
   });
 

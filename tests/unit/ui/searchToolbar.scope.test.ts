@@ -1,61 +1,53 @@
 // @vitest-environment jsdom
+// Barre d'icônes : bouton « Spécifier le chemin » (dialogue natif), étiquette du chemin, croix, bouton « Inclure les documents
+// enfants » et interaction avec le dialogue « Filtres ».
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentScope } from "../../../src/search/docScope";
-import { DocTreeTooLargeError, type DocTree, type DocTreeNode } from "../../../src/search/docTree";
 import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
-import { IndexUnavailableError } from "../../../src/siyuan/kernelApi";
 import { mountSearchToolbar, type SearchToolbar, type SearchToolbarDeps } from "../../../src/ui/searchToolbar";
 import { DEFAULT_STRINGS } from "../../../src/ui/searchView";
-import { createNativeFakes, findItem, pick } from "./nativeFakes";
+import type { PathKernel } from "../../../src/ui/pathDialog";
+import { createNativeFakes } from "./nativeFakes";
+import { simulateTooltip } from "../helpers/tooltip";
 
 const t = (key: string, vars: Readonly<Record<string, string | number>> = {}): string =>
   (DEFAULT_STRINGS[key] ?? key).replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? String(vars[n]) : m));
 
+const XLINK = "http://www.w3.org/1999/xlink";
 const NB = "20240101000000-aaaaaaa";
 const NB2 = "20240101000000-bbbbbbb";
 const id = (n: number): string => `20240102000000-${n.toString(36).padStart(7, "0")}`;
-const NBSP2 = "  ";
 const PATH = "Spécifier le chemin";
 const INCLUDE = "Inclure les documents enfants";
 const REMOVE = "Supprimer";
-const nb = (box: string, label: string): DocTreeNode => ({ kind: "notebook", box, hpath: "", label, depth: 0 });
-const doc = (box: string, ids: string[], hpath: string): DocTreeNode => {
-  const segments = hpath.split("/").filter(Boolean);
-  return { kind: "document", box, docPath: `/${ids.join("/")}.sy`, hpath, label: segments.at(-1) ?? "", depth: segments.length };
-};
-const TREE: DocTree = [nb(NB, "Cahier A"), doc(NB, [id(1)], "/Parent"), doc(NB, [id(1), id(2)], "/Parent/Enfant"), nb(NB2, "Cahier B")];
-const DOC_SCOPE: DocumentScope = { kind: "document", box: NB, docPath: `/${id(1)}/${id(2)}.sy`, label: "Cahier A / Parent / Enfant" };
+const DOC_PATH = `/${id(1)}/${id(2)}.sy`;
+const DOC_SCOPE: DocumentScope = { kind: "document", box: NB, docPath: DOC_PATH, label: "Cahier A/Parent/Enfant" };
 const NB_SCOPE: DocumentScope = { kind: "notebook", box: NB2, label: "Cahier B" };
 
 const flush = async (): Promise<void> => {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 };
-function deferred<T>() {
-  let resolve!: (v: T) => void;
-  let reject!: (e: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 let host: HTMLElement;
 let state: SearchOptions;
 let setOptions: ReturnType<typeof vi.fn>;
 let fakes: ReturnType<typeof createNativeFakes>;
 let toolbar: SearchToolbar;
-let getDocTree: ReturnType<typeof vi.fn>;
 let onWarn: ReturnType<typeof vi.fn>;
-let folders: string[];
+let notify: ReturnType<typeof vi.fn>;
+let kernel: { [K in keyof PathKernel]: ReturnType<typeof vi.fn> };
 
-function mount(over: Partial<SearchToolbarDeps> = {}, withTree = true): SearchToolbar {
+function mount(over: Partial<SearchToolbarDeps> = {}, omit: readonly ("pathKernel" | "openCustomDialog")[] = []): SearchToolbar {
+  const path: Partial<SearchToolbarDeps> = {
+    ...(omit.includes("pathKernel") ? {} : { pathKernel: kernel as unknown as PathKernel }),
+    ...(omit.includes("openCustomDialog") ? {} : { openCustomDialog: fakes.openCustomDialog }),
+  };
   return mountSearchToolbar(host, {
     getOptions: () => state,
     setOptions: setOptions as (o: SearchOptions) => void,
-    getFolders: () => folders,
-    ...(withTree ? { getDocTree: getDocTree as unknown as NonNullable<SearchToolbarDeps["getDocTree"]> } : {}),
+    ...path,
     onWarn: onWarn as unknown as NonNullable<SearchToolbarDeps["onWarn"]>,
+    notify: notify as unknown as NonNullable<SearchToolbarDeps["notify"]>,
     t,
     openMenu: fakes.openMenu,
     openDialog: fakes.openDialog,
@@ -72,403 +64,295 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.appendChild(host);
   state = { sort: { key: "name", direction: "asc" }, filters: NO_FILTERS };
-  folders = ["assets/", "assets/a/"];
   setOptions = vi.fn((o: SearchOptions) => {
     state = o;
   });
-  getDocTree = vi.fn(async () => TREE);
   onWarn = vi.fn();
+  notify = vi.fn();
   fakes = createNativeFakes();
+  kernel = {
+    lsNotebooks: vi.fn(async () => [
+      { id: NB, name: "Cahier A", closed: false, icon: "" },
+      { id: NB2, name: "Cahier B", closed: false, icon: "" },
+    ]),
+    listDocsByPath: vi.fn(async () => [{ path: DOC_PATH, name: "Enfant", icon: "", subFileCount: 0 }]),
+    searchDocs: vi.fn(async () => []),
+    getHPathsByPaths: vi.fn(async (paths: readonly string[]) => paths.map(() => "Cahier A/Parent/Enfant")),
+  };
   toolbar = mount();
 });
 
 const row = () => host.querySelector<HTMLElement>("div.block__icons.docseeker-icons")!;
 const btn = (name: string): HTMLButtonElement => row().querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
-const pathBtn = () => row().querySelector<HTMLButtonElement>("button[data-menu='true']")!;
+const pathBtn = () => btn(PATH);
 const label = () => row().querySelector<HTMLElement>("span.search__path")!;
+const cross = () => label().querySelector<SVGElement>("svg.search__rmpath")!;
 const lastFilters = () => (setOptions.mock.calls.at(-1)![0] as SearchOptions).filters;
-const withScope = (scope: DocumentScope, extra: Partial<SearchOptions["filters"]> = {}): void => {
-  state = { ...state, filters: { ...NO_FILTERS, scope, ...extra } };
+const withScopes = (scopes: DocumentScope[], extra: Partial<SearchOptions["filters"]> = {}): void => {
+  state = { ...state, filters: { ...NO_FILTERS, scopes, ...extra } };
   toolbar.refresh();
 };
-const openPath = async () => {
-  pathBtn().click();
-  await flush();
-  return fakes.lastMenu();
-};
-const labels = (m: { items: readonly { label?: string; separator?: boolean }[] }) => m.items.map((i) => (i.separator ? "---" : i.label));
+const dialogBody = () => fakes.lastCustomDialog().container;
+const dialogButton = (cls: string) => dialogBody().querySelector<HTMLElement>(`.${cls}`)!;
+const filtersBtn = () => row().querySelector<HTMLButtonElement>('button[aria-label^="Filtres"]')!;
 
-describe("menu « Spécifier le chemin » avec l'arbre des documents", () => {
-  it("ordre : Tous les chemins, séparateur, Dossiers de fichiers, dossiers, séparateur, Documents SiYuan, cahiers et documents", async () => {
-    const menu = await openPath();
-    expect(labels(menu)).toEqual([
-      "Tous les chemins",
-      "---",
-      "Dossiers de fichiers",
-      "assets",
-      `${NBSP2}a`,
-      "---",
-      "Documents SiYuan",
-      "Cahier A",
-      `${NBSP2}Parent`,
-      `${NBSP2}${NBSP2}Enfant`,
-      "Cahier B",
-    ]);
-    const byLabel = (l: string) => menu.items.find((i) => i.label === l)!;
-    expect(byLabel("Dossiers de fichiers").disabled).toBe(true);
-    expect(byLabel("Documents SiYuan").disabled).toBe(true);
-    expect(byLabel("Dossiers de fichiers").click).toBeUndefined();
-    expect(menu.items.filter((i) => i.separator)).toHaveLength(2);
-  });
-
-  it("sans aucun filtre de chemin : « Tous les chemins » est la seule entrée courante", async () => {
-    const menu = await openPath();
-    expect(menu.items.filter((i) => i.current).map((i) => i.label)).toEqual(["Tous les chemins"]);
-  });
-
-  it("un document choisi : seule son entrée est courante (ni « Tous les chemins », ni un dossier)", async () => {
-    withScope(DOC_SCOPE);
-    const menu = await openPath();
-    expect(menu.items.filter((i) => i.current).map((i) => i.label)).toEqual([`${NBSP2}${NBSP2}Enfant`]);
-  });
-
-  it("un dossier choisi : seule son entrée est courante, aucune dans l'arbre", async () => {
-    state = { ...state, filters: { ...NO_FILTERS, folder: "assets/a/" } };
-    const menu = await openPath();
-    expect(menu.items.filter((i) => i.current).map((i) => i.label)).toEqual([`${NBSP2}a`]);
-  });
-
-  it("sans dossier de fichiers, la section des dossiers est omise (pas d'en-tête orphelin)", async () => {
-    folders = [];
-    const menu = await openPath();
-    expect(labels(menu)).toEqual(["Tous les chemins", "---", "Documents SiYuan", "Cahier A", `${NBSP2}Parent`, `${NBSP2}${NBSP2}Enfant`, "Cahier B"]);
-  });
-
-  it("sans getDocTree : le menu reste celui des dossiers, sans en-têtes, ouvert tout de suite", () => {
-    host.innerHTML = "";
-    toolbar = mount({}, false);
+describe("bouton « Spécifier le chemin » : dialogue natif", () => {
+  it("ouvre le dialogue « Spécifier le chemin » (aucun menu), 50vw x 70vh", async () => {
     pathBtn().click();
-    expect(labels(fakes.lastMenu())).toEqual(["Tous les chemins", "assets", `${NBSP2}a`]);
+    await flush();
+    expect(fakes.openMenu).not.toHaveBeenCalled();
+    const { options } = fakes.lastCustomDialog();
+    expect(options.title).toBe("Spécifier le chemin");
+    expect([options.width, options.height, options.dataKey]).toEqual(["50vw", "70vh", "dialog-movepathto"]);
+    expect(kernel.lsNotebooks).toHaveBeenCalledTimes(1);
   });
 
-  it("choisir un document : dossier vidé, portée posée, tri et autres filtres conservés (une seule application)", async () => {
-    state = { ...state, filters: { ...NO_FILTERS, folder: "assets/a/", nameContains: "abc", includeSubfolders: false } };
-    const menu = await openPath();
-    pick(menu, `${NBSP2}${NBSP2}Enfant`);
+  it("le bouton garde son rôle de bouton à icône dossier, sans data-menu", () => {
+    expect(pathBtn().getAttribute("data-menu")).toBeNull();
+    expect(pathBtn().querySelector("use")!.getAttributeNS(XLINK, "href")).toBe("#iconFolder");
+  });
+
+  it("un seul dialogue à la fois : un second clic n'en ouvre pas un autre", async () => {
+    pathBtn().click();
+    pathBtn().click();
+    await flush();
+    expect(fakes.openCustomDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it("une fois le dialogue fermé, le bouton peut le rouvrir et reçoit le focus", async () => {
+    pathBtn().click();
+    await flush();
+    fakes.lastCustomDialog().destroy();
+    expect(document.activeElement).toBe(pathBtn());
+    pathBtn().click();
+    expect(fakes.openCustomDialog).toHaveBeenCalledTimes(2);
+  });
+
+  it("Confirmer sur le cahier présélectionné : portée « cahier », tri et autres filtres conservés, une seule application", async () => {
+    state = { ...state, filters: { ...NO_FILTERS, nameContains: "x", minPages: 3 } };
+    pathBtn().click();
+    await flush();
+    dialogButton("b3-button--text").click();
+    await flush();
     expect(setOptions).toHaveBeenCalledTimes(1);
     expect(setOptions.mock.calls[0]![0]).toEqual({
       sort: { key: "name", direction: "asc" },
-      filters: { folder: "", includeSubfolders: false, nameContains: "abc", scope: DOC_SCOPE },
+      filters: { ...NO_FILTERS, nameContains: "x", minPages: 3, scopes: [{ kind: "notebook", box: NB, label: "Cahier A" }] },
     });
+    expect(fakes.lastCustomDialog().handle.isOpen()).toBe(false);
   });
 
-  it("choisir un cahier : portée « notebook »", async () => {
-    const menu = await openPath();
-    pick(menu, "Cahier B");
-    expect(lastFilters().scope).toEqual(NB_SCOPE);
+  it("un document choisi : label complet du noyau, includeSubfolders conservé", async () => {
+    state = { ...state, filters: { ...NO_FILTERS, includeSubfolders: false } };
+    pathBtn().click();
+    await flush();
+    dialogBody().querySelector<HTMLElement>(".b3-list-item__toggle")!.click();
+    await flush();
+    dialogBody().querySelector<HTMLElement>(`li[data-path="${DOC_PATH}"] .b3-list-item__text`)!.click();
+    dialogButton("b3-button--text").click();
+    await flush();
+    expect(lastFilters().scopes).toEqual([{ kind: "document", box: NB, docPath: DOC_PATH, label: "Cahier A/Parent/Enfant" }]);
+    expect(lastFilters().includeSubfolders).toBe(false);
   });
 
-  it("choisir un dossier alors qu'une portée est active : la portée est retirée (clé absente)", async () => {
-    withScope(DOC_SCOPE);
-    const menu = await openPath();
-    pick(menu, "assets");
-    expect(lastFilters()).toEqual({ ...NO_FILTERS, folder: "assets/" });
-    expect("scope" in lastFilters()).toBe(false);
+  it("seulement des cahiers choisis : l'indicateur n'est pas forcé (comme le natif), le bouton reste désactivé et sans effet", async () => {
+    state = { ...state, filters: { ...NO_FILTERS, includeSubfolders: false } };
+    pathBtn().click();
+    await flush();
+    dialogButton("b3-button--text").click();
+    await flush();
+    expect(lastFilters().includeSubfolders).toBe(false);
+    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("true");
+    expect(btn(INCLUDE).getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("« Tous les chemins » retire la portée comme le dossier", async () => {
-    withScope(DOC_SCOPE);
-    pick(await openPath(), "Tous les chemins");
-    expect(lastFilters()).toEqual(NO_FILTERS);
-    expect("scope" in lastFilters()).toBe(false);
+  it("Annuler : rien n'est appliqué", async () => {
+    pathBtn().click();
+    await flush();
+    dialogButton("b3-button--cancel").click();
+    await flush();
+    expect(setOptions).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(pathBtn());
   });
 
-  it("choisir l'entrée déjà courante ne fait rien", async () => {
-    withScope(DOC_SCOPE);
-    pick(await openPath(), `${NBSP2}${NBSP2}Enfant`);
+  it("dispose ferme le dialogue sans rien appliquer ni rendre le focus", async () => {
+    pathBtn().click();
+    await flush();
+    toolbar.dispose();
+    expect(fakes.lastCustomDialog().handle.isOpen()).toBe(false);
     expect(setOptions).not.toHaveBeenCalled();
   });
 
-  it("600 documents : au plus 500 entrées d'arbre et une ligne désactivée pour le reste", async () => {
-    getDocTree.mockResolvedValue([nb(NB, "C"), ...Array.from({ length: 599 }, (_, i) => doc(NB, [id(i + 10)], `/D${i}`))]);
-    const menu = await openPath();
-    const after = menu.items.slice(menu.items.findIndex((i) => i.label === "Documents SiYuan") + 1);
-    expect(after).toHaveLength(501);
-    expect(after.at(-1)).toEqual({ label: "… 100 autres documents masqués", disabled: true });
-  });
-
-  it("un titre de document contenant du HTML reste du texte (libellé brut, jamais interprété)", async () => {
-    const evil = "<img src=x onerror=alert(1)>";
-    getDocTree.mockResolvedValue([nb(NB, evil), doc(NB, [id(1)], `/${evil}`)]);
-    const menu = await openPath();
-    expect(menu.items.map((i) => i.label)).toContain(evil);
-    pick(menu, `${NBSP2}${evil}`);
-    expect(lastFilters().scope?.label).toBe(`${evil} / ${evil}`);
-    expect(label().textContent).toBe(`${evil} / ${evil}`);
-    expect(host.querySelector("img")).toBeNull();
-  });
-});
-
-describe("chargement de l'arbre avant l'ouverture", () => {
-  it("le menu s'ouvre à la fin du chargement ; pendant ce temps le bouton est occupé et le dit", async () => {
-    const d = deferred<DocTree>();
-    getDocTree.mockReturnValue(d.promise);
-    pathBtn().focus();
+  it("lecture des cahiers en échec : trace via onWarn du dialogue", async () => {
+    kernel.lsNotebooks.mockRejectedValueOnce(new Error("noyau"));
     pathBtn().click();
-    expect(fakes.openMenu).not.toHaveBeenCalled();
-    expect(pathBtn().getAttribute("aria-busy")).toBe("true");
-    expect(pathBtn().getAttribute("aria-label")).toBe("Chargement des documents…");
-    d.resolve(TREE);
     await flush();
-    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
-    expect(pathBtn().hasAttribute("aria-busy")).toBe(false);
-    expect(pathBtn().getAttribute("aria-label")).toBe(PATH);
-    expect(document.activeElement).toBe(pathBtn());
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(dialogBody().textContent).toContain("Impossible de lire les documents");
   });
 
-  it("le clic porte data-menu et n'atteint pas document, comme les autres boutons à menu", () => {
-    const reached = vi.fn();
-    document.addEventListener("click", reached);
-    try {
-      pathBtn().click();
-    } finally {
-      document.removeEventListener("click", reached);
+  it("une erreur à l'ouverture du dialogue est tracée, jamais propagée au clic", () => {
+    fakes.openCustomDialog.mockImplementationOnce(() => {
+      throw new Error("Dialog indisponible");
+    });
+    expect(() => pathBtn().click()).not.toThrow();
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(String(onWarn.mock.calls[0]![0])).toContain("Spécifier le chemin");
+    // L'utilisateur est prévenu (message bref), pas seulement le journal.
+    expect(notify).toHaveBeenCalledWith("Impossible d'ouvrir le choix du chemin (voir le journal dans les paramètres).");
+    pathBtn().click(); // et le bouton reste utilisable
+    expect(fakes.openCustomDialog).toHaveBeenCalledTimes(2);
+  });
+
+  it("sans noyau ou sans dialogue libre : ni « Spécifier le chemin » ni « Inclure les documents enfants »", () => {
+    for (const omit of [["pathKernel"], ["openCustomDialog"]] as const) {
+      document.body.innerHTML = "";
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      mount({}, omit);
+      expect(host.querySelector(`button[aria-label="${PATH}"]`)).toBeNull();
+      expect(host.querySelector(`button[aria-label="${INCLUDE}"]`)).toBeNull();
     }
-    expect(reached).not.toHaveBeenCalled();
-    expect(pathBtn().getAttribute("data-menu")).toBe("true");
-  });
-
-  it("getDocTree reçoit un signal ; un second clic pendant le chargement l'annule sans ouvrir de menu", async () => {
-    const d = deferred<DocTree>();
-    getDocTree.mockReturnValue(d.promise);
-    pathBtn().click();
-    const signal = getDocTree.mock.calls[0]![0] as AbortSignal;
-    expect(signal.aborted).toBe(false);
-    pathBtn().click();
-    expect(signal.aborted).toBe(true);
-    expect(pathBtn().hasAttribute("aria-busy")).toBe(false);
-    d.resolve(TREE);
-    await flush();
-    expect(fakes.openMenu).not.toHaveBeenCalled();
-    expect(getDocTree).toHaveBeenCalledTimes(1);
-  });
-
-  it("ouvrir un autre menu pendant le chargement annule l'ouverture tardive du menu du chemin", async () => {
-    const d = deferred<DocTree>();
-    getDocTree.mockReturnValue(d.promise);
-    pathBtn().click();
-    btn("Plus").click();
-    d.resolve(TREE);
-    await flush();
-    expect(fakes.menus.map((m) => m.id)).toEqual(["docseeker-more"]);
-    expect(pathBtn().hasAttribute("aria-busy")).toBe(false);
-  });
-
-  it("dispose pendant le chargement : rien ne s'ouvre, le chargement est annulé", async () => {
-    const d = deferred<DocTree>();
-    getDocTree.mockReturnValue(d.promise);
-    pathBtn().click();
-    const signal = getDocTree.mock.calls[0]![0] as AbortSignal;
-    toolbar.dispose();
-    expect(signal.aborted).toBe(true);
-    d.resolve(TREE);
-    await flush();
-    expect(fakes.openMenu).not.toHaveBeenCalled();
-  });
-
-  it("un clic quand le menu du chemin est déjà ouvert le ferme (bascule) sans recharger l'arbre", async () => {
-    const menu = await openPath();
-    pathBtn().click();
-    await flush();
-    expect(menu.closed).toBe(true);
-    expect(getDocTree).toHaveBeenCalledTimes(1);
-    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
-  });
-
-  it("l'arbre est relu à chaque ouverture", async () => {
-    pick(await openPath(), "Tous les chemins");
-    getDocTree.mockResolvedValue([nb(NB, "Neuf")]);
-    const menu = await openPath();
-    expect(menu.items.at(-1)?.label).toBe("Neuf");
   });
 });
 
-describe("erreurs de chargement de l'arbre", () => {
-  it("index SiYuan pas prêt : entrée désactivée explicative + « Réessayer » active, dossiers toujours là", async () => {
-    getDocTree.mockRejectedValue(new IndexUnavailableError(200, -1, "document metadata is not ready"));
-    const menu = await openPath();
-    expect(labels(menu)).toEqual([
-      "Tous les chemins",
-      "---",
-      "Dossiers de fichiers",
-      "assets",
-      `${NBSP2}a`,
-      "---",
-      "Documents SiYuan",
-      "L'index de SiYuan n'est pas prêt.",
-      "Réessayer",
-    ]);
-    expect(findItem(menu.items, "L'index de SiYuan n'est pas prêt.").disabled).toBe(true);
-    expect(findItem(menu.items, "L'index de SiYuan n'est pas prêt.").click).toBeUndefined();
-    expect(typeof findItem(menu.items, "Réessayer").click).toBe("function");
-    expect(findItem(menu.items, "Réessayer").disabled).toBeUndefined();
-    expect(pathBtn().hasAttribute("aria-busy")).toBe(false);
+describe("étiquette du chemin (comme le natif), croix et bouton « Inclure les documents enfants »", () => {
+  it("sans chemin : étiquette et croix masquées", () => {
+    expect(label().hidden).toBe(true);
+    expect(label().nextElementSibling?.className).toBe("fn__space");
+    expect((label().nextElementSibling as HTMLElement).hidden).toBe(true);
   });
 
-  it("« Réessayer » ferme le menu, rend le focus au bouton et rouvre un menu avec l'arbre relu", async () => {
-    getDocTree.mockRejectedValueOnce(new IndexUnavailableError(200, -1, "document metadata is not ready"));
-    const menu = await openPath();
-    expect(menu.onClose).toBeTypeOf("function");
-    btn("Plus").focus(); // le focus est ailleurs : la reprise doit le ramener
-    pick(menu, "Réessayer");
-    expect(document.activeElement).toBe(pathBtn());
-    await flush();
-    expect(getDocTree).toHaveBeenCalledTimes(2);
-    expect(fakes.menus).toHaveLength(2);
-    expect(fakes.lastMenu().items.map((i) => i.label)).toContain("Cahier A");
-    expect(fakes.menus[0]!.closed).toBe(true);
-  });
-
-  it("fermer ce menu autrement (Échap) ne relance rien", async () => {
-    getDocTree.mockRejectedValue(new IndexUnavailableError(200, -1, "document metadata is not ready"));
-    const menu = await openPath();
-    menu.close();
-    await flush();
-    expect(getDocTree).toHaveBeenCalledTimes(1);
-  });
-
-  it("arbre trop grand : entrée désactivée explicite, sans « Réessayer »", async () => {
-    getDocTree.mockRejectedValue(new DocTreeTooLargeError(20000));
-    const menu = await openPath();
-    const last = menu.items.at(-1)!;
-    expect(last.label).toBe(DEFAULT_STRINGS["docsTooLarge"]);
-    expect(last.disabled).toBe(true);
-    expect(menu.items.some((i) => i.label === "Réessayer")).toBe(false);
-  });
-
-  it("arbre vide : « Aucun document ne cite de PDF. » désactivée", async () => {
-    getDocTree.mockResolvedValue([]);
-    const menu = await openPath();
-    expect(menu.items.at(-1)).toEqual({ label: "Aucun document ne cite de PDF.", disabled: true });
-  });
-
-  it("autre erreur : message générique + « Réessayer », et l'erreur est tracée (jamais avalée)", async () => {
-    const boom = new Error("réseau coupé");
-    getDocTree.mockRejectedValue(boom);
-    const menu = await openPath();
-    expect(menu.items.slice(-2).map((i) => i.label)).toEqual([DEFAULT_STRINGS["docsFailed"], "Réessayer"]);
-    expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0]![1]).toBe(boom);
-  });
-
-  it("les erreurs attendues (index pas prêt, arbre trop grand) sont affichées, pas journalisées en avertissement", async () => {
-    getDocTree.mockRejectedValue(new DocTreeTooLargeError(20000));
-    await openPath();
-    expect(onWarn).not.toHaveBeenCalled();
-  });
-
-  it("une erreur levée par openMenu après le chargement est tracée, jamais un rejet non géré", async () => {
-    const boom = new Error("menu refusé");
-    fakes.openMenu.mockImplementationOnce(() => {
-      throw boom;
-    });
-    pathBtn().click();
-    await flush();
-    expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0]![1]).toBe(boom);
-    expect(pathBtn().hasAttribute("aria-busy")).toBe(false);
-  });
-
-  it("getDocTree qui lève de façon synchrone est traité comme un échec de chargement", async () => {
-    const boom = new Error("sync");
-    getDocTree.mockImplementation(() => {
-      throw boom;
-    });
-    const menu = await openPath();
-    expect(menu.items.at(-1)?.label).toBe("Réessayer");
-    expect(onWarn.mock.calls[0]![1]).toBe(boom);
-  });
-});
-
-describe("étiquette, croix et bouton « Inclure les documents enfants » avec une portée", () => {
-  it("un document : étiquette « Cahier / Document », infobulle « PDF exclus », croix visible", () => {
-    withScope(DOC_SCOPE);
+  it("DOM natif : span.search__path ariaLabel, texte = libellés, aria-label = libellés joints par une espace, croix SVG, puis fn__space", () => {
+    withScopes([NB_SCOPE, DOC_SCOPE]);
+    expect(label().className).toBe("search__path ft__on-surface fn__flex-center ft__smaller fn__ellipsis ariaLabel");
     expect(label().hidden).toBe(false);
-    expect(label().textContent).toBe("Cahier A / Parent / Enfant");
-    expect(label().title).toBe("Les PDF qu'aucun document ne cite sont exclus.");
-    expect(btn(REMOVE).hidden).toBe(false);
-  });
-
-  it("un cahier : étiquette = nom du cahier, infobulle = son nom", () => {
-    withScope(NB_SCOPE);
-    expect(label().textContent).toBe("Cahier B");
-    expect(label().title).toBe("Cahier B");
+    expect(label().firstChild?.nodeType).toBe(Node.TEXT_NODE);
+    expect(label().firstChild?.textContent).toBe("Cahier B Cahier A/Parent/Enfant");
+    expect(label().getAttribute("aria-label")).toBe("Cahier B Cahier A/Parent/Enfant");
+    expect(cross().parentElement).toBe(label());
+    expect(cross().querySelector("use")!.getAttributeNS(XLINK, "href")).toBe("#iconCloseRound");
+    const space = label().nextElementSibling as HTMLElement;
+    expect([space.tagName, space.className, space.hidden]).toEqual(["SPAN", "fn__space", false]);
   });
 
   it("une étiquette avec des balises reste du texte", () => {
-    withScope({ ...NB_SCOPE, label: "<img src=x onerror=alert(1)>" });
+    withScopes([{ ...NB_SCOPE, label: "<img src=x onerror=alert(1)>" }]);
     expect(label().querySelector("img")).toBeNull();
-    expect(label().textContent).toBe("<img src=x onerror=alert(1)>");
+    expect(label().firstChild?.textContent).toBe("<img src=x onerror=alert(1)>");
+    // L'infobulle de SiYuan insère aria-label comme HTML : la valeur est échappée, et l'infobulle reste lisible.
+    expect(label().getAttribute("aria-label")).toBe("&lt;img src=x onerror=alert(1)&gt;");
+    const shown = simulateTooltip(label());
+    expect(shown.querySelector("img")).toBeNull();
+    expect(shown.textContent).toBe("<img src=x onerror=alert(1)>");
   });
 
-  it("la croix retire la portée (clé absente), et le focus revient à « Spécifier le chemin »", () => {
-    withScope(DOC_SCOPE, { includeSubfolders: false });
-    btn(REMOVE).focus();
-    btn(REMOVE).click();
+  it("infobulle : aucun élément créé par un nom de document, de cahier ou une apostrophe/guillemet/esperluette", () => {
+    withScopes([{ ...NB_SCOPE, label: `<b id="x">A</b> & "B" 'C'` }, { ...DOC_SCOPE, label: "<img src=x onerror=alert(1)>/Doc" }]);
+    const shown = simulateTooltip(label());
+    expect(shown.children).toHaveLength(0);
+    expect(shown.textContent).toBe(`<b id="x">A</b> & "B" 'C' <img src=x onerror=alert(1)>/Doc`);
+  });
+
+  it("infobulle « PDF exclus » seulement quand un document est choisi", () => {
+    withScopes([DOC_SCOPE]);
+    expect(label().title).toBe("Les PDF qu'aucun document ne cite sont exclus.");
+    withScopes([NB_SCOPE]);
+    expect(label().hasAttribute("title")).toBe(false);
+  });
+
+  it("la croix retire les portées (clé absente) et le focus revient à « Spécifier le chemin »", () => {
+    withScopes([DOC_SCOPE, NB_SCOPE], { includeSubfolders: false });
+    cross().dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(setOptions).toHaveBeenCalledTimes(1);
     expect(lastFilters()).toEqual({ ...NO_FILTERS, includeSubfolders: false });
-    expect("scope" in lastFilters()).toBe(false);
+    expect("scopes" in lastFilters()).toBe(false);
     expect(label().hidden).toBe(true);
     expect(document.activeElement).toBe(pathBtn());
   });
 
-  it("« Inclure » est actif pour une portée (document comme cahier) et se bascule en gardant la portée", () => {
-    for (const scope of [DOC_SCOPE, NB_SCOPE]) {
-      withScope(scope);
-      expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("false");
-      expect(btn(INCLUDE).getAttribute("aria-pressed")).toBe("true");
-      expect(btn(INCLUDE).querySelector("svg")!.classList.contains("ft__primary")).toBe(true);
-      btn(INCLUDE).click();
-      expect(lastFilters()).toMatchObject({ scope, includeSubfolders: false, folder: "" });
-    }
+  it("croix : sans bouton « Spécifier le chemin » dans la rangée, le focus se replie sur un autre élément focalisable", () => {
+    withScopes([DOC_SCOPE]);
+    pathBtn().remove();
+    cross().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(setOptions).toHaveBeenCalledTimes(1);
+    const active = document.activeElement as HTMLElement;
+    expect(active).not.toBe(document.body);
+    expect(row().contains(active)).toBe(true);
   });
 
-  it("sans chemin ni portée : « Inclure » reste désactivé", () => {
+  it("la croix est accessible au clavier (focalisable, Entrée et Espace)", () => {
+    withScopes([DOC_SCOPE]);
+    expect(cross().getAttribute("tabindex")).toBe("0");
+    expect(cross().getAttribute("role")).toBe("button");
+    expect(cross().getAttribute("aria-label")).toBe(REMOVE);
+    cross().dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(setOptions).not.toHaveBeenCalled();
+    cross().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(setOptions).toHaveBeenCalledTimes(1);
+    withScopes([DOC_SCOPE]);
+    cross().dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+    expect(setOptions).toHaveBeenCalledTimes(2);
+  });
+
+  it("« Inclure » : désactivé sans chemin, désactivé si tous les chemins sont des cahiers", () => {
+    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("true");
+    withScopes([NB_SCOPE]);
+    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("true");
+    expect(btn(INCLUDE).querySelector("svg")!.classList.contains("ft__primary")).toBe(false);
+    btn(INCLUDE).click();
+    expect(setOptions).not.toHaveBeenCalled();
+    withScopes([NB_SCOPE, { ...NB_SCOPE, box: NB, label: "A" }]);
     expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("une portée compte comme un filtre actif", () => {
-    withScope(DOC_SCOPE);
-    expect(row().querySelector('button[aria-label^="Filtres"]')!.getAttribute("aria-label")).toBe("Filtres (1 actif)");
+  it("« Inclure » : actif et ft__primary dès qu'un document est choisi (enfants inclus par défaut), et bascule", () => {
+    withScopes([DOC_SCOPE]);
+    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("false");
+    expect(btn(INCLUDE).getAttribute("aria-pressed")).toBe("true");
+    expect(btn(INCLUDE).querySelector("svg")!.classList.contains("ft__primary")).toBe(true);
+    btn(INCLUDE).click();
+    expect(lastFilters()).toMatchObject({ scopes: [DOC_SCOPE], includeSubfolders: false });
+    expect(btn(INCLUDE).getAttribute("aria-pressed")).toBe("false");
+    expect(btn(INCLUDE).querySelector("svg")!.classList.contains("ft__primary")).toBe(false);
+  });
+
+  it("« Inclure » : actif aussi avec un mélange cahier + document", () => {
+    withScopes([NB_SCOPE, DOC_SCOPE]);
+    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("false");
+  });
+
+  it("une portée compte comme un filtre actif (une seule fois pour une liste)", () => {
+    withScopes([NB_SCOPE, DOC_SCOPE]);
+    expect(filtersBtn().getAttribute("aria-label")).toBe("Filtres (1 actif)");
   });
 });
 
 describe("dialogue « Filtres » et réinitialisation avec une portée", () => {
   const confirmFilters = (): void => {
-    row().querySelector<HTMLButtonElement>('button[aria-label^="Filtres"]')!.click();
+    filtersBtn().click();
     fakes.lastDialog().confirm();
   };
 
-  it("Confirmer conserve la portée", () => {
-    withScope(DOC_SCOPE);
+  it("Confirmer conserve la liste de portées", () => {
+    withScopes([NB_SCOPE, DOC_SCOPE]);
     confirmFilters();
-    expect(lastFilters().scope).toEqual(DOC_SCOPE);
+    expect(lastFilters().scopes).toEqual([NB_SCOPE, DOC_SCOPE]);
   });
 
   it("« Réinitialiser les filtres » puis Confirmer retire la portée", () => {
-    withScope(DOC_SCOPE);
-    row().querySelector<HTMLButtonElement>('button[aria-label^="Filtres"]')!.click();
+    withScopes([DOC_SCOPE]);
+    filtersBtn().click();
     const dialog = fakes.lastDialog();
     const reset = [...dialog.container.querySelectorAll("button")].find((b) => b.textContent === "Réinitialiser les filtres")!;
-    expect(reset.getAttribute("aria-disabled")).toBe("false"); // la portée suffit à rendre le bouton utile
+    expect(reset.getAttribute("aria-disabled")).toBe("false");
     reset.click();
     dialog.confirm();
-    expect("scope" in lastFilters()).toBe(false);
-    expect(lastFilters().folder).toBe("");
+    expect("scopes" in lastFilters()).toBe(false);
   });
 
   it("toolbar.reset() efface aussi la portée", () => {
-    withScope(DOC_SCOPE);
+    withScopes([DOC_SCOPE]);
     toolbar.reset();
     expect(setOptions.mock.calls.at(-1)![0]).toEqual({ sort: state.sort, filters: NO_FILTERS });
   });

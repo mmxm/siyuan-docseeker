@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { ICON_TOOLTIP_POSITION, SVG_NS, XLINK_NS, makeIconButton, svgIcon } from "../../../src/ui/icons";
-import { MENU_ID_HISTORY, MENU_ID_MORE, MENU_ID_PATH } from "../../../src/ui/nativeUiTypes";
+import * as nativeUiTypes from "../../../src/ui/nativeUiTypes";
+import { MENU_ID_HISTORY, MENU_ID_MORE } from "../../../src/ui/nativeUiTypes";
 
 describe("svgIcon", () => {
   it("crée svg > use dans l'espace de noms SVG, avec xlink:href « #id » dans l'espace de noms xlink", () => {
@@ -47,7 +48,9 @@ describe("makeIconButton", () => {
 
 describe("identifiants de menu partagés", () => {
   it("un identifiant par bouton, au format accepté par l'adaptateur", () => {
-    expect([MENU_ID_PATH, MENU_ID_MORE, MENU_ID_HISTORY]).toEqual(["docseeker-path", "docseeker-more", "docseeker-history"]);
-    for (const id of [MENU_ID_PATH, MENU_ID_MORE, MENU_ID_HISTORY]) expect(id).toMatch(/^[a-z0-9-]+$/);
+    expect([MENU_ID_MORE, MENU_ID_HISTORY]).toEqual(["docseeker-more", "docseeker-history"]);
+    // « Spécifier le chemin » ouvre un dialogue : plus d'identifiant de menu pour lui.
+    expect(nativeUiTypes).not.toHaveProperty("MENU_ID_PATH");
+    for (const id of [MENU_ID_MORE, MENU_ID_HISTORY]) expect(id).toMatch(/^[a-z0-9-]+$/);
   });
 });

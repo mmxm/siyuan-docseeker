@@ -35,7 +35,7 @@ function mount(extra: Partial<SearchViewDeps> = {}) {
     thumbnails: { attach: attach as ThumbnailAttacher["attach"] },
     onOpen: vi.fn(),
     getDocMeta: () => ({ pdfSize: 10, pdfModifiedMs: 20 }),
-    options: { getOptions: () => opts, setOptions: vi.fn(), getFolders: () => [] },
+    options: { getOptions: () => opts, setOptions: vi.fn() },
     openMenu: fakes.openMenu,
     openDialog: fakes.openDialog,
     onGroupByDocumentChange: onGroup as (v: boolean) => void,

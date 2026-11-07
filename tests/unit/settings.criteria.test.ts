@@ -43,7 +43,7 @@ describe("normalizeSettings : savedCriteria", () => {
 
   it("portée injectée avec un docPath malveillant : critère rejeté à la lecture", () => {
     const warn = vi.fn();
-    const evil = crit("evil", { filters: { ...NO_FILTERS, scope: { kind: "document", box: BOX, docPath: "/x' or '1'='1.sy", label: "x" } } });
+    const evil = crit("evil", { filters: { ...NO_FILTERS, scopes: [{ kind: "document", box: BOX, docPath: "/x' or '1'='1.sy", label: "x" }] } });
     const out = normalizeSettings({ savedCriteria: [evil, crit("ok")] }, warn);
     expect(out.savedCriteria.map((c) => c.name)).toEqual(["ok"]);
     expect(warn).toHaveBeenCalledTimes(1);
@@ -125,6 +125,47 @@ describe("createSettings : critères enregistrés", () => {
     expect(f.saves).toHaveLength(0);
     await expect(store.saveCriteria(crit("c3", { query: "z" }))).resolves.toEqual({ replaced: true });
     expect(store.get().savedCriteria).toHaveLength(30);
+  });
+
+  it("saveCriteria avec removeNames : renomme et fusionne en une seule écriture, nouveau critère en fin", async () => {
+    const f = sharedFile({ savedCriteria: [crit("a"), crit("vieux"), crit("c")] });
+    const { store } = f.make();
+    await expect(store.saveCriteria(crit("neuf"), ["vieux"])).resolves.toEqual({ replaced: false });
+    expect(f.read()?.savedCriteria?.map((c) => c.name)).toEqual(["a", "c", "neuf"]);
+    expect(f.saves).toHaveLength(1);
+    await expect(store.saveCriteria(crit("a", { query: "z" }), ["c"])).resolves.toEqual({ replaced: true });
+    expect(f.read()?.savedCriteria?.map((c) => c.name)).toEqual(["neuf", "a"]);
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["neuf", "a"]);
+  });
+
+  it("renommage dont l'écriture échoue : la liste en mémoire garde l'ancien nom, le rejet est propagé", async () => {
+    let file: unknown = { savedCriteria: [crit("vieux")] };
+    let fail = true;
+    const store = createSettings({
+      load: async () => structuredClone(file),
+      save: async (v) => {
+        if (fail) throw new Error("disque plein");
+        file = structuredClone(v);
+      },
+      onWarn: vi.fn(),
+    });
+    await store.load();
+    await expect(store.saveCriteria(crit("neuf"), ["vieux"])).rejects.toThrow("disque plein");
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["vieux"]);
+    fail = false;
+    await store.saveCriteria(crit("neuf"), ["vieux"]);
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["neuf"]);
+  });
+
+  it("renommage et fusion relisent le fichier : le critère ajouté par une autre fenêtre est gardé", async () => {
+    const f = sharedFile({ savedCriteria: [crit("vieux")] });
+    const a = f.make().store;
+    const b = f.make().store;
+    await a.load();
+    await b.load();
+    await b.saveCriteria(crit("de-b"));
+    await a.saveCriteria(crit("neuf"), ["vieux"]);
+    expect(f.read()?.savedCriteria?.map((c) => c.name)).toEqual(["de-b", "neuf"]);
   });
 
   it("DEUX INSTANCES qui enregistrent chacune un critère : aucun n'écrase l'autre", async () => {
@@ -258,7 +299,96 @@ describe("createSettings : critères enregistrés", () => {
     file.savedCriteria.push({ name: "pourri" });
     await store.saveCriteria(crit("b"));
     expect(warn).toHaveBeenCalled();
-    expect(f.read()?.savedCriteria?.map((c) => c.name)).toEqual(["a", "b"]);
+    // Le critère que cette version ne comprend pas n'est pas perdu : il reste dans le fichier, après les critères valides.
+    expect((f.read()?.savedCriteria as unknown[]).map((c) => (c as { name: string }).name)).toEqual(["a", "b", "pourri"]);
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["a", "b"]);
+  });
+});
+
+describe("createSettings : entrées de critères non reconnues conservées dans le fichier (E)", () => {
+  const unknownEntry = { name: "venu-du-futur", version: 9, payload: { x: 1 } };
+  const fileOf = (f: ReturnType<typeof sharedFile>): unknown[] => f.read()?.savedCriteria as unknown[];
+
+  it("2 valides + 1 inconnue : après l'enregistrement d'un critère, le fichier contient les 3 anciennes et la nouvelle", async () => {
+    const f = sharedFile({ savedCriteria: [crit("a"), unknownEntry, crit("b")] });
+    const { store } = f.make();
+    await store.load();
+    await store.saveCriteria(crit("c"));
+    expect(fileOf(f)).toEqual([crit("a"), crit("b"), crit("c"), unknownEntry]);
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["a", "b", "c"]); // jamais réinjectée dans la liste affichée
+  });
+
+  it("suppression : la ou les entrées inconnues restent aussi", async () => {
+    const f = sharedFile({ savedCriteria: [crit("a"), unknownEntry, crit("b")] });
+    const { store } = f.make();
+    await store.load();
+    await store.deleteCriteria("a");
+    expect(fileOf(f)).toEqual([crit("b"), unknownEntry]);
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["b"]);
+  });
+
+  it("une entrée inconnue copiée telle quelle (valeurs brutes, y compris non objets) et jamais comptée dans la limite de 30", async () => {
+    const odd = [unknownEntry, "texte", 42, null, [1, 2]];
+    const valid = Array.from({ length: 29 }, (_v, i) => crit(`c${i}`));
+    const f = sharedFile({ savedCriteria: [...valid, ...odd] });
+    const { store } = f.make();
+    await store.load();
+    expect(await store.saveCriteria(crit("trentieme"))).toEqual({ replaced: false }); // 30 valides, malgré 5 inconnues
+    expect(fileOf(f)).toEqual([...valid, crit("trentieme"), ...odd]);
+    expect(await store.saveCriteria(crit("trente-et-un"))).toEqual({ error: "limit" });
+  });
+
+  it("au plus 30 entrées inconnues sont conservées", async () => {
+    const junk = Array.from({ length: 45 }, (_v, i) => ({ junk: i }));
+    const f = sharedFile({ savedCriteria: [crit("a"), ...junk] });
+    const { store } = f.make();
+    await store.load();
+    await store.saveCriteria(crit("b"));
+    expect(fileOf(f)).toEqual([crit("a"), crit("b"), ...junk.slice(0, 30)]);
+  });
+
+  it("un autre réglage modifié (update) conserve aussi les entrées inconnues", async () => {
+    const f = sharedFile({ savedCriteria: [crit("a"), unknownEntry] });
+    const { store } = f.make();
+    await store.load();
+    await store.update({ autoIndex: false });
+    expect(fileOf(f)).toEqual([crit("a"), unknownEntry]);
+  });
+
+  it("la réécriture d'un fichier corrompu (autre réglage) conserve les entrées inconnues", async () => {
+    const f = sharedFile({ autoIndex: "oui", savedCriteria: [crit("a"), unknownEntry] });
+    const { store } = f.make();
+    await store.load();
+    expect(f.saves).toHaveLength(1);
+    expect(fileOf(f)).toEqual([crit("a"), unknownEntry]);
+  });
+
+  it("entrée inconnue ajoutée par une autre fenêtre entre-temps : relue et conservée", async () => {
+    const f = sharedFile({ savedCriteria: [crit("a")] });
+    const { store } = f.make();
+    await store.load();
+    (f.read() as { savedCriteria: unknown[] }).savedCriteria.push(unknownEntry);
+    await store.saveCriteria(crit("b"));
+    expect(fileOf(f)).toEqual([crit("a"), crit("b"), unknownEntry]);
+  });
+
+  it("écriture en échec : la liste affichée est restaurée, sans entrée inconnue", async () => {
+    let file: unknown = { savedCriteria: [crit("a"), unknownEntry] };
+    let fail = true;
+    const store = createSettings({
+      load: async () => structuredClone(file),
+      save: async (v) => {
+        if (fail) throw new Error("disque plein");
+        file = structuredClone(v);
+      },
+      onWarn: vi.fn(),
+    });
+    await store.load();
+    await expect(store.saveCriteria(crit("b"))).rejects.toThrow("disque plein");
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["a"]);
+    fail = false;
+    await store.saveCriteria(crit("b"));
+    expect((file as { savedCriteria: unknown[] }).savedCriteria).toEqual([crit("a"), crit("b"), unknownEntry]);
   });
 });
 

@@ -170,6 +170,17 @@ describe("SEARCH_CSS", () => {
       expect(rule).toMatch(/max-width:\s*100%/);
     });
 
+    it("l'étiquette de chemin contient du texte brut (pas de rtl : « Cahier/Document » ne doit pas être réordonné)", () => {
+      const rule = rulesFor(".docseeker-icons .search__path").join(" ");
+      expect(rule).not.toContain("direction");
+      expect(SEARCH_CSS).not.toContain("docseeker-path-text");
+    });
+
+    it("la croix de l'étiquette est cliquable et son focus clavier est visible", () => {
+      expect(rulesFor(".docseeker-icons .search__rmpath").join(" ")).toContain("cursor: pointer");
+      expect(rulesFor(".docseeker-icons .search__rmpath:focus-visible").join(" ")).toContain("outline: 2px solid var(--b3-theme-primary)");
+    });
+
     it("couleurs forcées : focus Highlight, bouton désactivé GrayText", () => {
       expect(forced()).toContain(`${BTN}:focus-visible`);
       expect(forced()).toMatch(/\.docseeker-icons \.block__icon\[aria-disabled="true"\][^}]*GrayText/);
@@ -347,11 +358,27 @@ describe("ensureSearchStyle : la feuille sert aussi aux dialogues (hors de la vu
   });
 });
 
-describe("SEARCH_CSS : dialogue des critères enregistrés", () => {
-  it("le résumé est discret, retourne à la ligne et reste lisible (couleur du thème, pas de débordement)", () => {
-    const rule = rulesFor(".docseeker-criteria-summary").join(" ");
-    expect(rule).toContain("overflow-wrap: anywhere");
-    expect(rule).toContain("var(--b3-theme-on-surface)");
-    expect(rule).toMatch(/font-size:\s*12px/);
+describe("SEARCH_CSS : ligne des critères enregistrés", () => {
+  it("la ligne search__header est une rangée flex qui passe à la ligne et ne déborde pas", () => {
+    const rule = rulesFor(".docseeker-search .search__header").join(" ");
+    expect(rule).toContain("display: flex");
+    expect(rule).toContain("flex-wrap: wrap");
+    expect(rule).toContain("align-items: center");
+    expect(rule).toContain("min-width: 0");
+  });
+
+  it("les puces passent à la ligne et restent cachées avec fn__none (le display: flex ne doit pas les réafficher)", () => {
+    expect(rulesFor(".docseeker-search .search__header .b3-chips").join(" ")).toContain("flex-wrap: wrap");
+    expect(rulesFor(".docseeker-search .search__header .b3-chips.fn__none").join(" ")).toContain("display: none");
+  });
+
+  it("la puce et les deux boutons ont un anneau de focus visible au clavier", () => {
+    for (const selector of [".docseeker-search .search__header .b3-chip:focus-visible", ".docseeker-search .search__header button:focus-visible"]) {
+      expect(rulesFor(selector).join(" "), selector).toContain(FOCUS);
+    }
+  });
+
+  it("l'ancien résumé du dialogue d'enregistrement n'existe plus", () => {
+    expect(SEARCH_CSS).not.toContain("docseeker-criteria-summary");
   });
 });

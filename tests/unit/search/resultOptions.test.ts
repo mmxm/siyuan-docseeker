@@ -6,9 +6,7 @@ import {
   applyFilters,
   countActiveFilters,
   isValidPageRange,
-  listFolders,
   normalizeSearchOptions,
-  normalizedFolder,
   normalizedNeedle,
   sameOptions,
   type ResultFilters,
@@ -36,13 +34,13 @@ const ids = (r: { kept: readonly { docId: string }[] }) => r.kept.map((d) => d.d
 describe("constantes", () => {
   it("DEFAULT_SORT est la pertinence décroissante et NO_FILTERS n'active rien", () => {
     expect(DEFAULT_SORT).toEqual({ key: "relevance", direction: "desc" });
-    expect(NO_FILTERS).toEqual({ folder: "", includeSubfolders: true, nameContains: "" });
+    expect(NO_FILTERS).toEqual({ includeSubfolders: true, nameContains: "" });
     expect(DEFAULT_OPTIONS).toEqual({ sort: DEFAULT_SORT, filters: NO_FILTERS });
     expect(countActiveFilters(NO_FILTERS)).toBe(0);
   });
 });
 
-describe("applyFilters : dossier", () => {
+describe("applyFilters : sans filtre actif", () => {
   const docs = [
     info("1", "assets/a/x.pdf"),
     info("2", "assets/ab/y.pdf"),
@@ -56,55 +54,20 @@ describe("applyFilters : dossier", () => {
     expect(r.hidden).toBe(0);
   });
 
-  it("avec séparateur final : « assets/a/ » ne filtre pas « assets/ab/ »", () => {
-    expect(ids(run(docs, { folder: "assets/a/" }))).toEqual(["1", "3"]);
-  });
-
-  it("sans séparateur final : même résultat (préfixe avec séparateur)", () => {
-    const r = run(docs, { folder: "assets/a" });
-    expect(ids(r)).toEqual(["1", "3"]);
-    expect(r.hidden).toBe(2);
-  });
-
-  it("sans sous-dossiers : seulement les PDF directement dans le dossier", () => {
-    expect(ids(run(docs, { folder: "assets/a/", includeSubfolders: false }))).toEqual(["1"]);
-    expect(ids(run(docs, { folder: "assets/", includeSubfolders: false }))).toEqual(["4"]);
-  });
-
-  it("includeSubfolders sans dossier choisi ne filtre rien", () => {
+  it("includeSubfolders sans portée de documents ne filtre rien", () => {
     expect(ids(run(docs, { includeSubfolders: false }))).toEqual(["1", "2", "3", "4"]);
   });
 
-  it("compare les chemins NFC et NFD comme égaux (dans les deux sens)", () => {
-    // Construction explicite : le littéral du fichier peut être NFC ou NFD selon l'éditeur.
-    expect(NFD).not.toBe(NFC);
-    const nfdInfo = [info("1", `assets/Anesth${NFD}/x.pdf`), info("2", "assets/Autre/y.pdf")];
-    expect(ids(run(nfdInfo, { folder: `assets/Anesth${NFC}/` }))).toEqual(["1"]);
-    const nfcInfo = [info("1", `assets/Anesth${NFC}/x.pdf`)];
-    expect(ids(run(nfcInfo, { folder: `assets/Anesth${NFD}/` }))).toEqual(["1"]);
-  });
-
-  it("un chemin sans dossier est masqué par un filtre de dossier", () => {
-    const r = run([info("root", "root.pdf"), info("in", "assets/a/x.pdf")], { folder: "assets/" });
-    expect(ids(r)).toEqual(["in"]);
-    expect(r.hidden).toBe(1);
-  });
-
-  it("plusieurs « / » finaux équivalent à un seul", () => {
-    expect(ids(run(docs, { folder: "assets//" }))).toEqual(["1", "2", "3", "4"]);
-    expect(ids(run(docs, { folder: "assets/a///" }))).toEqual(["1", "3"]);
-  });
-
-  it("sans « / » final et sans sous-dossiers : seulement les PDF directs", () => {
-    expect(ids(run(docs, { folder: "assets/a", includeSubfolders: false }))).toEqual(["1"]);
-  });
-
-  it("le dossier est sensible à la casse (comportement figé)", () => {
-    expect(ids(run(docs, { folder: "Assets/" }))).toEqual([]);
+  it("un ancien champ `folder` transmis par erreur n'a plus aucun effet", () => {
+    const legacy = { ...NO_FILTERS, folder: "assets/a/" } as ResultFilters;
+    const byId = new Map(docs.map((d) => [d.docId, d] as const));
+    const r = applyFilters(docs.map((d) => ({ docId: d.docId })), legacy, (id) => byId.get(id));
+    expect(ids(r)).toEqual(["1", "2", "3", "4"]);
   });
 
   it("conserve l'ordre d'entrée", () => {
-    expect(ids(run([docs[2]!, docs[0]!], { folder: "assets/a/" }))).toEqual(["3", "1"]);
+    expect(ids(run([docs[2]!, docs[0]!], { nameContains: "z" }))).toEqual(["3"]);
+    expect(ids(run([docs[2]!, docs[0]!], {}))).toEqual(["3", "1"]);
   });
 });
 
@@ -191,7 +154,16 @@ describe("applyFilters : combinaison et documents inconnus", () => {
       info("4", "assets/a/chat2.pdf", { pageCount: 3, pdfModifiedMs: 2_000 }),
       info("5", "assets/a/chat3.pdf", { pageCount: 10, pdfModifiedMs: 100 }),
     ];
-    const r = run(docs, { folder: "assets/a/", nameContains: "chat", minPages: 5, modifiedAfterMs: 1_000 });
+    const byId = new Map(docs.map((d) => [d.docId, d] as const));
+    const scope = { kind: "notebook", box: "20240101000000-aaaaaaa", label: "A" } as const;
+    // Portée = les PDF de assets/a/ (déjà résolue) : ET avec le nom, les pages et la date.
+    const cited = new Set(docs.filter((d) => d.path.startsWith("assets/a/")).map((d) => d.path));
+    const r = applyFilters(
+      docs.map((d) => ({ docId: d.docId })),
+      { ...NO_FILTERS, scopes: [scope], nameContains: "chat", minPages: 5, modifiedAfterMs: 1_000 },
+      (id) => byId.get(id),
+      cited,
+    );
     expect(ids(r)).toEqual(["1"]);
     expect(r.hidden).toBe(4);
   });
@@ -200,7 +172,7 @@ describe("applyFilters : combinaison et documents inconnus", () => {
     const known = info("k", "assets/a/k.pdf");
     const r = applyFilters(
       [{ docId: "k" }, { docId: "ghost" }],
-      { ...NO_FILTERS, folder: "assets/zzz/" },
+      { ...NO_FILTERS, nameContains: "zzz" },
       (id) => (id === "k" ? known : undefined),
     );
     expect(r).toEqual({ kept: [{ docId: "ghost" }], hidden: 1 });
@@ -233,42 +205,14 @@ describe("applyFilters : combinaison et documents inconnus", () => {
   });
 });
 
-describe("listFolders", () => {
-  it("renvoie tous les préfixes de dossier, dédoublonnés et triés", () => {
-    const docs = [
-      info("1", "assets/b/c/x.pdf"),
-      info("2", "assets/a/y.pdf"),
-      info("3", "assets/a/z.pdf"),
-      info("4", "assets/root.pdf"),
-    ];
-    expect(listFolders(docs)).toEqual(["assets/", "assets/a/", "assets/b/", "assets/b/c/"]);
-  });
-
-  it("ignore un chemin sans dossier et n'invente pas de dossier vide", () => {
-    expect(listFolders([info("1", "x.pdf"), info("2", "/a/y.pdf")])).toEqual(["/a/"]);
-    expect(listFolders([])).toEqual([]);
-  });
-
-  it("fusionne les formes NFC et NFD", () => {
-    const docs = [info("1", "assets/Cardió/a.pdf"), info("2", "assets/Cardió/b.pdf")];
-    expect(listFolders(docs)).toHaveLength(2); // assets/ + un seul dossier
-  });
-
-  it("n'altère pas la liste reçue", () => {
-    const docs = Object.freeze([info("1", "assets/a/x.pdf")]);
-    expect(() => listFolders(docs)).not.toThrow();
-  });
-});
-
 describe("countActiveFilters", () => {
   it("compte un par critère actif ; sous-dossiers seul ne compte pas", () => {
     expect(countActiveFilters({ ...NO_FILTERS, includeSubfolders: false })).toBe(0);
-    expect(countActiveFilters({ ...NO_FILTERS, folder: "assets/a/" })).toBe(1);
+    expect(countActiveFilters({ ...NO_FILTERS, nameContains: "assets" })).toBe(1);
     expect(countActiveFilters({ ...NO_FILTERS, nameContains: "  " })).toBe(0);
     expect(countActiveFilters({ ...NO_FILTERS, nameContains: "\u0301" })).toBe(0);
-    expect(countActiveFilters({ ...NO_FILTERS, folder: "/" })).toBe(0);
     expect(
-      countActiveFilters({ folder: "a/", includeSubfolders: true, nameContains: "x", minPages: 2, maxPages: 9, modifiedAfterMs: 0 }),
+      countActiveFilters({ includeSubfolders: true, nameContains: "x", minPages: 2, maxPages: 9, modifiedAfterMs: 0, scopes: [{ kind: "notebook", box: "b", label: "L" }] }),
     ).toBe(5);
   });
 
@@ -296,10 +240,9 @@ describe("normalizeSearchOptions", () => {
 
   it("conserve les valeurs valides, y compris une date à 0", () => {
     const o = normalizeSearchOptions({
-      filters: { folder: "assets/a/", includeSubfolders: false, nameContains: "x", minPages: 2, maxPages: 9, modifiedAfterMs: 0 },
+      filters: { includeSubfolders: false, nameContains: "x", minPages: 2, maxPages: 9, modifiedAfterMs: 0 },
     });
     expect(o.filters).toEqual({
-      folder: "assets/a/",
       includeSubfolders: false,
       nameContains: "x",
       minPages: 2,
@@ -319,23 +262,13 @@ describe("normalizeSearchOptions", () => {
   });
 
   it("ne partage pas d'état avec l'entrée (copie)", () => {
-    const input = { filters: { folder: "a/" } };
+    const input = { filters: { nameContains: "a" } };
     const o = normalizeSearchOptions(input);
     expect(o.filters).not.toBe(input.filters);
   });
 });
 
 describe("normalizeSearchOptions : champs normalisés", () => {
-  it("dossier : rogné, NFC, un seul « / » final ; « / » et blanc donnent vide", () => {
-    const f = (folder: string) => normalizeSearchOptions({ filters: { folder } }).filters.folder;
-    expect(f("assets/a")).toBe("assets/a/");
-    expect(f("assets/a/ ")).toBe("assets/a/");
-    expect(f("assets//")).toBe("assets/");
-    expect(f("/")).toBe("");
-    expect(f("  ")).toBe("");
-    expect(f(`Cardi${NFD}/`)).toBe(`Cardi${NFC}/`);
-  });
-
   it("nameContains est rogné", () => {
     expect(normalizeSearchOptions({ filters: { nameContains: "  abc " } }).filters.nameContains).toBe("abc");
   });
@@ -358,9 +291,7 @@ describe("normalizeSearchOptions : champs normalisés", () => {
 });
 
 describe("helpers partagés", () => {
-  it("normalizedFolder et normalizedNeedle", () => {
-    expect(normalizedFolder("a")).toBe("a/");
-    expect(normalizedFolder("")).toBe("");
+  it("normalizedNeedle", () => {
     expect(normalizedNeedle("  Mon_Fichier ")).toBe("mon fichier");
     expect(normalizedNeedle("\u0301")).toBe("");
     expect(normalizedNeedle("   ")).toBe("");
@@ -375,8 +306,8 @@ describe("helpers partagés", () => {
   });
 
   it("sameOptions compare champ par champ, sans dépendre de l'ordre des clés", () => {
-    const a = normalizeSearchOptions({ filters: { folder: "a/", nameContains: "x", minPages: 2 }, sort: { key: "name", direction: "asc" } });
-    const b = normalizeSearchOptions({ sort: { direction: "asc", key: "name" }, filters: { minPages: 2, nameContains: "x", folder: "a" } });
+    const a = normalizeSearchOptions({ filters: { nameContains: "x", minPages: 2 }, sort: { key: "name", direction: "asc" } });
+    const b = normalizeSearchOptions({ sort: { direction: "asc", key: "name" }, filters: { minPages: 2, nameContains: "x" } });
     expect(sameOptions(a, b)).toBe(true);
     expect(sameOptions(a, { ...b, filters: { ...b.filters, minPages: 3 } })).toBe(false);
     expect(sameOptions(a, { ...b, filters: { ...b.filters, maxPages: 9 } })).toBe(false);

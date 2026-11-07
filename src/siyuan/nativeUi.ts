@@ -11,7 +11,13 @@
  */
 import { Dialog, Menu, type IMenu } from "siyuan";
 import type {
+  CustomDialogHandle,
+  ConfirmDialogHandle,
+  ConfirmDialogOptions,
+  CustomDialogOptions,
   DialogHandle,
+  InputDialogHandle,
+  InputDialogOptions,
   FloatingDialogHandle,
   FloatingDialogOptions,
   MenuAnchor,
@@ -34,6 +40,31 @@ const escapeHtml = (text: string): string => text.replace(/[&<>"']/g, (c) => HTM
  * caractères de contrôle (\p{Cc}, remplacés par une espace). Puis échappé, SiYuan insérant le texte comme HTML.
  */
 const toHtmlText = (text: string): string => escapeHtml(text.replace(/\p{Cf}/gu, "").replace(/\p{Cc}/gu, " "));
+/** Appelle `fn` ; une erreur va à `onError` (défaut : console.error), jamais à l'écouteur DOM qui l'avalerait ou la laisserait non gérée. */
+function guarded(fn: () => void, onError: ((error: unknown) => void) | undefined): void {
+  try {
+    fn();
+  } catch (error) {
+    try {
+      if (onError) onError(error);
+      else console.error("[docseeker] Rappel de dialogue en échec", error);
+    } catch (inner) {
+      console.error("[docseeker] Rappel de dialogue en échec", error, inner);
+    }
+  }
+}
+
+/** Appelle `destroy` ; s'il lève, le drapeau « fermeture en cours » est réarmé (un nouvel essai reste possible). */
+function destroyOnce(destroy: () => void, rearm: () => void): void {
+  let done = false;
+  try {
+    destroy();
+    done = true;
+  } finally {
+    if (!done) rearm();
+  }
+}
+
 /** Identifiant de symbole du sprite : inséré dans `xlink:href="#..."` par SiYuan, donc strictement alphanumérique. */
 const ICON_ID = /^icon[A-Za-z0-9]+$/;
 const CURRENT_CLASS = "b3-menu__item--current";
@@ -208,14 +239,227 @@ export function openDialog(options: NativeDialogOptions): DialogHandle {
   }
   // « Ouvert » tant que SiYuan ne l'a pas détruit : destruction différée comprise (pas de réouverture pendant le délai), et
   // faux dès que l'élément a quitté le document, même si SiYuan ne rappelle pas `destroyCallback`.
-  const confirmButton = dialog.element.querySelector<HTMLButtonElement>("button.b3-button--text");
-  return {
-    close,
-    isOpen: () => !closed && dialog.element.isConnected,
-    setConfirmLabel: (label) => {
-      if (!closed && confirmButton) confirmButton.textContent = label;
+  return { close, isOpen: () => !closed && dialog.element.isConnected };
+}
+
+// --- Dialogue à contenu libre ----------------------------------------------------------------------------------
+
+const CSS_SIZE = /^\d{1,4}(px|vw|vh)$/;
+const DATA_KEY = /^[a-z0-9-]+$/;
+
+/** Gabarit du titre natif de « Spécifier le chemin » : marge de 8 px et ligne d'indice (vide ici, historique hors périmètre). */
+function customTitleHtml(title: string): string {
+  return (
+    `<div style="padding:8px">${toHtmlText(title)}` +
+    '<div style="max-height:16px;line-height:14px" class="ft__smaller ft__on-surface fn__hidescrollbar"></div></div>'
+  );
+}
+
+/**
+ * Ouvre un `Dialog` dont le corps est entièrement fourni par l'appelant (DOM déjà construit). L'adaptateur ne met aucune donnée
+ * dans une chaîne HTML : seul le titre, échappé, y passe. Échap est laissé au gestionnaire global de SiYuan (comme le dialogue
+ * natif) ; le focus est rendu à l'ouvrant par le `Dialog` de SiYuan à la destruction.
+ */
+export function openCustomDialog(options: CustomDialogOptions): CustomDialogHandle {
+  for (const [what, value] of [["Largeur", options.width], ["Hauteur", options.height]] as const) {
+    if (!CSS_SIZE.test(value)) throw new TypeError(`${what} de dialogue refusée : « ${value} » (attendu : 50vw, 70vh ou 420px)`);
+  }
+  if (!DATA_KEY.test(options.dataKey)) throw new TypeError(`Clé de dialogue refusée : « ${options.dataKey} » (attendu : a-z, 0-9, tiret)`);
+  let closing = false;
+  let closed = false;
+  const dialog: Dialog = new Dialog({
+    title: customTitleHtml(options.title),
+    content: "",
+    width: options.width,
+    height: options.height,
+    destroyCallback: () => {
+      if (closed) return;
+      closed = true;
+      options.onDestroyed?.();
     },
+  });
+  // Échap global, voile et croix appellent `dialog.destroy()` sans passer par `close()` : on le sait dès le début de la destruction.
+  const siyuanDestroy = dialog.destroy.bind(dialog) as (destroyOptions?: Record<string, unknown>) => void;
+  dialog.destroy = (destroyOptions?: Record<string, unknown>): void => {
+    closing = true;
+    destroyOnce(() => siyuanDestroy(destroyOptions), () => (closing = false));
   };
+  try {
+    const root = dialog.element;
+    root.setAttribute("data-key", options.dataKey);
+    root.querySelector<HTMLElement>(".b3-dialog__header")?.style.setProperty("padding", "0");
+    const body = root.querySelector<HTMLElement>(".b3-dialog__body");
+    if (!body) throw new Error("Corps de dialogue introuvable");
+    body.appendChild(options.content);
+  } catch (error) {
+    dialog.destroy(); // pas de dialogue vide laissé à l'écran
+    throw error;
+  }
+  return {
+    close: () => {
+      if (!closing) dialog.destroy();
+    },
+    isOpen: () => !closed && dialog.element.isConnected,
+  };
+}
+
+// --- Dialogue d'entrée et dialogue de confirmation (copies de ceux de SiYuan) -------------------------------------
+
+const INPUT_WIDTH = "520px";
+
+/** Squelette de `openInputDialog` (app/src/dialog/inputDialog.ts, 3.8.9), sans donnée : valeur et libellés sont posés en DOM. */
+const INPUT_CONTENT =
+  '<div class="b3-dialog__content"><input spellcheck="false" class="b3-text-field fn__block" value="" data-dialog-input></div>' +
+  '<div class="b3-dialog__action">' +
+  '<button class="b3-button b3-button--cancel" data-input-cancel></button>' +
+  '<div class="fn__space"></div>' +
+  '<button class="b3-button b3-button--text" data-input-confirm></button>' +
+  "</div>";
+
+function checkDialogKey(dataKey: string): void {
+  if (!DATA_KEY.test(dataKey)) throw new TypeError(`Clé de dialogue refusée : « ${dataKey} » (attendu : a-z, 0-9, tiret)`);
+}
+
+/**
+ * Dialogue d'entrée identique à `openInputDialog` de SiYuan : même DOM, champ focalisé et texte sélectionné, « Confirmer » rend le
+ * focus au champ et laisse l'appelant décider de la fermeture, Entrée équivaut à « Confirmer ». Le titre est échappé ; valeur et
+ * placeholder passent par propriété (jamais en HTML).
+ */
+export function openInputDialog(options: InputDialogOptions): InputDialogHandle {
+  const width = options.width ?? INPUT_WIDTH;
+  if (!/^\d{1,4}px$/.test(width)) throw new TypeError(`Largeur de dialogue refusée : « ${width} » (attendu : 520px)`);
+  checkDialogKey(options.dataKey);
+  let closing = false;
+  let closed = false;
+  const dialog: Dialog = new Dialog({
+    title: toHtmlText(options.title),
+    content: INPUT_CONTENT,
+    width,
+    destroyCallback: () => {
+      if (closed) return;
+      closed = true;
+      options.onDestroyed?.();
+    },
+  });
+  const close = (): void => {
+    if (closing) return;
+    closing = true;
+    destroyOnce(() => dialog.destroy(), () => (closing = false));
+  };
+  try {
+    const root = dialog.element;
+    const input = root.querySelector<HTMLInputElement>("[data-dialog-input]");
+    const cancel = root.querySelector<HTMLButtonElement>("[data-input-cancel]");
+    const confirm = root.querySelector<HTMLButtonElement>("[data-input-confirm]");
+    if (!input || !cancel || !confirm) throw new Error("Squelette de dialogue d'entrée introuvable");
+    root.setAttribute("data-key", options.dataKey);
+    cancel.textContent = options.labels.cancel;
+    confirm.textContent = options.labels.confirm;
+    input.placeholder = options.placeholder;
+    input.value = options.value;
+    cancel.addEventListener("click", close);
+    confirm.addEventListener("click", () => {
+      input.focus(); // comme SiYuan : une saisie refusée se corrige tout de suite
+      guarded(() => options.onConfirm(input.value), options.onError);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.key !== "Enter") return;
+      e.preventDefault();
+      e.stopPropagation();
+      confirm.click();
+    });
+    input.focus();
+    input.select();
+  } catch (error) {
+    close(); // pas de dialogue vide laissé à l'écran
+    throw error;
+  }
+  return { close, isOpen: () => !closed && dialog.element.isConnected };
+}
+
+/** Squelette de `confirmDialog` (app/src/dialog/confirmDialog.ts, 3.8.9) : identifiants des boutons conservés. */
+const CONFIRM_CONTENT =
+  '<div class="b3-dialog__content"><div class="ft__breakword"></div></div>' +
+  '<div class="b3-dialog__action">' +
+  '<button class="b3-button b3-button--cancel" id="cancelDialogConfirmBtn"></button><div class="fn__space"></div>' +
+  '<button class="b3-button b3-button--text" id="confirmDialogConfirmBtn"></button>' +
+  "</div>";
+
+/**
+ * Dialogue de confirmation identique à `confirmDialog` de SiYuan (520px, `data-key="dialog-confirm"`, « Confirmer » focalisé,
+ * clics et évènements `detail` « Enter » / « Escape » envoyés par SiYuan sur le dialogue). Le texte est posé en `textContent` :
+ * il peut contenir des noms venus des données. Le focus est rendu à l'élément qui l'avait à l'ouverture.
+ */
+export function openConfirmDialog(options: ConfirmDialogOptions): ConfirmDialogHandle {
+  const previousActive = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+  let handled = false;
+  let closing = false;
+  let closed = false;
+  const handleCancel = (): void => {
+    if (handled) return;
+    handled = true;
+    options.onCancel?.();
+  };
+  const dialog: Dialog = new Dialog({
+    title: toHtmlText(options.title),
+    content: CONFIRM_CONTENT,
+    width: INPUT_WIDTH,
+    destroyCallback: () => {
+      if (closed) return;
+      closed = true;
+      try {
+        handleCancel(); // fermeture par SiYuan (Échap global, voile, croix) : annulation
+        options.onDestroyed?.();
+      } finally {
+        const active = document.activeElement;
+        if (previousActive?.isConnected === true && (active === null || active === document.body)) previousActive.focus({ preventScroll: true });
+      }
+    },
+  });
+  const close = (): void => {
+    if (closing) return;
+    closing = true;
+    destroyOnce(() => dialog.destroy(), () => (closing = false));
+  };
+  try {
+    const root = dialog.element;
+    const text = root.querySelector<HTMLElement>(".ft__breakword");
+    const cancel = root.querySelector<HTMLButtonElement>("#cancelDialogConfirmBtn");
+    const confirm = root.querySelector<HTMLButtonElement>("#confirmDialogConfirmBtn");
+    if (!text || !cancel || !confirm) throw new Error("Squelette de dialogue de confirmation introuvable");
+    root.setAttribute("data-key", "dialog-confirm");
+    text.textContent = options.text;
+    cancel.textContent = options.labels.cancel;
+    confirm.textContent = options.labels.confirm;
+    root.addEventListener("click", (event) => {
+      const detail: unknown = event.detail;
+      const dispatched = typeof detail === "string";
+      let target = event.target instanceof Element ? event.target : null;
+      while ((target !== null && target !== root) || dispatched) {
+        if (target?.id === "cancelDialogConfirmBtn" || (dispatched && detail === "Escape")) {
+          handleCancel();
+          close();
+          return;
+        }
+        if (target?.id === "confirmDialogConfirmBtn" || (dispatched && detail === "Enter")) {
+          handled = true;
+          try {
+            guarded(() => options.onConfirm(), options.onError);
+          } finally {
+            close(); // même si l'appelant lève : pas de dialogue condamné laissé à l'écran
+          }
+          return;
+        }
+        if (dispatched) return;
+        target = target?.parentElement ?? null;
+      }
+    });
+    confirm.focus({ preventScroll: true });
+  } catch (error) {
+    close();
+    throw error;
+  }
+  return { close, isOpen: () => !closed && dialog.element.isConnected };
 }
 
 // --- Fenêtre flottante -----------------------------------------------------------------------------------------

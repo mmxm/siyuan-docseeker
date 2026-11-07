@@ -86,7 +86,7 @@ export interface SearchControllerOptions {
    * PDF cités par la portée de documents (chemins NFC), s'ils sont connus ; `undefined` : pas (encore) résolue. Le
    * contrôleur reste synchrone : la résolution (asynchrone, en cache) est faite par l'appelant.
    */
-  readonly scopePaths?: (scope: DocumentScope, includeChildren: boolean) => ReadonlySet<string> | undefined;
+  readonly scopePaths?: (scopes: readonly DocumentScope[], includeChildren: boolean) => ReadonlySet<string> | undefined;
   /** Options de départ (filtres, tri) ; en session seulement, jamais persistées. */
   readonly initialOptions?: SearchOptions;
 }
@@ -121,8 +121,14 @@ function describeError(error: unknown): string {
 
 /** Normalise puis gèle (sort et filters compris) : `getOptions` peut renvoyer l'état sans copie ni risque de mutation. */
 function frozenOptions(input: unknown, onWarn?: SearchControllerOptions["onWarn"]): SearchOptions {
-  const o = normalizeSearchOptions(input, (raw) => onWarn?.("invalid document scope removed from the options", raw));
-  const filters = o.filters.scope ? { ...o.filters, scope: Object.freeze({ ...o.filters.scope }) } : o.filters;
+  const o = normalizeSearchOptions(
+    input,
+    (raw) => onWarn?.("invalid document scope removed from the options", raw),
+    (folder) => onWarn?.("legacy folder filter ignored: the path is now a document scope", folder),
+  );
+  const filters = o.filters.scopes
+    ? { ...o.filters, scopes: Object.freeze(o.filters.scopes.map((s) => Object.freeze({ ...s }))) }
+    : o.filters;
   return Object.freeze({ sort: Object.freeze(o.sort), filters: Object.freeze(filters) });
 }
 
@@ -163,12 +169,12 @@ function compute(source: SearchSource, query: string, options: SearchOptions, de
     });
   }
   // Filtres après BM25 et AVANT le re-classement : sa fenêtre de documents ne contient aucun document exclu.
-  const { scope, includeSubfolders } = options.filters;
-  const scopePaths = scope ? deps.scopePaths?.(scope, includeSubfolders) : undefined;
+  const { scopes, includeSubfolders } = options.filters;
+  const scopePaths = scopes ? deps.scopePaths?.(scopes, includeSubfolders) : undefined;
   // Portée non résolue : applyFilters ne garde rien (jamais de filtre ignoré en silence) ; on le signale une fois par clé.
-  const unresolved = scope !== undefined && scopePaths === undefined;
-  if (scope && unresolved) {
-    const key = scopeKey(scope, includeSubfolders);
+  const unresolved = scopes !== undefined && scopePaths === undefined;
+  if (scopes && unresolved) {
+    const key = scopeKey(scopes, includeSubfolders);
     if (deps.warned.key !== key) {
       deps.warned.key = key;
       deps.onWarn?.("document scope not resolved; no result shown");

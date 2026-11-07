@@ -1,5 +1,13 @@
 import { vi } from "vitest";
-import type { DialogHandle, MenuAnchor, MenuHandle, NativeDialogOptions, NativeMenuItem } from "../../../src/ui/nativeUiTypes";
+import type {
+  CustomDialogHandle,
+  CustomDialogOptions,
+  DialogHandle,
+  MenuAnchor,
+  MenuHandle,
+  NativeDialogOptions,
+  NativeMenuItem,
+} from "../../../src/ui/nativeUiTypes";
 
 export interface OpenedMenu {
   readonly items: readonly NativeMenuItem[];
@@ -21,10 +29,17 @@ export interface OpenedDialog {
   cancel(): void;
   /** Handle renvoyé à l'appelant (`close()` annule comme SiYuan). */
   readonly handle: DialogHandle;
-  /** Texte courant du bouton de confirmation (change avec `setConfirmLabel`). */
-  readonly confirmLabel: string;
   /** SiYuan retire le dialogue de l'écran SANS rappeler `destroyCallback` : ni onCancel ni onDestroyed. */
   vanish(): void;
+}
+
+export interface OpenedCustomDialog {
+  readonly options: CustomDialogOptions;
+  /** Conteneur du corps (le contenu fourni y est inséré, comme dans `.b3-dialog__body`). */
+  readonly container: HTMLElement;
+  readonly handle: CustomDialogHandle;
+  /** Destruction effective : `onDestroyed` une fois (Échap, voile, Annuler ou `close()`). */
+  destroy(): void;
 }
 
 /** Remplaçants injectables de `openMenu` / `openDialog` : ils enregistrent tout et se pilotent à la main. */
@@ -60,21 +75,14 @@ export function createNativeFakes() {
       if (!confirmed) options.onCancel?.();
       options.onDestroyed?.();
     };
-    let confirmLabel = options.labels.confirm;
     const handle: DialogHandle = {
       close: () => destroy(false),
       isOpen: () => !done,
-      setConfirmLabel: (label) => {
-        if (!done) confirmLabel = label;
-      },
     };
     dialogs.push({
       options,
       container,
       handle,
-      get confirmLabel() {
-        return confirmLabel;
-      },
       confirm() {
         if (done) return false;
         const result = options.onConfirm();
@@ -92,6 +100,27 @@ export function createNativeFakes() {
     });
     return handle;
   });
+  const customDialogs: OpenedCustomDialog[] = [];
+  const openCustomDialog = vi.fn((options: CustomDialogOptions): CustomDialogHandle => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    container.appendChild(options.content);
+    let done = false;
+    const destroy = (): void => {
+      if (done) return;
+      done = true;
+      container.remove();
+      options.onDestroyed?.();
+    };
+    const handle: CustomDialogHandle = { close: destroy, isOpen: () => !done };
+    customDialogs.push({ options, container, handle, destroy });
+    return handle;
+  });
+  const lastCustomDialog = (): OpenedCustomDialog => {
+    const dialog = customDialogs.at(-1);
+    if (!dialog) throw new Error("aucun dialogue libre ouvert");
+    return dialog;
+  };
   const lastMenu = (): OpenedMenu => {
     const menu = menus.at(-1);
     if (!menu) throw new Error("aucun menu ouvert");
@@ -102,7 +131,7 @@ export function createNativeFakes() {
     if (!dialog) throw new Error("aucun dialogue ouvert");
     return dialog;
   };
-  return { openMenu, openDialog, menus, dialogs, lastMenu, lastDialog };
+  return { openMenu, openDialog, openCustomDialog, menus, dialogs, customDialogs, lastMenu, lastDialog, lastCustomDialog };
 }
 
 /** Élément d'un menu par chemin de libellés (sous-menus compris) ; lève s'il manque. */

@@ -17,7 +17,7 @@ export const MAX_LABEL_LENGTH = 200;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Reconstruit une portée sûre (ordre de clés fixe, libellé NFC borné) ; undefined pour toute entrée invalide. */
-export function normalizedScope(raw: unknown): DocumentScope | undefined {
+function normalizedScope(raw: unknown): DocumentScope | undefined {
   if (!isRecord(raw)) return undefined;
   const { kind, box, docPath, label } = raw;
   if (typeof box !== "string" || !SQL_ID.test(box) || typeof label !== "string") return undefined;
@@ -32,25 +32,70 @@ export function normalizedScope(raw: unknown): DocumentScope | undefined {
   return undefined;
 }
 
-/** Clé de cache : le libellé n'y entre pas (il ne change pas le résultat). */
-export function scopeKey(scope: DocumentScope, includeChildren: boolean): string {
-  const target = scope.kind === "notebook" ? "" : scope.docPath;
-  return `${scope.kind}|${scope.box}|${target}|${includeChildren ? "1" : "0"}`;
+export const MAX_SCOPES = 20;
+
+/** Identité d'une portée (le libellé n'y entre pas : il ne change pas le résultat). */
+const targetKey = (scope: DocumentScope): string => `${scope.kind}|${scope.box}|${scope.kind === "notebook" ? "" : scope.docPath}`;
+
+/**
+ * Liste de portées sûre : 1 à 20 portées toutes valides, sans doublon de cible ; sinon undefined pour la liste ENTIÈRE
+ * (retirer une portée en silence élargirait ou changerait la recherche).
+ */
+export function normalizedScopes(raw: unknown): readonly DocumentScope[] | undefined {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_SCOPES) return undefined;
+  const out: DocumentScope[] = [];
+  const seen = new Set<string>();
+  for (const item of raw as unknown[]) {
+    const scope = normalizedScope(item);
+    if (scope === undefined) return undefined;
+    const key = targetKey(scope);
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    out.push(scope);
+  }
+  return out;
 }
 
-/** Requête des PDF cités par la portée. `limit` explicite : sans lui le noyau tronque à 64 lignes. */
-export function buildScopeSql(scope: DocumentScope, includeChildren: boolean, limit: number): string {
+/**
+ * Lit les portées d'un objet de filtres inconnu : `scopes` (liste) ou, pour les anciens fichiers, `scope` (singulier, lu comme
+ * une liste d'un élément). `invalid` porte la valeur brute refusée (à signaler par l'appelant, jamais retirée en silence).
+ */
+export function readScopes(filters: Record<string, unknown>): { readonly scopes?: readonly DocumentScope[]; readonly invalid?: unknown } {
+  const raw = filters["scopes"] !== undefined ? filters["scopes"] : filters["scope"] !== undefined ? [filters["scope"]] : undefined;
+  if (raw === undefined) return {};
+  const scopes = normalizedScopes(raw);
+  return scopes === undefined ? { invalid: filters["scopes"] !== undefined ? filters["scopes"] : filters["scope"] } : { scopes };
+}
+
+/**
+ * Clé de cache : indicateur d'enfants puis clés de cible triées, séparés par « \n » (absent des identifiants et chemins
+ * validés, donc deux listes distinctes ne produisent jamais la même clé).
+ */
+export function scopeKey(scopes: readonly DocumentScope[], includeChildren: boolean): string {
+  // Un cahier contient toujours tous ses documents : l'indicateur ne concerne que les documents choisis (cache partagé sinon).
+  const flag = includeChildren || !scopes.some((s) => s.kind === "document") ? "1" : "0";
+  return [flag, ...scopes.map(targetKey).sort()].join("\n");
+}
+
+/** Un cahier inclut TOUJOURS tous ses documents (comme SiYuan) ; `includeChildren` ne concerne que les documents choisis. */
+function scopeCondition(scope: DocumentScope, includeChildren: boolean): string {
   if (!SQL_ID.test(scope.box)) throw new Error("invalid notebook id in document scope");
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("invalid SQL limit");
   let where = `box = '${scope.box}'`;
-  // Cahier sans enfants : seulement les documents de premier niveau (« /ID.sy », aucun autre « / »). Motif constant.
-  if (scope.kind === "notebook" && !includeChildren) where += " and docpath not like '/%/%'";
   if (scope.kind === "document") {
     if (!DOC_PATH.test(scope.docPath)) throw new Error("invalid document path in document scope");
     const self = `docpath = '${scope.docPath}'`;
     const descendants = `docpath like '${scope.docPath.slice(0, -".sy".length)}/%'`;
     where += includeChildren ? ` and (${self} or ${descendants})` : ` and ${self}`;
   }
+  return where;
+}
+
+/** Requête des PDF cités par les portées (OU). `limit` explicite : sans lui le noyau tronque à 64 lignes. */
+export function buildScopeSql(scopes: readonly DocumentScope[], includeChildren: boolean, limit: number): string {
+  if (scopes.length < 1 || scopes.length > MAX_SCOPES) throw new Error("invalid number of document scopes");
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("invalid SQL limit");
+  const conditions = scopes.map((s) => scopeCondition(s, includeChildren));
+  const where = conditions.length === 1 ? (conditions[0] as string) : `(${conditions.map((c) => `(${c})`).join(" or ")})`;
   return `select distinct path from assets where ${where} and lower(path) like '%.pdf' limit ${limit}`;
 }
 
@@ -88,9 +133,9 @@ export interface ScopeResolverDeps {
 
 export interface ScopeResolver {
   /** Résultat en cache encore valide, ou undefined (ne lance aucune requête). */
-  peek(scope: DocumentScope, includeChildren: boolean): ReadonlySet<string> | undefined;
+  peek(scopes: readonly DocumentScope[], includeChildren: boolean): ReadonlySet<string> | undefined;
   /** Rejette avec IndexUnavailableError, ScopeTooLargeError, une erreur du noyau, ou la raison de l'annulation. */
-  resolve(scope: DocumentScope, includeChildren: boolean, signal?: AbortSignal): Promise<ReadonlySet<string>>;
+  resolve(scopes: readonly DocumentScope[], includeChildren: boolean, signal?: AbortSignal): Promise<ReadonlySet<string>>;
 }
 
 export const SCOPE_CACHE_ENTRIES = 8;
@@ -118,10 +163,10 @@ export function createScopeResolver(deps: ScopeResolverDeps): ScopeResolver {
     return entry.paths;
   };
 
-  const start = (key: string, scope: DocumentScope, includeChildren: boolean): Inflight => {
+  const start = (key: string, scopes: readonly DocumentScope[], includeChildren: boolean): Inflight => {
     const controller = new AbortController();
     const promise = (async (): Promise<ReadonlySet<string>> => {
-      const paths = pathsFromScopeResult(await deps.query(buildScopeSql(scope, includeChildren, SCOPE_SQL_LIMIT), controller.signal));
+      const paths = pathsFromScopeResult(await deps.query(buildScopeSql(scopes, includeChildren, SCOPE_SQL_LIMIT), controller.signal));
       // Annulé entre-temps (plus aucun demandeur) : rien n'est mis en cache.
       if (!controller.signal.aborted) {
         cache.set(key, { paths, at: deps.now() });
@@ -140,13 +185,13 @@ export function createScopeResolver(deps: ScopeResolverDeps): ScopeResolver {
   };
 
   return {
-    peek: (scope, includeChildren) => fresh(scopeKey(scope, includeChildren)),
-    async resolve(scope, includeChildren, signal) {
+    peek: (scopes, includeChildren) => fresh(scopeKey(scopes, includeChildren)),
+    async resolve(scopes, includeChildren, signal) {
       if (signal?.aborted) throw signal.reason;
-      const key = scopeKey(scope, includeChildren);
+      const key = scopeKey(scopes, includeChildren);
       const cached = fresh(key);
       if (cached) return cached;
-      const entry = inflight.get(key) ?? start(key, scope, includeChildren);
+      const entry = inflight.get(key) ?? start(key, scopes, includeChildren);
       entry.waiters++;
       let onAbort: (() => void) | undefined;
       const aborted = new Promise<never>((_resolve, reject) => {

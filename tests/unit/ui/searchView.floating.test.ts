@@ -40,7 +40,7 @@ function mount(extra: Partial<SearchViewDeps> = {}): SearchView {
     thumbnails: { attach: () => () => undefined },
     onOpen: vi.fn(),
     getDocMeta: () => ({ pdfSize: 1, pdfModifiedMs: 2 }),
-    options: { getOptions: () => opts, setOptions: (o) => void (opts = o), getFolders: () => [] },
+    options: { getOptions: () => opts, setOptions: (o) => void (opts = o) },
     history: { get: () => [], add: history.add as (q: string) => void, clear: vi.fn() },
     openMenu: fakes.openMenu,
     openDialog: fakes.openDialog,

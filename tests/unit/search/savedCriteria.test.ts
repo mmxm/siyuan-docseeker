@@ -7,6 +7,7 @@ import {
   criteriaNameKey,
   normalizeCriteriaList,
   parseSavedCriteria,
+  planCriteriaSave,
   removeCriteria,
   sameCriteria,
   upsertCriteria,
@@ -52,7 +53,7 @@ describe("parseSavedCriteria", () => {
   const valid = {
     name: "  Mon  critère ",
     query: " chat ",
-    filters: { folder: "assets/a", includeSubfolders: false, nameContains: "x", minPages: 2, maxPages: 9, modifiedAfterMs: 5 },
+    filters: { includeSubfolders: false, nameContains: "x", minPages: 2, maxPages: 9, modifiedAfterMs: 5 },
     sort: { key: "name", direction: "asc" },
     groupByDocument: false,
   };
@@ -63,9 +64,8 @@ describe("parseSavedCriteria", () => {
     if (!r.ok) return;
     expect(r.value.name).toBe("Mon critère");
     expect(r.value.query).toBe("chat");
-    expect(r.value.filters.folder).toBe("assets/a/");
     expect(Object.keys(r.value)).toEqual(["name", "query", "filters", "sort", "groupByDocument"]);
-    expect(Object.keys(r.value.filters)).toEqual(["folder", "includeSubfolders", "nameContains", "minPages", "maxPages", "modifiedAfterMs"]);
+    expect(Object.keys(r.value.filters)).toEqual(["includeSubfolders", "nameContains", "minPages", "maxPages", "modifiedAfterMs"]);
     expect(Object.keys(r.value.sort)).toEqual(["key", "direction"]);
   });
 
@@ -81,9 +81,35 @@ describe("parseSavedCriteria", () => {
   });
 
   it("portée valide conservée", () => {
-    const r = parseSavedCriteria({ ...valid, filters: { ...valid.filters, scope: { kind: "document", box: BOX, docPath: DOC, label: "Cahier / Doc" } } });
-    expect(r.ok && r.value.filters.scope).toEqual({ kind: "document", box: BOX, docPath: DOC, label: "Cahier / Doc" });
-    expect(r.ok && r.value.filters.folder).toBe("");
+    const r = parseSavedCriteria({ ...valid, filters: { ...valid.filters, scopes: [{ kind: "document", box: BOX, docPath: DOC, label: "Cahier / Doc" }] } });
+    expect(r.ok && r.value.filters.scopes).toEqual([{ kind: "document", box: BOX, docPath: DOC, label: "Cahier / Doc" }]);
+    expect(r.ok && r.value.filters).not.toHaveProperty("folder");
+  });
+
+  it("lit l'ancien format `scope` singulier comme une liste d'un élément (jamais réécrit en singulier)", () => {
+    const old = { kind: "document", box: BOX, docPath: DOC, label: "Cahier / Doc" };
+    const r = parseSavedCriteria({ ...valid, filters: { ...valid.filters, scope: old } });
+    expect(r.ok && r.value.filters.scopes).toEqual([old]);
+    expect(r.ok && r.value.filters).not.toHaveProperty("scope");
+  });
+
+  it("deux portées conservées dans l'ordre", () => {
+    const nb = { kind: "notebook", box: BOX, label: "C" };
+    const doc = { kind: "document", box: BOX, docPath: DOC, label: "D" };
+    const r = parseSavedCriteria({ ...valid, filters: { ...valid.filters, scopes: [nb, doc] } });
+    expect(r.ok && r.value.filters.scopes).toEqual([nb, doc]);
+  });
+
+  it("une portée invalide dans la liste, 21 portées, un doublon ou une liste vide rejettent le critère", () => {
+    const nb = { kind: "notebook", box: BOX, label: "C" };
+    const bad = { kind: "document", box: BOX, docPath: "/x' or 1=1 --.sy", label: "x" };
+    const many = Array.from({ length: 21 }, (_v, i) => ({ kind: "notebook", box: `20210808180117-aaaaa${"abcdefghij"[Math.floor(i / 10)]}${"abcdefghij"[i % 10]}`, label: "n" }));
+    for (const scopes of [[nb, bad], many, [nb, { ...nb }], [], "x"]) {
+      const r = parseSavedCriteria({ ...valid, filters: { ...valid.filters, scopes } });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/portée/);
+    }
+    expect(parseSavedCriteria({ ...valid, filters: { ...valid.filters, scope: bad } }).ok).toBe(false);
   });
 
   it.each([
@@ -101,8 +127,8 @@ describe("parseSavedCriteria", () => {
     ["tri valide mais non proposé", { ...valid, sort: { key: "path", direction: "desc" } }, /tri/],
     ["tri absent", { ...valid, sort: undefined }, /tri/],
     ["regroupement non booléen", { ...valid, groupByDocument: "oui" }, /regroupement/],
-    ["portée avec docPath malveillant", { ...valid, filters: { ...valid.filters, scope: { kind: "document", box: BOX, docPath: "/x' or 1=1 --.sy", label: "x" } } }, /portée/],
-    ["portée avec box malveillant", { ...valid, filters: { ...valid.filters, scope: { kind: "notebook", box: "x'; drop", label: "x" } } }, /portée/],
+    ["portée avec docPath malveillant", { ...valid, filters: { ...valid.filters, scopes: [{ kind: "document", box: BOX, docPath: "/x' or 1=1 --.sy", label: "x" }] } }, /portée/],
+    ["portée avec box malveillant", { ...valid, filters: { ...valid.filters, scopes: [{ kind: "notebook", box: "x'; drop", label: "x" }] } }, /portée/],
   ])("%s : rejeté avec une raison précise", (_n, raw, reason) => {
     const r = parseSavedCriteria(raw);
     expect(r.ok).toBe(false);
@@ -112,7 +138,14 @@ describe("parseSavedCriteria", () => {
 
 describe("normalizeCriteriaList", () => {
   it("absent : liste vide sans avertissement (ancien fichier)", () => {
-    expect(normalizeCriteriaList(undefined)).toEqual({ list: [], warnings: [], ignored: 0 });
+    expect(normalizeCriteriaList(undefined)).toEqual({ list: [], warnings: [], ignored: 0, unrecognized: [] });
+  });
+  it("entrées illisibles rendues telles quelles (unrecognized) ; doublons et excédent ne le sont pas", () => {
+    const junk = { name: "futur", v: 2 };
+    const r = normalizeCriteriaList([make("a"), junk, "texte", make("A")]);
+    expect(r.list.map((c) => c.name)).toEqual(["a"]);
+    expect(r.unrecognized).toEqual([junk, "texte"]);
+    expect(r.unrecognized[0]).toBe(junk);
   });
   it("non tableau : liste vide et un avertissement", () => {
     const r = normalizeCriteriaList({});
@@ -177,13 +210,36 @@ describe("upsertCriteria", () => {
     const r = upsertCriteria([], make("  x   y "));
     expect("list" in r && r.list[0]?.name).toBe("x y");
   });
-  it("remplace un nom existant (casse, accents, NFC) en gardant la position", () => {
+  it("remplace un nom existant (casse, accents, NFC) et le place en fin, comme la recherche native", () => {
     const r = upsertCriteria([make("Été", { query: "a" }), make("b")], make("ETE", { query: "z" }));
     expect(r).toMatchObject({ replaced: true });
     if ("list" in r) {
-      expect(r.list.map((c) => c.name)).toEqual(["ETE", "b"]);
-      expect(r.list[0]?.query).toBe("z");
+      expect(r.list.map((c) => c.name)).toEqual(["b", "ETE"]);
+      expect(r.list[1]?.query).toBe("z");
     }
+  });
+  it("renommer : retire l'ancien nom puis ajoute le nouveau en fin (replaced faux)", () => {
+    const r = upsertCriteria([make("a"), make("vieux"), make("c")], make("neuf"), ["vieux"]);
+    expect(r).toMatchObject({ replaced: false });
+    expect("list" in r && r.list.map((c) => c.name)).toEqual(["a", "c", "neuf"]);
+  });
+  it("fusionner : retire l'autre critère ET celui de même nom, un seul reste", () => {
+    const r = upsertCriteria([make("a"), make("x"), make("y")], make("y", { query: "z" }), ["x"]);
+    expect(r).toMatchObject({ replaced: true });
+    expect("list" in r && r.list.map((c) => c.name)).toEqual(["a", "y"]);
+  });
+  it("les noms à retirer suivent la règle d'unicité (casse, accents)", () => {
+    const r = upsertCriteria([make("Été"), make("b")], make("c"), ["ETE"]);
+    expect("list" in r && r.list.map((c) => c.name)).toEqual(["b", "c"]);
+  });
+  it("30 critères : renommer reste possible (une place se libère), ajouter non", () => {
+    const full = Array.from({ length: 30 }, (_, i) => make(`c${i}`));
+    const r = upsertCriteria(full, make("neuf"), ["c3"]);
+    expect("list" in r && r.list).toHaveLength(30);
+    expect(upsertCriteria(full, make("neuf"))).toEqual({ error: "limit" });
+  });
+  it("erreur (nom trop long) : aucun retrait", () => {
+    expect(upsertCriteria([make("a")], make("x".repeat(81)), ["a"])).toEqual({ error: "tooLong" });
   });
   it("30 critères : un nouveau est refusé (limit), la liste n'est pas modifiée", () => {
     const full = Array.from({ length: 30 }, (_, i) => make(`c${i}`));
@@ -233,8 +289,68 @@ describe("sameCriteria", () => {
   });
   it("la portée compte", () => {
     const scope = { kind: "notebook", box: BOX, label: "C" } as const;
-    const a = make("a", { filters: { ...NO_FILTERS, scope } });
-    expect(sameCriteria(a, { query: "chat", filters: { ...NO_FILTERS, scope }, sort: a.sort, groupByDocument: true })).toBe(true);
+    const a = make("a", { filters: { ...NO_FILTERS, scopes: [scope] } });
+    expect(sameCriteria(a, { query: "chat", filters: { ...NO_FILTERS, scopes: [scope] }, sort: a.sort, groupByDocument: true })).toBe(true);
     expect(sameCriteria(a, { query: "chat", filters: { ...NO_FILTERS }, sort: a.sort, groupByDocument: true })).toBe(false);
+  });
+});
+
+describe("planCriteriaSave : cas de la recherche native", () => {
+  const state = (over: Partial<SavedCriteria> = {}) => {
+    const { name: _n, ...rest } = make("x", over);
+    return rest;
+  };
+  const other = { query: "autre" };
+
+  it("nom vide (ou espaces, caractères invisibles) : empty", () => {
+    expect(planCriteriaSave([], "  \u200b ", state())).toEqual({ kind: "empty" });
+  });
+  it("nom de plus de 80 caractères : tooLong ; requête de plus de 200 : query", () => {
+    expect(planCriteriaSave([], "x".repeat(81), state())).toEqual({ kind: "tooLong" });
+    expect(planCriteriaSave([], "ok", state({ query: "x".repeat(201) }))).toEqual({ kind: "query" });
+  });
+  it("rien de pareil : save avec le nom nettoyé", () => {
+    expect(planCriteriaSave([make("a", other)], "  nouveau ", state())).toEqual({ kind: "save", name: "nouveau", removeNames: [] });
+  });
+  it("30 critères et un nouveau nom : limit", () => {
+    const full = Array.from({ length: 30 }, (_, i) => make(`c${i}`, { query: `q${i}` }));
+    expect(planCriteriaSave(full, "neuf", state())).toEqual({ kind: "limit" });
+  });
+  it("30 critères mais écrasement : permis", () => {
+    const full = Array.from({ length: 30 }, (_, i) => make(`c${i}`, { query: `q${i}` }));
+    expect(planCriteriaSave(full, "c4", state())).toMatchObject({ kind: "overwrite" });
+  });
+  it("même nom, configuration différente : overwrite", () => {
+    expect(planCriteriaSave([make("a", other)], "a", state())).toEqual({ kind: "overwrite", name: "a", removeNames: [] });
+  });
+  it("même nom à la casse près (clé d'unicité), configuration différente : overwrite", () => {
+    expect(planCriteriaSave([make("Été", other)], "ETE", state())).toMatchObject({ kind: "overwrite", name: "ETE" });
+  });
+  it("même configuration, nom différent : rename (de x vers y)", () => {
+    expect(planCriteriaSave([make("vieux")], "neuf", state())).toEqual({ kind: "rename", name: "neuf", from: "vieux", removeNames: ["vieux"] });
+  });
+  it("deux critères distincts, l'un de même nom, l'autre de même configuration : merge", () => {
+    const list = [make("cible", other), make("copie")];
+    expect(planCriteriaSave(list, "cible", state())).toEqual({ kind: "merge", name: "cible", from: "copie", removeNames: ["copie"] });
+  });
+  it("même nom ET même configuration, même critère : noop", () => {
+    expect(planCriteriaSave([make("a")], "a", state())).toEqual({ kind: "noop" });
+  });
+  it("même critère, nom différent seulement par la casse : rename (on peut corriger la casse)", () => {
+    expect(planCriteriaSave([make("Chat")], "chat", state())).toMatchObject({ kind: "rename", from: "Chat", name: "chat" });
+  });
+  it("plusieurs critères de même configuration : le dernier est renommé (comme le natif)", () => {
+    const list = [make("a"), make("b")];
+    expect(planCriteriaSave(list, "neuf", state())).toMatchObject({ kind: "rename", from: "b" });
+  });
+  it("le chemin compte (le natif compare idPath) : même requête mais autre portée = configuration différente", () => {
+    const scope = { kind: "notebook", box: BOX, label: "C" } as const;
+    const list = [make("a", { filters: { ...NO_FILTERS, scopes: [scope] } })];
+    expect(planCriteriaSave(list, "b", state())).toMatchObject({ kind: "save" });
+  });
+  it("n'altère pas la liste d'entrée", () => {
+    const list = [make("a")];
+    planCriteriaSave(list, "b", state());
+    expect(list).toHaveLength(1);
   });
 });

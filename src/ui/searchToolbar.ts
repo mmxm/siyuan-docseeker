@@ -4,8 +4,9 @@
  *
  * - Une rangée `div.block__icons` de vrais `<button>` : [compteur] [chemin + croix] [Inclure les documents enfants]
  *   [Spécifier le chemin] [Plus] [Filtres] [Élargir] [Réduire].
- * - Dossier, tri et regroupement s'appliquent dès le choix dans le menu ; les autres filtres (nom, pages, date) ne
- *   s'appliquent qu'à « Confirmer » du dialogue, et seulement s'ils sont tous valides.
+ * - « Spécifier le chemin » ouvre le dialogue natif (arbre des cahiers et documents, voir `pathDialog.ts`) ; le chemin choisi
+ *   s'applique à « Confirmer » de ce dialogue. Tri et regroupement s'appliquent dès le choix dans le menu ; les autres filtres
+ *   (nom, pages, date) ne s'appliquent qu'à « Confirmer » du dialogue « Filtres », et seulement s'ils sont tous valides.
  */
 import {
   MIN_PAGE_BOUND,
@@ -19,38 +20,36 @@ import {
   type SearchOptions,
   type SortSpec,
 } from "../search/resultOptions";
-import { DocTreeTooLargeError, type DocTree } from "../search/docTree";
-import { IndexUnavailableError } from "../siyuan/kernelApi";
-import { criteriaNameKey, sameCriteria, type CriteriaState, type SavedCriteria } from "../search/savedCriteria";
-import { canSaveCriteria, criteriaMenuItems, openCriteriaDialog, type CriteriaHost } from "./criteriaMenu";
-import { docMenuItems, sameScopeTarget } from "./docMenu";
+import type { DocumentScope } from "../search/docScope";
 import { makeIconButton, svgIcon } from "./icons";
-import { INDENT, MAX_MENU_INDENT, MAX_MENU_LABEL, truncate } from "./menuLabels";
 import {
-  MENU_ID_CRITERIA,
   MENU_ID_MORE,
-  MENU_ID_PATH,
+  type CustomDialogHandle,
   type DialogHandle,
   type MenuHandle,
   type NativeDialogOptions,
   type NativeMenuItem,
+  type OpenCustomDialog,
   type OpenDialog,
   type OpenMenu,
 } from "./nativeUiTypes";
+import { openPathDialog, type PathKernel } from "./pathDialog";
+import { escapeForTooltip } from "./tooltip";
 import { nextUiId } from "./uniqueId";
 
 export interface SearchToolbarDeps {
   getOptions(): SearchOptions;
   setOptions(next: SearchOptions): void;
-  /** Dossiers proposés (tous, triés) : la barre borne ce qu'elle en montre (voir `MAX_FOLDER_ITEMS`). */
-  getFolders(): readonly string[];
   /**
-   * Arbre des cahiers et documents SiYuan, lu à chaque ouverture du menu « Spécifier le chemin » (le menu s'ouvre une fois la
-   * lecture terminée). Absent : le menu ne propose que les dossiers de fichiers.
+   * Noyau SiYuan pour le dialogue « Spécifier le chemin » (cahiers, documents, recherche, chemins lisibles). Absent, comme
+   * `openCustomDialog` : ni « Spécifier le chemin » ni « Inclure les documents enfants » (sans chemin possible, ils seraient inertes).
    */
-  getDocTree?(signal?: AbortSignal): Promise<DocTree>;
-  /** Trace des incidents (lecture de l'arbre, ouverture du menu) ; par défaut la console. */
+  pathKernel?: PathKernel;
+  openCustomDialog?: OpenCustomDialog;
+  /** Trace des incidents (lecture des documents, ouverture du dialogue) ; par défaut la console. */
   onWarn?(message: string, error?: unknown): void;
+  /** Message bref à l'utilisateur (échec visible : ouverture du dialogue de chemin) ; texte brut. */
+  notify?(text: string): void;
   t(key: string, vars?: Readonly<Record<string, string | number>>): string;
   openMenu: OpenMenu;
   openDialog: OpenDialog;
@@ -59,10 +58,12 @@ export interface SearchToolbarDeps {
   getGroupByDocument(): boolean;
   setGroupByDocument(next: boolean): void;
   /**
-   * Critères de recherche enregistrés (bouton « Critères enregistrés » après le chemin). Absent : pas de bouton.
-   * `getQuery` : texte actuel du champ de recherche.
+   * Commandes des critères enregistrés du menu « Plus », comme la recherche native (« Enregistrer les critères de requête » et
+   * « Réinitialiser les critères de recherche »). Absent : pas de ces commandes (la ligne des critères est montée par la vue).
    */
-  criteria?: CriteriaHost & { getQuery(): string };
+  criteriaActions?: { save(): void; reset(): void };
+  /** Appelé après chaque resynchronisation (options, chemin, tri, regroupement) : la ligne des critères recalcule la puce courante. */
+  onStateChange?(): void;
   /** « Élargir » / « Réduire » : état et actions de la liste de résultats. */
   expansion: {
     canExpand(): boolean;
@@ -109,26 +110,11 @@ export function formatLocalDate(ms: number): string {
 
 type FieldKey = "min" | "max" | "date";
 const DIALOG_WIDTH = "420px";
-/** Bornes du menu des dossiers (le nombre, la profondeur et la longueur viennent des données, donc de l'extérieur). */
-export const MAX_FOLDER_ITEMS = 500;
-export const MAX_FOLDER_INDENT = MAX_MENU_INDENT;
-export const MAX_FOLDER_LABEL = MAX_MENU_LABEL;
 
-/** Filtres sans portée de documents (la clé disparaît : portée et dossier sont exclusifs). */
+/** Filtres sans portée de documents (la clé disparaît). */
 function withoutScope(filters: ResultFilters): ResultFilters {
-  const { scope: _scope, ...rest } = filters;
+  const { scopes: _scopes, ...rest } = filters;
   return rest;
-}
-
-type TreeState =
-  | { readonly kind: "ready"; readonly tree: DocTree }
-  | { readonly kind: "unavailable" | "tooLarge" | "failed" };
-
-/** « a/b/c/ » -> « a/b/ » ; chaîne vide s'il n'y a pas de parent. */
-function parentFolder(folder: string): string {
-  const trimmed = folder.endsWith("/") ? folder.slice(0, -1) : folder;
-  const cut = trimmed.lastIndexOf("/");
-  return cut >= 0 ? trimmed.slice(0, cut + 1) : "";
 }
 
 export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): SearchToolbar {
@@ -156,25 +142,44 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   const counter = doc.createElement("span");
   counter.className = "docseeker-count ft__on-surface ft__smaller fn__flex-center";
   counter.hidden = true;
+  // Étiquette du chemin, comme la recherche native : texte brut, croix SVG, puis une espace.
   const pathLabel = doc.createElement("span");
-  pathLabel.className = "search__path ft__on-surface fn__flex-center ft__smaller fn__ellipsis";
+  pathLabel.className = "search__path ft__on-surface fn__flex-center ft__smaller fn__ellipsis ariaLabel";
   pathLabel.hidden = true;
-  const pathText = doc.createElement("span");
-  pathText.className = "docseeker-path-text";
-  pathLabel.appendChild(pathText);
-  const removeBtn = makeButton("iconCloseRound", t("removePath"), "docseeker-rmpath");
-  removeBtn.hidden = true;
+  const pathText = doc.createTextNode("");
+  // Native : simple SVG cliquable. Ici focalisable au clavier (Entrée, Espace) en plus : sinon le retrait serait réservé à la souris.
+  const removeIcon = svgIcon(doc, "iconCloseRound", "search__rmpath");
+  removeIcon.setAttribute("tabindex", "0");
+  removeIcon.setAttribute("role", "button");
+  removeIcon.setAttribute("aria-label", t("removePath"));
+  pathLabel.append(pathText, removeIcon);
+  const pathSpace = space();
+  pathSpace.hidden = true;
   const grow = doc.createElement("span");
   grow.className = "fn__flex-1";
   const includeBtn = makeButton("iconInclude", t("includeChildren"));
   const pathBtn = makeButton("iconFolder", t("pathSpecify"));
-  const criteria = deps.criteria;
-  const critBtn = criteria ? makeButton("iconBookmark", t("criteriaMenu")) : undefined;
   const moreBtn = makeButton("iconMore", t("moreMenu"));
   const filtersBtn = makeButton("iconFilter", t("filtersLabel"));
   const expandBtn = makeButton("iconExpand", t("expandAll"));
   const collapseBtn = makeButton("iconContract", t("collapseAll"));
-  row.append(counter, pathLabel, removeBtn, grow, includeBtn, pathBtn, ...(critBtn ? [critBtn] : []), space(), moreBtn, filtersBtn, space(), expandBtn, collapseBtn);
+  // Sans noyau ni dialogue libre aucun chemin ne peut être choisi : les deux boutons seraient inertes, ils sont omis.
+  const pathKernel = deps.pathKernel;
+  const openCustomDialog = deps.openCustomDialog;
+  const canChoosePath = pathKernel !== undefined && openCustomDialog !== undefined;
+  row.append(
+    counter,
+    pathLabel,
+    pathSpace,
+    grow,
+    ...(canChoosePath ? [includeBtn, pathBtn] : []),
+    space(),
+    moreBtn,
+    filtersBtn,
+    space(),
+    expandBtn,
+    collapseBtn,
+  );
   const openInTab = deps.openInTab;
   let openInTabBtn: HTMLButtonElement | undefined;
   if (openInTab) {
@@ -186,54 +191,37 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   const options = (): SearchOptions => deps.getOptions();
   const currentFilters = (): ResultFilters => options().filters;
 
-  // --- Critères enregistrés : état courant de la recherche et critère « rappelé » (nom).
-  /** Nom du dernier critère rappelé ou enregistré ; le bouton n'est actif que tant que l'état courant lui est identique. */
-  let recalledName: string | undefined;
-  const criteriaState = (): CriteriaState => ({
-    query: criteria?.getQuery().trim() ?? "",
-    filters: currentFilters(),
-    sort: options().sort,
-    groupByDocument: deps.getGroupByDocument(),
-  });
-  const findCriteria = (name: string | undefined): SavedCriteria | undefined => {
-    if (name === undefined || !criteria) return undefined;
-    const wanted = criteriaNameKey(name);
-    return criteria.list().find((c) => criteriaNameKey(c.name) === wanted);
-  };
-  /** Le critère rappelé, s'il existe encore et que requête, filtres, tri et regroupement n'ont pas changé. */
-  function appliedCriteria(): SavedCriteria | undefined {
-    const found = findCriteria(recalledName);
-    return found && sameCriteria(found, criteriaState()) ? found : undefined;
-  }
-
   // --- Synchronisation depuis les options.
   const sync = (): void => {
     const f = currentFilters();
-    const { scope } = f;
-    const hasPath = f.folder !== "" || scope !== undefined;
-    const text = scope ? scope.label : f.folder;
+    const { scopes } = f;
+    const hasPath = scopes !== undefined;
+    // Comme la recherche native : les libellés des portées, joints par un espace (aussi dans l'infobulle native).
+    const text = scopes ? scopes.map((s) => s.label).join(" ") : "";
     pathLabel.hidden = !hasPath;
-    removeBtn.hidden = !hasPath;
-    if (pathText.textContent !== text) pathText.textContent = text;
-    // Document : les PDF que nul document ne cite sont exclus (à savoir) ; sinon l'infobulle redonne le chemin complet.
-    pathLabel.title = scope?.kind === "document" ? t("docFilterNoPdf") : text;
-    const includeActive = hasPath && f.includeSubfolders;
-    includeBtn.setAttribute("aria-disabled", String(!hasPath));
+    pathSpace.hidden = !hasPath;
+    if (pathText.data !== text) pathText.data = text;
+    // Infobulle native de SiYuan : aria-label est inséré comme HTML, les noms de documents sont des données non fiables.
+    pathLabel.setAttribute("aria-label", escapeForTooltip(text));
+    // Document : les PDF que nul document ne cite sont exclus (à savoir).
+    const hasDocument = scopes?.some((s) => s.kind === "document") === true;
+    if (hasDocument) pathLabel.title = t("docFilterNoPdf");
+    else pathLabel.removeAttribute("title");
+    // Comme le natif : « enfants » n'a de sens que pour un document ; un cahier contient toujours tous ses documents (l'indicateur
+    // n'est jamais forcé : il est ignoré par la requête quand il n'y a que des cahiers).
+    const includeActive = hasDocument && f.includeSubfolders;
+    includeBtn.setAttribute("aria-disabled", String(!hasDocument));
     includeBtn.setAttribute("aria-pressed", String(includeActive));
     svgOf(includeBtn)?.classList.toggle("ft__primary", includeActive);
     const n = countActiveFilters(f);
     filtersBtn.setAttribute("aria-label", n === 0 ? t("filtersLabel") : n === 1 ? t("filtersActiveOne") : t("filtersActiveMany", { n }));
     svgOf(filtersBtn)?.classList.toggle("ft__primary", n > 0);
-    if (critBtn) {
-      const applied = appliedCriteria();
-      svgOf(critBtn)?.classList.toggle("ft__primary", applied !== undefined);
-      critBtn.setAttribute("aria-label", applied ? t("criteriaApplied", { name: applied.name }) : t("criteriaMenu"));
-    }
     const grouped = deps.getGroupByDocument();
     expandBtn.hidden = !grouped;
     collapseBtn.hidden = !grouped;
     expandBtn.setAttribute("aria-disabled", String(!deps.expansion.canExpand()));
     collapseBtn.setAttribute("aria-disabled", String(!deps.expansion.canCollapse()));
+    deps.onStateChange?.();
   };
 
   const applyFilters = (filters: ResultFilters): void => {
@@ -249,21 +237,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   };
   /** Menu ouvert par la barre (un seul à la fois, comme SiYuan) : fermé au dispose. Le focus est rendu par l'adaptateur. */
   let menuHandle: MenuHandle | undefined;
-  /** Lecture en cours de l'arbre des documents (le menu du chemin s'ouvre à sa fin) ; annulée par tout autre menu et au dispose. */
-  let treeLoad: AbortController | undefined;
-  const pathLabelText = pathBtn.getAttribute("aria-label") ?? "";
-  const endTreeLoad = (): void => {
-    treeLoad = undefined;
-    pathBtn.removeAttribute("aria-busy");
-    pathBtn.setAttribute("aria-label", pathLabelText);
-  };
-  const cancelTreeLoad = (): void => {
-    if (!treeLoad) return;
-    treeLoad.abort();
-    endTreeLoad();
-  };
   const showMenu = (button: HTMLElement, id: string, items: readonly NativeMenuItem[], onClose?: () => void): void => {
-    cancelTreeLoad(); // le menu d'un autre bouton remplace celui du chemin : son ouverture tardive n'a plus lieu d'être
     // Un identifiant par bouton : bascule sur le même bouton, remplacement du menu d'un autre.
     menuHandle = deps.openMenu(items, anchorOf(button), onClose, id);
   };
@@ -272,137 +246,37 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
     else console.warn(`[docseeker] ${message}`, error);
   };
 
-  /** Dossiers de fichiers : entrées (sans en-tête) selon le dossier courant, bornées (nombre, profondeur, longueur). */
-  const folderItems = (wanted: string): NativeMenuItem[] => {
-    const all = deps.getFolders();
-    const shown = all.slice(0, MAX_FOLDER_ITEMS);
-    const displayed = new Set(shown);
-    let hidden = all.length - shown.length;
-    if (wanted !== "" && !displayed.has(wanted)) {
-      // Le dossier courant reste listé (et courant) même hors liste ou au-delà du plafond.
-      if (hidden > 0 && new Set(all).has(wanted)) hidden -= 1;
-      shown.push(wanted);
-      displayed.add(wanted);
-    }
-    const choose = (folder: string) => (): void => {
-      if (disposed || folder === currentFilters().folder) return;
-      applyFilters({ ...withoutScope(currentFilters()), folder });
-    };
-    const folderLabel = (folder: string): string => {
-      const parts = folder.split("/").filter((p) => p !== "");
-      const depth = Math.max(parts.length - 1, 0);
-      // Parent absent de la liste (ou indentation plafonnée) : le segment parent est affiché, pour ne pas confondre a/x et b/x.
-      const withParent = depth > 0 && (depth > MAX_FOLDER_INDENT || !displayed.has(parentFolder(folder)));
-      const name = withParent ? parts.slice(-2).join("/") : (parts[parts.length - 1] ?? folder);
-      return INDENT.repeat(Math.min(depth, MAX_FOLDER_INDENT)) + truncate(name, MAX_FOLDER_LABEL);
-    };
-    const items: NativeMenuItem[] = shown.map((folder) => ({ label: folderLabel(folder), current: folder === wanted, click: choose(folder) }));
-    if (hidden > 0) items.push({ label: t(hidden === 1 ? "foldersMoreOne" : "foldersMoreMany", { n: hidden }), disabled: true });
-    return items;
-  };
-
-  let pathMenu: MenuHandle | undefined;
-  /** Ouvre le menu du chemin ; `tree` : état de la lecture des documents (absent : pas de section « Documents SiYuan »). */
-  const showPathMenu = (tree: TreeState | undefined): void => {
+  // --- Chemin : dialogue natif « Spécifier le chemin ».
+  let pathHandle: CustomDialogHandle | undefined;
+  const applyScopes = (scopes: readonly DocumentScope[]): void => {
+    if (disposed) return;
     const filters = currentFilters();
-    const { scope } = filters;
-    const wanted = scope === undefined ? filters.folder : "";
-    const separator: NativeMenuItem = { separator: true };
-    const header = (key: string): NativeMenuItem => ({ label: t(key), disabled: true });
-    const items: NativeMenuItem[] = [
-      {
-        label: t("filterAllFolders"),
-        current: wanted === "" && scope === undefined,
-        click: () => {
-          const now = currentFilters();
-          if (disposed || (now.folder === "" && now.scope === undefined)) return;
-          applyFilters({ ...withoutScope(now), folder: "" });
+    // Comme le natif : l'indicateur « enfants » est conservé tel quel (désactivé pour des cahiers seuls, qui contiennent tout).
+    applyFilters({ ...filters, scopes });
+  };
+  const openPathChooser = (): void => {
+    if (disposed || !pathKernel || !openCustomDialog || pathHandle?.isOpen() === true) return;
+    try {
+      pathHandle = openPathDialog({
+        doc,
+        t,
+        kernel: pathKernel,
+        openCustomDialog,
+        onWarn: warn,
+        onConfirm: applyScopes,
+        // Après Confirmer, Annuler ou Échap, quand SiYuan a vraiment détruit le dialogue.
+        onDestroyed: () => {
+          if (!disposed && pathBtn.isConnected) pathBtn.focus();
         },
-      },
-    ];
-    const folders = folderItems(wanted);
-    if (folders.length > 0) items.push(...(tree ? [separator, header("pathSectionFolders")] : []), ...folders);
-    let retry = false;
-    if (tree) {
-      items.push(separator, header("pathSectionDocs"));
-      if (tree.kind === "ready" && tree.tree.length === 0) items.push(header("docsNone"));
-      else if (tree.kind === "ready") {
-        items.push(
-          ...docMenuItems({
-            tree: tree.tree,
-            current: scope,
-            t,
-            choose: (next) => {
-              if (disposed || sameScopeTarget(next, currentFilters().scope)) return;
-              applyFilters({ ...currentFilters(), folder: "", scope: next });
-            },
-          }),
-        );
-      } else if (tree.kind === "tooLarge") {
-        items.push(header("docsTooLarge"));
-      } else {
-        items.push(header(tree.kind === "unavailable" ? "docsNotReady" : "docsFailed"), {
-          label: t("docsRetry"),
-          click: () => {
-            retry = true;
-          },
-        });
+      });
+    } catch (error) {
+      warn("Dialogue « Spécifier le chemin » impossible à ouvrir", error);
+      try {
+        deps.notify?.(t("pathDialogOpenFailed"));
+      } catch (inner) {
+        warn("Message sur le dialogue de chemin impossible", inner);
       }
     }
-    // « Réessayer » : SiYuan ferme le menu après le clic ; on le rouvre une fois fermé, le focus d'abord rendu au bouton.
-    const onClose =
-      tree?.kind === "unavailable" || tree?.kind === "failed"
-        ? (): void => {
-            if (!retry || disposed) return;
-            retry = false;
-            pathBtn.focus();
-            openPathMenu();
-          }
-        : undefined;
-    showMenu(pathBtn, MENU_ID_PATH, items, onClose);
-    pathMenu = menuHandle;
-  };
-  const openPathMenu = (): void => {
-    const getTree = deps.getDocTree;
-    if (!getTree) {
-      showPathMenu(undefined);
-      return;
-    }
-    // Bascule : le clic sur le bouton referme le menu du chemin ouvert, ou abandonne la lecture en cours.
-    if (pathMenu?.isOpen() === true) {
-      pathMenu.close();
-      return;
-    }
-    if (treeLoad) {
-      cancelTreeLoad();
-      return;
-    }
-    // Un menu ouvert ne se reconstruit pas (la navigation de l'utilisateur y serait perdue) : l'arbre est lu AVANT l'ouverture,
-    // et l'attente est visible sur le bouton.
-    const mine = new AbortController();
-    treeLoad = mine;
-    pathBtn.setAttribute("aria-busy", "true");
-    pathBtn.setAttribute("aria-label", t("docsLoading"));
-    const open = (state: TreeState): void => {
-      if (mine.signal.aborted || disposed) return;
-      endTreeLoad();
-      showPathMenu(state);
-    };
-    (async () => getTree(mine.signal))()
-      .then(
-        (tree) => open({ kind: "ready", tree }),
-        (error: unknown) => {
-          if (mine.signal.aborted || disposed) return;
-          if (error instanceof IndexUnavailableError) return open({ kind: "unavailable" });
-          if (error instanceof DocTreeTooLargeError) return open({ kind: "tooLarge" });
-          warn("Liste des documents SiYuan illisible", error);
-          open({ kind: "failed" });
-        },
-      )
-      .catch((error: unknown) => {
-        if (treeLoad === mine) endTreeLoad();
-        warn("Menu du chemin impossible à ouvrir", error);
-      });
   };
   const openMoreMenu = (): void => {
     const currentSort = sortToValue(options().sort);
@@ -417,6 +291,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
       deps.setGroupByDocument(next);
       sync();
     };
+    const criteriaActions = deps.criteriaActions;
     showMenu(moreBtn, MENU_ID_MORE, [
       {
         label: t("sortMenu"),
@@ -429,6 +304,13 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
           { label: t("groupByDocument"), current: grouped, click: chooseGroup(true) },
         ],
       },
+      ...(criteriaActions
+        ? [
+            { separator: true },
+            { label: t("criteriaSave"), click: () => !disposed && criteriaActions.save() },
+            { label: t("criteriaReset"), click: () => !disposed && criteriaActions.reset() },
+          ]
+        : []),
     ]);
   };
 
@@ -438,10 +320,9 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   const openFiltersDialog = (): void => {
     if (disposed || dialogHandle?.isOpen() === true) return;
     const initial = currentFilters();
-    // Brouillon : dossier et sous-dossiers ne se changent dans ce dialogue que par « Réinitialiser les filtres ». Tant que
-    // l'utilisateur n'a pas réinitialisé (`undefined`), Confirmer garde le dossier COURANT, même modifié de l'extérieur
-    // pendant que le dialogue était ouvert.
-    let draftFolder: string | undefined;
+    // Brouillon : la portée de documents et « sous-documents » ne se changent dans ce dialogue que par « Réinitialiser les
+    // filtres ». Tant que l'utilisateur n'a pas réinitialisé (`undefined`), Confirmer garde l'état COURANT, même modifié de
+    // l'extérieur pendant que le dialogue était ouvert.
     let draftInclude: boolean | undefined;
     let draftScopeDropped = false; // « Réinitialiser les filtres » retire aussi la portée de documents
     const errorFields = new Map<FieldKey, { readonly control: HTMLElement; readonly message: HTMLElement }>();
@@ -495,8 +376,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
       const dirty =
         [nameInput, minInput, maxInput, dateInput].some((i) => i.value !== "") ||
         [...errorFields.values()].some((f) => f.control.getAttribute("aria-invalid") === "true") ||
-        (draftFolder ?? currentFilters().folder) !== "" ||
-        (!draftScopeDropped && currentFilters().scope !== undefined);
+        (!draftScopeDropped && currentFilters().scopes !== undefined);
       resetButton.setAttribute("aria-disabled", String(!dirty));
     };
 
@@ -535,12 +415,11 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
         firstInvalid?.focus();
         return undefined;
       }
-      const scope = draftScopeDropped ? undefined : currentFilters().scope;
+      const scopes = draftScopeDropped ? undefined : currentFilters().scopes;
       return {
-        folder: draftFolder ?? currentFilters().folder,
         includeSubfolders: draftInclude ?? currentFilters().includeSubfolders,
         nameContains: nameInput.value,
-        ...(scope !== undefined ? { scope } : {}),
+        ...(scopes !== undefined ? { scopes } : {}),
         ...(min.value !== undefined ? { minPages: min.value } : {}),
         ...(max.value !== undefined ? { maxPages: max.value } : {}),
         ...(day.value !== undefined ? { modifiedAfterMs: day.value } : {}),
@@ -588,7 +467,6 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
         maxInput.value = "";
         dateInput.value = "";
         for (const key of errorFields.keys()) showError(key, undefined);
-        draftFolder = NO_FILTERS.folder;
         draftInclude = NO_FILTERS.includeSubfolders;
         draftScopeDropped = true;
         updateReset();
@@ -617,93 +495,6 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
     dialogHandle = deps.openDialog(dialog);
   };
 
-  // --- Critères enregistrés : menu et dialogue.
-  /** Message bref de l'assemblage ; un échec est tracé, jamais propagé (ces appels sont faits depuis des promesses). */
-  const say = (text: string): void => {
-    try {
-      criteria?.notify(text);
-    } catch (error) {
-      warn("Message sur les critères impossible", error);
-    }
-  };
-  const openCriteriaSave = (): void => {
-    if (disposed || !criteria || !critBtn || dialogHandle?.isOpen() === true) return;
-    const state = criteriaState();
-    dialogHandle = openCriteriaDialog({
-      doc,
-      t,
-      openDialog: deps.openDialog,
-      state,
-      initialName: findCriteria(recalledName)?.name ?? "",
-      list: () => criteria.list(),
-      save: (c) => criteria.save(c),
-      onSaved: ({ name, replaced }) => {
-        recalledName = name; // l'état enregistré est l'état courant : le bouton devient actif
-        if (!disposed) sync();
-        say(t(replaced ? "criteriaReplaced" : "criteriaSaved", { name }));
-      },
-      onSaveFailed: (error) => {
-        warn("Critères non enregistrés", error);
-        say(t("criteriaSaveFailed")); // dialogue déjà fermé (annulation pendant l'écriture) : sans cela l'échec serait invisible
-      },
-      onWarn: warn,
-      // Après Enregistrer comme après toute annulation, une fois le dialogue vraiment détruit.
-      onDestroyed: () => {
-        if (!disposed && critBtn.isConnected) critBtn.focus();
-      },
-    });
-  };
-  const recallCriteria = (chosen: SavedCriteria): void => {
-    if (disposed || !criteria) return;
-    // Le menu a pu être ouvert avant qu'une autre fenêtre supprime ou remplace ce critère : on applique la version enregistrée.
-    const current = findCriteria(chosen.name);
-    if (!current) {
-      say(t("criteriaAlreadyDeleted"));
-      sync();
-      return;
-    }
-    try {
-      criteria.recall(current);
-      recalledName = current.name; // seulement si le rappel a abouti : sinon le bouton afficherait un critère non appliqué
-    } catch (error) {
-      warn("Rappel du critère en échec", error);
-      say(t("criteriaRecallFailed"));
-    }
-    sync();
-  };
-  const deleteCriteria = (chosen: SavedCriteria): void => {
-    if (!criteria) return;
-    criteria.remove(chosen.name).then(
-      (existed) => {
-        if (!disposed) sync();
-        // Déjà supprimé par une autre fenêtre : le dire, pas de silence.
-        say(existed ? t("criteriaDeleted", { name: chosen.name }) : t("criteriaAlreadyDeleted"));
-      },
-      (error: unknown) => {
-        warn("Critère non supprimé", error);
-        say(t("criteriaDeleteFailed"));
-        if (!disposed) sync();
-      },
-    ).catch((error: unknown) => warn("Suite de la suppression du critère en échec", error)); // jamais de rejet non géré
-  };
-  const openCriteriaMenu = (): void => {
-    if (!criteria || !critBtn) return;
-    sync(); // l'état du bouton suit la liste relue (autre fenêtre, suppression)
-    showMenu(
-      critBtn,
-      MENU_ID_CRITERIA,
-      criteriaMenuItems({
-        list: criteria.list(),
-        t,
-        appliedName: appliedCriteria()?.name,
-        canSave: canSaveCriteria(criteriaState()),
-        onSave: openCriteriaSave,
-        onRecall: recallCriteria,
-        onDelete: deleteCriteria,
-      }),
-    );
-  };
-
   // --- Événements.
   const on = (button: HTMLElement, handler: () => void, opensMenu = false): void => {
     if (opensMenu) button.setAttribute("data-menu", "true"); // exclusion native du gestionnaire tactile de SiYuan
@@ -719,14 +510,25 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
       { signal },
     );
   };
-  on(pathBtn, openPathMenu, true);
+  on(pathBtn, openPathChooser);
   on(moreBtn, openMoreMenu, true);
-  if (critBtn) on(critBtn, openCriteriaMenu, true);
   on(filtersBtn, openFiltersDialog);
-  on(removeBtn, () => {
-    applyFilters({ ...withoutScope(currentFilters()), folder: "" });
-    pathBtn.focus(); // la croix vient de disparaître
-  });
+  const removePath = (): void => {
+    applyFilters(withoutScope(currentFilters()));
+    // La croix vient de disparaître : le focus va au bouton du chemin, à défaut à un autre bouton de la rangée.
+    const target = pathBtn.isConnected ? pathBtn : [filtersBtn, moreBtn, expandBtn].find((b) => b.isConnected && !b.hidden);
+    target?.focus();
+  };
+  removeIcon.addEventListener("click", () => !disposed && removePath(), { signal });
+  removeIcon.addEventListener(
+    "keydown",
+    (e) => {
+      if (disposed || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      removePath();
+    },
+    { signal },
+  );
   on(includeBtn, () => {
     if (includeBtn.getAttribute("aria-disabled") === "true") return;
     applyFilters({ ...currentFilters(), includeSubfolders: !currentFilters().includeSubfolders });
@@ -766,9 +568,9 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
       listeners.abort();
       row.remove();
       // Après le retrait de la rangée : l'adaptateur ne rend alors le focus à aucun bouton détaché.
-      treeLoad?.abort();
       menuHandle?.close();
       dialogHandle?.close();
+      pathHandle?.close();
     },
   };
 }

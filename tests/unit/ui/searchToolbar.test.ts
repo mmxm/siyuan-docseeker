@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { DocumentScope } from "../../../src/search/docScope";
 import { MIN_PAGE_BOUND, NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
+import type { PathKernel } from "../../../src/ui/pathDialog";
 import { DEFAULT_STRINGS } from "../../../src/ui/searchView";
 import { formatLocalDate, mountSearchToolbar, parseLocalDate, type SearchToolbar, type SearchToolbarDeps } from "../../../src/ui/searchToolbar";
 import { createNativeFakes, findItem, pick } from "./nativeFakes";
@@ -29,7 +31,7 @@ const REMOVE = "Supprimer";
 let host: HTMLElement;
 let state: SearchOptions;
 let setOptions: ReturnType<typeof vi.fn>;
-let folders: string[];
+let kernel: { [K in keyof PathKernel]: ReturnType<typeof vi.fn> };
 let group: boolean;
 let setGroup: ReturnType<typeof vi.fn>;
 let expansion: {
@@ -45,7 +47,8 @@ function mount(over: Partial<SearchToolbarDeps> = {}, where: HTMLElement = host)
   return mountSearchToolbar(where, {
     getOptions: () => state,
     setOptions: setOptions as (o: SearchOptions) => void,
-    getFolders: () => folders,
+    pathKernel: kernel as unknown as PathKernel,
+    openCustomDialog: fakes.openCustomDialog,
     t,
     parseDate,
     formatDate,
@@ -64,7 +67,12 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.appendChild(host);
   state = { sort: { key: "name", direction: "asc" }, filters: NO_FILTERS };
-  folders = ["assets/", "assets/a/", "assets/a/sub/", "assets/b/"];
+  kernel = {
+    lsNotebooks: vi.fn(async () => []),
+    listDocsByPath: vi.fn(async () => []),
+    searchDocs: vi.fn(async () => []),
+    getHPathsByPaths: vi.fn(async () => []),
+  };
   group = true;
   setGroup = vi.fn((v: boolean) => {
     group = v;
@@ -88,8 +96,12 @@ const visibleNames = () => buttons().filter((b) => !b.hidden).map((b) => b.getAt
 const useHref = (b: Element) => b.querySelector("use")!.getAttributeNS(XLINK, "href");
 const filtersBtn = () => row().querySelector<HTMLButtonElement>('button[aria-label^="Filtres"]')!;
 const lastFilters = () => (setOptions.mock.calls.at(-1)![0] as SearchOptions).filters;
-const withFolder = (folder: string, extra: Partial<SearchOptions["filters"]> = {}): void => {
-  state = { ...state, filters: { ...NO_FILTERS, folder, ...extra } };
+const BOX_A = "20240101000000-aaaaaaa";
+const BOX_B = "20240101000000-bbbbbbb";
+const scopeB: DocumentScope = { kind: "notebook", box: BOX_B, label: "Cahier B" };
+const docScopeA: DocumentScope = { kind: "document", box: BOX_A, docPath: "/20240102000000-0000001.sy", label: "Cahier A/Doc" };
+const withScope = (scope: DocumentScope, extra: Partial<SearchOptions["filters"]> = {}): void => {
+  state = { ...state, filters: { ...NO_FILTERS, scopes: [scope], ...extra } };
   toolbar.refresh();
 };
 
@@ -139,9 +151,13 @@ describe("structure : la rangée d'icônes native", () => {
     expect(buttons().every((b) => b.tabIndex === 0)).toBe(true);
   });
 
-  it("avec un chemin : la croix « Supprimer » vient en premier, avant « Inclure... »", () => {
-    withFolder("assets/a/");
-    expect(visibleNames()).toEqual([REMOVE, INCLUDE, PATH, MORE, "Filtres (1 actif)", EXPAND, COLLAPSE]);
+  it("avec un chemin : l'étiquette (et sa croix SVG) vient en premier, avant « Inclure... » ; elle n'ajoute aucun bouton", () => {
+    withScope(docScopeA);
+    expect(visibleNames()).toEqual([INCLUDE, PATH, MORE, "Filtres (1 actif)", EXPAND, COLLAPSE]);
+    const children = [...row().children];
+    const label = row().querySelector(".search__path")!;
+    expect(children.indexOf(label)).toBeLessThan(children.indexOf(btn(INCLUDE)));
+    expect(label.querySelector("svg.search__rmpath")).not.toBeNull();
   });
 
   it("séparateurs natifs span.fn__space entre les groupes d'icônes", () => {
@@ -188,14 +204,14 @@ describe("clics qui ouvrent un menu : SiYuan ferme les menus sur tout clic qui a
     b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
   };
 
-  it.each([PATH, MORE])("« %s » : le clic souris n'atteint PAS document (stopPropagation)", (name) => {
-    btn(name).click();
+  it("« Plus » : le clic souris n'atteint PAS document (stopPropagation)", () => {
+    btn(MORE).click();
     expect(reached).toHaveLength(0);
     expect(fakes.openMenu).toHaveBeenCalledTimes(1);
   });
 
-  it.each([PATH, MORE])("« %s » : l'activation au clavier (Entrée/Espace -> click detail 0) n'atteint pas document non plus", (name) => {
-    keyboardClick(btn(name));
+  it("« Plus » : l'activation au clavier (Entrée/Espace -> click detail 0) n'atteint pas document non plus", () => {
+    keyboardClick(btn(MORE));
     expect(reached).toHaveLength(0);
     expect(fakes.openMenu).toHaveBeenCalledTimes(1);
   });
@@ -204,7 +220,6 @@ describe("clics qui ouvrent un menu : SiYuan ferme les menus sur tout clic qui a
     const onWindow = vi.fn();
     window.addEventListener("click", onWindow);
     try {
-      btn(PATH).click();
       btn(MORE).click();
     } finally {
       window.removeEventListener("click", onWindow);
@@ -212,24 +227,24 @@ describe("clics qui ouvrent un menu : SiYuan ferme les menus sur tout clic qui a
     expect(onWindow).not.toHaveBeenCalled();
   });
 
-  it("les boutons qui ouvrent un menu portent data-menu=\"true\" (exclusion native du gestionnaire de pointerdown tactile)", () => {
-    expect(btn(PATH).getAttribute("data-menu")).toBe("true");
+  it("seul le bouton qui ouvre un menu porte data-menu=\"true\" (exclusion native du gestionnaire de pointerdown tactile) ; « Spécifier le chemin » ouvre un dialogue", () => {
     expect(btn(MORE).getAttribute("data-menu")).toBe("true");
+    expect(btn(PATH).getAttribute("data-menu")).toBeNull();
   });
 
-  it("les menus ont un identifiant par bouton (bascule sur le même bouton, remplacement d'un autre)", () => {
-    btn(PATH).click();
+  it("le menu « Plus » a son identifiant (bascule sur le même bouton)", () => {
     btn(MORE).click();
     const ids = fakes.openMenu.mock.calls.map((c) => c[3]);
-    expect(ids).toEqual(["docseeker-path", "docseeker-more"]);
+    expect(ids).toEqual(["docseeker-more"]);
   });
 
-  it("les boutons qui n'ouvrent rien (Inclure, Supprimer, Élargir) laissent le clic remonter : SiYuan referme ainsi un menu resté ouvert", () => {
-    withFolder("assets/a/");
+  it("les boutons qui n'ouvrent pas de menu (Inclure, croix, Élargir, Spécifier le chemin) laissent le clic remonter : SiYuan referme ainsi un menu resté ouvert", () => {
+    withScope(docScopeA);
     btn(INCLUDE).click();
     btn(EXPAND).click();
-    btn(REMOVE).click();
-    expect(reached).toHaveLength(3);
+    row().querySelector<SVGElement>("svg.search__rmpath")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    btn(PATH).click();
+    expect(reached).toHaveLength(4);
   });
 
   it("« Filtres » : le clic remonte (aucun gestionnaire global ne ferme un dialogue ; il referme en revanche un menu ouvert)", () => {
@@ -267,265 +282,6 @@ describe("compteur", () => {
     toolbar.setCounter("");
     expect(counter().hidden).toBe(true);
     expect(counter().textContent).toBe("");
-  });
-});
-
-describe("« Spécifier le chemin » : menu des dossiers", () => {
-  it("ouvre UN menu : « Tous les chemins » puis les dossiers indentés (espaces insécables), « Tous » courant", () => {
-    btn(PATH).click();
-    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
-    const items = fakes.lastMenu().items;
-    expect(items.map((i) => i.label)).toEqual([
-      "Tous les chemins",
-      "assets",
-      "  a",
-      "    sub",
-      "  b",
-    ]);
-    expect(items.map((i) => i.current === true)).toEqual([true, false, false, false, false]);
-    expect(items.every((i) => !i.separator && !i.submenu)).toBe(true);
-  });
-
-  it("l'ancre est le bas-gauche du bouton, avec sa largeur et sa hauteur", () => {
-    vi.spyOn(btn(PATH), "getBoundingClientRect").mockReturnValue({ left: 10, bottom: 50, width: 30, height: 32 } as DOMRect);
-    btn(PATH).click();
-    expect(fakes.lastMenu().anchor).toEqual({ x: 10, y: 50, w: 30, h: 32 });
-  });
-
-  it("le dossier courant est « current » ; les autres non", () => {
-    withFolder("assets/a/");
-    btn(PATH).click();
-    const items = fakes.lastMenu().items;
-    expect(items.find((i) => i.current)?.label).toBe("  a");
-    expect(items.filter((i) => i.current)).toHaveLength(1);
-  });
-
-  it("un dossier courant absent de la liste est ajouté (et courant)", () => {
-    withFolder("assets/gone/");
-    btn(PATH).click();
-    const items = fakes.lastMenu().items;
-    expect(items.at(-1)).toMatchObject({ label: "  gone", current: true });
-  });
-
-  it("choisir un dossier applique le filtre IMMÉDIATEMENT (une seule fois), en gardant tri et sous-dossiers", () => {
-    state = { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, includeSubfolders: false } };
-    toolbar.refresh();
-    btn(PATH).click();
-    pick(fakes.lastMenu(), "  b");
-    expect(setOptions).toHaveBeenCalledTimes(1);
-    expect(setOptions.mock.calls[0]![0]).toEqual({
-      sort: { key: "name", direction: "asc" },
-      filters: { ...NO_FILTERS, includeSubfolders: false, folder: "assets/b/" },
-    });
-  });
-
-  it("choisir le dossier déjà courant ne fait rien", () => {
-    withFolder("assets/a/");
-    btn(PATH).click();
-    pick(fakes.lastMenu(), "  a");
-    expect(setOptions).not.toHaveBeenCalled();
-  });
-
-  it("« Tous les chemins » vide le dossier", () => {
-    withFolder("assets/a/");
-    btn(PATH).click();
-    pick(fakes.lastMenu(), "Tous les chemins");
-    expect(lastFilters().folder).toBe("");
-  });
-
-  it("conserve les autres filtres (nom, pages, date) en changeant de dossier", () => {
-    withFolder("assets/a/", { nameContains: "abc", minPages: 2, modifiedAfterMs: 5 });
-    btn(PATH).click();
-    pick(fakes.lastMenu(), "  b");
-    expect(lastFilters()).toEqual({ ...NO_FILTERS, folder: "assets/b/", nameContains: "abc", minPages: 2, modifiedAfterMs: 5 });
-  });
-
-  it("la liste des dossiers est relue à chaque ouverture", () => {
-    btn(PATH).click();
-    folders = ["x/"];
-    btn(PATH).click();
-    expect(fakes.lastMenu().items.map((i) => i.label)).toEqual(["Tous les chemins", "x"]);
-  });
-
-  it("200 dossiers : tous listés (le menu natif défile), sans troncature", () => {
-    folders = Array.from({ length: 200 }, (_, i) => `d${String(i).padStart(3, "0")}/`);
-    btn(PATH).click();
-    expect(fakes.lastMenu().items).toHaveLength(201);
-  });
-
-  it("le focus n'est plus géré par la barre : openMenu est appelé sans onClose (l'adaptateur rend le focus à l'ouvrant)", () => {
-    btn(PATH).click();
-    expect(fakes.openMenu.mock.calls[0]![2]).toBeUndefined();
-    expect(fakes.lastMenu().onClose).toBeUndefined();
-  });
-
-  describe("liste bornée (dossiers arbitrairement nombreux, profonds ou longs)", () => {
-    const labels = () => fakes.lastMenu().items.map((i) => i.label ?? "");
-    const NBSP2 = "\u00a0\u00a0";
-
-    it("10 000 dossiers profonds : au plus 500 dossiers + « Tous » + une ligne « … N autres dossiers » désactivée, vite", () => {
-      folders = Array.from({ length: 10_000 }, (_, i) => `${"d/".repeat(20)}x${String(i).padStart(5, "0")}/`);
-      const t0 = performance.now();
-      btn(PATH).click();
-      const elapsed = performance.now() - t0;
-      const items = fakes.lastMenu().items;
-      expect(items).toHaveLength(1 + 500 + 1);
-      const last = items.at(-1)!;
-      expect(last.label).toBe("… 9500 autres dossiers");
-      expect(last.disabled).toBe(true);
-      expect(last.click).toBeUndefined();
-      expect(elapsed).toBeLessThan(1000);
-    });
-
-    it("singulier à 1 dossier restant ; la ligne n'a ni < ni > ni & (SiYuan l'insère comme HTML) et n'apparaît pas sous le plafond", () => {
-      folders = Array.from({ length: 501 }, (_, i) => `d${String(i).padStart(3, "0")}/`);
-      btn(PATH).click();
-      expect(labels().at(-1)).toBe("… 1 autre dossier");
-      expect(labels().at(-1)).not.toMatch(/[<>&]/);
-      folders = Array.from({ length: 500 }, (_, i) => `d${String(i).padStart(3, "0")}/`);
-      btn(PATH).click();
-      expect(fakes.lastMenu().items).toHaveLength(501);
-      expect(labels().some((l) => l.includes("autres dossiers"))).toBe(false);
-    });
-
-    it("un dossier courant au-delà du plafond reste listé (et courant), avant la ligne « autres dossiers »", () => {
-      folders = Array.from({ length: 800 }, (_, i) => `d${String(i).padStart(3, "0")}/`);
-      withFolder("d799/");
-      btn(PATH).click();
-      const items = fakes.lastMenu().items;
-      expect(items.find((i) => i.current)?.label).toBe("d799");
-      expect(items.at(-1)!.label).toBe("… 299 autres dossiers"); // 800 - 500 listés - le courant, listé en plus
-    });
-
-    it("l'indentation est plafonnée à 8 niveaux, même pour un dossier à 40 niveaux", () => {
-      const deep = `${Array.from({ length: 40 }, (_, i) => `n${i}`).join("/")}/`;
-      folders = [deep];
-      btn(PATH).click();
-      const label = labels()[1]!;
-      const indent = /^(\u00a0*)/.exec(label)![1]!.length;
-      expect(indent).toBe(8 * 2);
-    });
-
-    it("un libellé trop long est tronqué à 120 caractères avec « … »", () => {
-      folders = [`${"é".repeat(300)}/`];
-      btn(PATH).click();
-      const label = labels()[1]!;
-      expect([...label]).toHaveLength(120);
-      expect(label.endsWith("…")).toBe(true);
-      expect(label.startsWith("éé")).toBe(true);
-    });
-
-    it("la troncature ne coupe pas un emoji (paire de substituts)", () => {
-      folders = [`${"😀".repeat(200)}/`];
-      btn(PATH).click();
-      const label = labels()[1]!;
-      expect([...label]).toHaveLength(120);
-      expect(label).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    });
-
-    it("un libellé de 120 caractères exactement n'est pas tronqué", () => {
-      folders = [`${"a".repeat(120)}/`];
-      btn(PATH).click();
-      expect(labels()[1]).toBe("a".repeat(120));
-    });
-
-    it("dossiers homonymes dont l'ancêtre n'est pas listé (a/x/ et b/x/) : le segment parent est affiché, pas deux « x » identiques", () => {
-      folders = ["a/x/", "b/x/"];
-      btn(PATH).click();
-      expect(labels().slice(1)).toEqual([`${NBSP2}a/x`, `${NBSP2}b/x`]);
-    });
-
-    it("dossiers homonymes avec leurs ancêtres (cas de listFolders) : disposition en arbre, chaque « x » sous son parent", () => {
-      folders = ["a/", "a/x/", "b/", "b/x/"];
-      btn(PATH).click();
-      expect(labels().slice(1)).toEqual(["a", `${NBSP2}x`, "b", `${NBSP2}x`]);
-    });
-
-    it("au-delà du plafond d'indentation, le segment parent est affiché pour lever l'ambiguïté", () => {
-      const path = (leafParent: string) => `${Array.from({ length: 9 }, (_, i) => `n${i}`).join("/")}/${leafParent}/x/`;
-      folders = [path("p"), path("q")];
-      btn(PATH).click();
-      const [one, two] = labels().slice(1);
-      expect(one!.trim()).toBe("p/x");
-      expect(two!.trim()).toBe("q/x");
-    });
-  });
-});
-
-describe("étiquette de chemin et croix « Supprimer »", () => {
-  const label = () => row().querySelector<HTMLElement>("span.search__path")!;
-
-  it("sans dossier : étiquette et croix cachées", () => {
-    expect(label().hidden).toBe(true);
-    expect(btn(REMOVE).hidden).toBe(true);
-  });
-
-  it("avec un dossier : étiquette aux classes natives, texte = dossier, infobulle = dossier", () => {
-    withFolder("assets/a/");
-    expect(label().hidden).toBe(false);
-    for (const c of ["search__path", "ft__on-surface", "fn__flex-center", "ft__smaller", "fn__ellipsis"]) {
-      expect(label().classList.contains(c), c).toBe(true);
-    }
-    expect(label().textContent).toBe("assets/a/");
-    expect(label().title).toBe("assets/a/");
-    expect(btn(REMOVE).hidden).toBe(false);
-    expect(useHref(btn(REMOVE))).toBe("#iconCloseRound");
-  });
-
-  it("un nom de dossier avec des balises reste du texte", () => {
-    withFolder("<img src=x>/");
-    expect(label().children.length).toBe(1); // le seul enfant est le span du texte
-    expect(label().textContent).toBe("<img src=x>/");
-    expect(label().querySelector("img")).toBeNull();
-  });
-
-  it("« Supprimer » remet « Tous les chemins » (une seule application), cache l'étiquette et rend le focus à « Spécifier le chemin »", () => {
-    withFolder("assets/a/", { includeSubfolders: false });
-    btn(REMOVE).focus();
-    btn(REMOVE).click();
-    expect(setOptions).toHaveBeenCalledTimes(1);
-    expect(lastFilters()).toEqual({ ...NO_FILTERS, includeSubfolders: false });
-    expect(label().hidden).toBe(true);
-    expect(btn(REMOVE).hidden).toBe(true);
-    expect(document.activeElement).toBe(btn(PATH));
-  });
-});
-
-describe("« Inclure les documents enfants »", () => {
-  const svg = () => btn(INCLUDE).querySelector("svg")!;
-
-  it("sans dossier : aria-disabled, jamais actif, le clic ne fait rien", () => {
-    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("true");
-    expect(svg().classList.contains("ft__primary")).toBe(false);
-    btn(INCLUDE).click();
-    expect(setOptions).not.toHaveBeenCalled();
-  });
-
-  it("avec un dossier et sous-dossiers inclus : actif (svg.ft__primary, aria-pressed), non désactivé", () => {
-    withFolder("assets/a/");
-    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("false");
-    expect(svg().classList.contains("ft__primary")).toBe(true);
-    expect(btn(INCLUDE).getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("le clic bascule includeSubfolders, met à jour l'état et garde le focus sur le bouton", () => {
-    withFolder("assets/a/");
-    btn(INCLUDE).focus();
-    btn(INCLUDE).click();
-    expect(setOptions).toHaveBeenCalledTimes(1);
-    expect(lastFilters()).toMatchObject({ folder: "assets/a/", includeSubfolders: false });
-    expect(svg().classList.contains("ft__primary")).toBe(false);
-    expect(btn(INCLUDE).getAttribute("aria-pressed")).toBe("false");
-    expect(document.activeElement).toBe(btn(INCLUDE));
-    btn(INCLUDE).click();
-    expect(lastFilters().includeSubfolders).toBe(true);
-    expect(svg().classList.contains("ft__primary")).toBe(true);
-  });
-
-  it("un dossier choisi dans le menu active le bouton", () => {
-    btn(PATH).click();
-    pick(fakes.lastMenu(), "assets");
-    expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("false");
   });
 });
 
@@ -665,15 +421,15 @@ describe("« Élargir » / « Réduire »", () => {
 describe("« Filtres » : bouton et résumé", () => {
   it("infobulle = nom : « Filtres », « Filtres (1 actif) », « Filtres (N actifs) »", () => {
     expect(filtersBtn().getAttribute("aria-label")).toBe("Filtres");
-    withFolder("assets/a/");
+    withScope(docScopeA);
     expect(filtersBtn().getAttribute("aria-label")).toBe("Filtres (1 actif)");
-    withFolder("assets/a/", { minPages: 3, nameContains: "x" });
+    withScope(docScopeA, { minPages: 3, nameContains: "x" });
     expect(filtersBtn().getAttribute("aria-label")).toBe("Filtres (3 actifs)");
   });
 
   it("svg.ft__primary seulement quand des filtres sont actifs", () => {
     expect(filtersBtn().querySelector("svg")!.classList.contains("ft__primary")).toBe(false);
-    withFolder("assets/a/");
+    withScope(docScopeA);
     expect(filtersBtn().querySelector("svg")!.classList.contains("ft__primary")).toBe(true);
     state = { ...state, filters: NO_FILTERS };
     toolbar.refresh();
@@ -726,7 +482,7 @@ describe("« Filtres » : dialogue", () => {
   it("les champs reflètent les options courantes à l'ouverture (et sont relus à chaque ouverture)", () => {
     state = {
       sort: { key: "relevance", direction: "desc" },
-      filters: { folder: "assets/a/", includeSubfolders: false, nameContains: "abc", minPages: 2, maxPages: 8, modifiedAfterMs: Date.UTC(2024, 0, 31) },
+      filters: { includeSubfolders: false, nameContains: "abc", minPages: 2, maxPages: 8, modifiedAfterMs: Date.UTC(2024, 0, 31) },
     };
     toolbar.refresh();
     const d = open();
@@ -755,8 +511,8 @@ describe("« Filtres » : dialogue", () => {
     expect(setOptions).not.toHaveBeenCalled();
   });
 
-  it("Confirmer (valide) : UN seul setOptions avec tous les filtres, tri, dossier et sous-dossiers conservés", () => {
-    state = { sort: { key: "modified", direction: "desc" }, filters: { ...NO_FILTERS, folder: "assets/a/", includeSubfolders: false } };
+  it("Confirmer (valide) : UN seul setOptions avec tous les filtres, tri, portée et sous-dossiers conservés", () => {
+    state = { sort: { key: "modified", direction: "desc" }, filters: { ...NO_FILTERS, scopes: [docScopeA], includeSubfolders: false } };
     toolbar.refresh();
     const d = open();
     setVal(field<HTMLInputElement>(d, "Nom du document contient"), "anesth");
@@ -768,7 +524,7 @@ describe("« Filtres » : dialogue", () => {
     expect(setOptions.mock.calls[0]![0]).toEqual({
       sort: { key: "modified", direction: "desc" },
       filters: {
-        folder: "assets/a/", includeSubfolders: false, nameContains: "anesth", minPages: 5, maxPages: 50, modifiedAfterMs: Date.UTC(2024, 2, 5),
+        scopes: [docScopeA], includeSubfolders: false, nameContains: "anesth", minPages: 5, maxPages: 50, modifiedAfterMs: Date.UTC(2024, 2, 5),
       },
     });
   });
@@ -839,48 +595,48 @@ describe("« Filtres » : dialogue", () => {
     expect(document.activeElement).toBe(filtersBtn());
   });
 
-  describe("brouillon : le dossier et « sous-dossiers » ne sont touchés que si l'utilisateur les a changés dans le dialogue", () => {
-    it("un dossier modifié de l'extérieur pendant le dialogue n'est pas écrasé par le dossier d'ouverture", () => {
-      withFolder("assets/a/");
+  describe("brouillon : la portée et « sous-documents » ne sont touchés que si l'utilisateur les a changés dans le dialogue", () => {
+    it("une portée modifiée de l'extérieur pendant le dialogue n'est pas écrasée par la portée d'ouverture", () => {
+      withScope(docScopeA);
       const d = open();
-      state = { ...state, filters: { ...state.filters, folder: "assets/b/" } }; // changement externe (setOptions d'ailleurs)
+      state = { ...state, filters: { ...state.filters, scopes: [scopeB] } }; // changement externe (setOptions d'ailleurs)
       setVal(field<HTMLInputElement>(d, "Nom du document contient"), "x");
       d.confirm();
-      expect(lastFilters().folder).toBe("assets/b/");
+      expect(lastFilters().scopes).toEqual([scopeB]);
       expect(lastFilters().nameContains).toBe("x");
     });
 
-    it("« sous-dossiers » modifié de l'extérieur : conservé aussi", () => {
-      withFolder("assets/a/");
+    it("« sous-documents » modifié de l'extérieur : conservé aussi", () => {
+      withScope(docScopeA);
       const d = open();
       state = { ...state, filters: { ...state.filters, includeSubfolders: false } };
       d.confirm();
       expect(lastFilters().includeSubfolders).toBe(false);
-      expect(lastFilters().folder).toBe("assets/a/");
+      expect(lastFilters().scopes).toEqual([docScopeA]);
     });
 
-    it("dossier vidé de l'extérieur pendant le dialogue : il reste vide après Confirmer", () => {
-      withFolder("assets/a/");
+    it("portée retirée de l'extérieur pendant le dialogue : elle reste absente après Confirmer", () => {
+      withScope(docScopeA);
       const d = open();
-      state = { ...state, filters: { ...state.filters, folder: "" } };
+      state = { ...state, filters: NO_FILTERS };
       d.confirm();
-      expect(lastFilters().folder).toBe("");
+      expect("scopes" in lastFilters()).toBe(false);
     });
 
-    it("« Réinitialiser » est un choix de l'utilisateur : il l'emporte sur un changement externe de dossier", () => {
-      withFolder("assets/a/");
+    it("« Réinitialiser » est un choix de l'utilisateur : il l'emporte sur un changement externe de portée", () => {
+      withScope(docScopeA);
       const d = open();
       resetBtn(d).click();
-      state = { ...state, filters: { ...state.filters, folder: "assets/b/", includeSubfolders: false } };
+      state = { ...state, filters: { ...state.filters, scopes: [scopeB], includeSubfolders: false } };
       d.confirm();
-      expect(lastFilters().folder).toBe("");
+      expect("scopes" in lastFilters()).toBe(false);
       expect(lastFilters().includeSubfolders).toBe(true);
     });
 
-    it("le bouton « Réinitialiser » tient compte du dossier COURANT (changé de l'extérieur), pas de celui d'ouverture", () => {
+    it("le bouton « Réinitialiser » tient compte de la portée COURANTE (changée de l'extérieur), pas de celle d'ouverture", () => {
       const d = open();
       expect(resetBtn(d).getAttribute("aria-disabled")).toBe("true");
-      state = { ...state, filters: { ...state.filters, folder: "assets/b/" } };
+      state = { ...state, filters: { ...state.filters, scopes: [scopeB] } };
       setVal(field<HTMLInputElement>(d, "Nom du document contient"), "x");
       setVal(field<HTMLInputElement>(d, "Nom du document contient"), "");
       expect(resetBtn(d).getAttribute("aria-disabled")).toBe("false");
@@ -1055,8 +811,8 @@ describe("« Filtres » : dialogue", () => {
       expect(document.activeElement).toBe(field<HTMLInputElement>(d, "Nom du document contient"));
     });
 
-    it("un dossier actif rend le bouton actif ; réinitialiser puis Confirmer vide aussi le dossier et rétablit les sous-dossiers", () => {
-      state = { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, folder: "assets/a/", includeSubfolders: false } };
+    it("une portée active rend le bouton actif ; réinitialiser puis Confirmer vide aussi la portée et rétablit les sous-documents", () => {
+      state = { sort: { key: "name", direction: "asc" }, filters: { ...NO_FILTERS, scopes: [docScopeA], includeSubfolders: false } };
       toolbar.refresh();
       const d = open();
       expect(resetBtn(d).getAttribute("aria-disabled")).toBe("false");
@@ -1067,27 +823,27 @@ describe("« Filtres » : dialogue", () => {
       expect(setOptions.mock.calls[0]![0].sort).toEqual({ key: "name", direction: "asc" });
     });
 
-    it("sans réinitialisation, Confirmer conserve le dossier courant", () => {
-      withFolder("assets/b/");
+    it("sans réinitialisation, Confirmer conserve la portée courante", () => {
+      withScope(scopeB);
       const d = open();
       d.confirm();
-      expect(lastFilters().folder).toBe("assets/b/");
+      expect(lastFilters().scopes).toEqual([scopeB]);
     });
 
     it("réinitialiser puis Annuler ne change rien", () => {
-      withFolder("assets/b/", { nameContains: "x" });
+      withScope(scopeB, { nameContains: "x" });
       const d = open();
       resetBtn(d).click();
       d.cancel();
       expect(setOptions).not.toHaveBeenCalled();
-      expect(state.filters.folder).toBe("assets/b/");
+      expect(state.filters.scopes).toEqual([scopeB]);
     });
   });
 });
 
 describe("reset() (bouton « Réinitialiser les filtres » du statut zéro-résultat)", () => {
   it("applique immédiatement NO_FILTERS en gardant le tri, resynchronise et met le focus sur « Filtres »", () => {
-    withFolder("assets/a/", { nameContains: "abc", minPages: 3, modifiedAfterMs: 5 });
+    withScope(docScopeA, { nameContains: "abc", minPages: 3, modifiedAfterMs: 5 });
     toolbar.reset();
     expect(setOptions).toHaveBeenCalledTimes(1);
     const next = setOptions.mock.calls[0]![0] as SearchOptions;
@@ -1101,9 +857,9 @@ describe("reset() (bouton « Réinitialiser les filtres » du statut zéro-résu
 
 describe("refresh() : synchronisation depuis les options", () => {
   it("chemin, Inclure et Filtres suivent des options modifiées de l'extérieur", () => {
-    state = { sort: state.sort, filters: { ...NO_FILTERS, folder: "assets/b/", includeSubfolders: false, minPages: 2 } };
+    state = { sort: state.sort, filters: { ...NO_FILTERS, scopes: [docScopeA], includeSubfolders: false, minPages: 2 } };
     toolbar.refresh();
-    expect(row().querySelector("span.search__path")!.textContent).toBe("assets/b/");
+    expect(row().querySelector("span.search__path")!.textContent).toBe("Cahier A/Doc");
     expect(btn(INCLUDE).querySelector("svg")!.classList.contains("ft__primary")).toBe(false);
     expect(btn(INCLUDE).getAttribute("aria-disabled")).toBe("false");
     expect(filtersBtn().getAttribute("aria-label")).toBe("Filtres (2 actifs)");
@@ -1117,20 +873,16 @@ describe("refresh() : synchronisation depuis les options", () => {
     expect(document.activeElement).toBe(btn(MORE));
   });
 
-  it("ne lit pas la liste des dossiers tant qu'aucun menu n'est ouvert (getFolders paresseux)", () => {
-    const getFolders = vi.fn(() => folders);
-    document.body.innerHTML = "";
-    host = document.createElement("div");
-    document.body.appendChild(host);
-    toolbar = mount({ getFolders });
+  it("ne lit pas le noyau tant que le dialogue du chemin n'est pas ouvert (lecture paresseuse)", () => {
     toolbar.refresh();
-    expect(getFolders).not.toHaveBeenCalled();
+    expect(kernel.lsNotebooks).not.toHaveBeenCalled();
+    expect(fakes.openCustomDialog).not.toHaveBeenCalled();
   });
 });
 
 describe("cycle de vie", () => {
   it("dispose retire la rangée ; refresh, reset et setCounter sont ensuite sans effet", () => {
-    withFolder("assets/a/"); // « Inclure » est alors actif : son clic appellerait setOptions s'il restait branché
+    withScope(docScopeA); // « Inclure » est alors actif : son clic appellerait setOptions s'il restait branché
     const includeBtn = btn(INCLUDE);
     const pathBtn = btn(PATH);
     toolbar.dispose();
@@ -1141,11 +893,12 @@ describe("cycle de vie", () => {
     toolbar.reset();
     toolbar.setCounter("x");
     expect(fakes.openMenu).not.toHaveBeenCalled();
+    expect(fakes.openCustomDialog).not.toHaveBeenCalled();
     expect(setOptions).not.toHaveBeenCalled();
   });
 
   it("dispose avec le menu « Plus » ouvert : le menu est fermé (handle.close)", () => {
-    withFolder("assets/a/");
+    withScope(docScopeA);
     btn(MORE).click();
     const menu = fakes.lastMenu();
     expect(menu.closed).toBe(false);
@@ -1153,23 +906,8 @@ describe("cycle de vie", () => {
     expect(menu.closed).toBe(true);
   });
 
-  it("dispose avec le menu des dossiers ouvert : fermé aussi", () => {
-    btn(PATH).click();
-    const menu = fakes.lastMenu();
-    toolbar.dispose();
-    expect(menu.closed).toBe(true);
-  });
-
-  it("dispose sans menu ouvert, ou avec un menu déjà fermé : aucun close superflu, aucune erreur", () => {
-    btn(PATH).click();
-    const menu = fakes.lastMenu();
-    pick(menu, "assets");
-    expect(menu.closed).toBe(true);
-    expect(() => toolbar.dispose()).not.toThrow();
-  });
-
   it("ouvrir Plus, dispose, puis un clic tardif sur Tri / Groupe : setOptions et setGroupByDocument ne sont PAS appelés", () => {
-    withFolder("assets/a/");
+    withScope(docScopeA);
     btn(MORE).click();
     const menu = fakes.lastMenu();
     toolbar.dispose();
@@ -1178,14 +916,6 @@ describe("cycle de vie", () => {
     findItem(menu.items, "Groupe", "Aucun regroupement").click!();
     expect(setOptions).not.toHaveBeenCalled();
     expect(setGroup).not.toHaveBeenCalled();
-  });
-
-  it("dispose, puis un clic tardif sur un dossier du menu : rien n'est appliqué", () => {
-    btn(PATH).click();
-    const menu = fakes.lastMenu();
-    toolbar.dispose();
-    findItem(menu.items, "assets").click!();
-    expect(setOptions).not.toHaveBeenCalled();
   });
 
   it("dispose pendant un dialogue ouvert : le dialogue est fermé (handle.close), sans onConfirm ni setOptions ni focus volé", () => {
@@ -1219,8 +949,8 @@ describe("cycle de vie", () => {
     document.body.appendChild(hostB);
     const setB = vi.fn();
     mount({ setOptions: setB }, hostB);
-    btn(PATH).click();
-    pick(fakes.lastMenu(), "assets");
+    btn(MORE).click();
+    pick(fakes.lastMenu(), "Tri", "Nom décroissant");
     expect(setOptions).toHaveBeenCalledTimes(1);
     expect(setB).not.toHaveBeenCalled();
   });
@@ -1269,7 +999,6 @@ describe("parseLocalDate (vrai calendrier, fuseau fixé)", () => {
       setOptions: (o) => {
         current = o;
       },
-      getFolders: () => [],
       t,
       openMenu: f.openMenu,
       openDialog: f.openDialog,

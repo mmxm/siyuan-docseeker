@@ -1,12 +1,12 @@
 /**
- * Options de présentation des résultats : filtres (dossier, nom, pages, date) et tri. Module pur, sans DOM.
+ * Options de présentation des résultats : filtres (portée de documents, nom, pages, date) et tri. Module pur, sans DOM.
  *
- * - Le dossier est un FILTRE appliqué après BM25 : il ne restreint pas la recherche, il masque des documents.
+ * - Les filtres s'appliquent après BM25 : ils ne restreignent pas la recherche, ils masquent des documents.
  * - Les filtres vivent en session seulement (jamais persistés) ; le tri est mémorisé par les réglages.
  * - Le tri (`sortDocs`) ne touche qu'à l'ordre des DOCUMENTS ; l'ordre des pages d'un document reste celui du classement.
  */
 import { tokenize } from "../core/normalize";
-import { normalizedScope, type DocumentScope } from "./docScope";
+import { readScopes, type DocumentScope } from "./docScope";
 import type { DocInfo } from "./searchStore";
 
 /**
@@ -23,9 +23,7 @@ export interface SortSpec {
 }
 
 export interface ResultFilters {
-  /** Préfixe de dossier (« assets/a/ ») ; chaîne vide : tous les dossiers. */
-  readonly folder: string;
-  /** Faux : seulement les PDF directement dans le dossier. Sans effet si `folder` est vide. */
+  /** Faux : les documents choisis sans leurs sous-documents (cahiers entiers : toujours vrai). Sans effet sans `scopes`. */
   readonly includeSubfolders: boolean;
   /** Sous-chaîne du titre, comparée sans casse ni accents ; vide : pas de filtre. */
   readonly nameContains: string;
@@ -34,10 +32,11 @@ export interface ResultFilters {
   /** Date de modification du PDF minimale (incluse), en millisecondes. */
   readonly modifiedAfterMs?: number;
   /**
-   * Portée de documents SiYuan : seuls les PDF cités par ce cahier ou ce document sont gardés. `includeSubfolders`
-   * vaut alors « inclure les sous-documents ». Exclusive avec `folder` (la portée l'emporte à la normalisation).
+   * Portées de documents SiYuan (1 à 20, OU) : seuls les PDF cités par l'un de ces cahiers ou documents sont gardés.
+   * `includeSubfolders` vaut alors « inclure les sous-documents ». L'ancien champ singulier `scope` et l'ancien filtre par
+   * dossier d'assets `folder` ne sont lus qu'à la normalisation (le second est ignoré, avec une trace).
    */
-  readonly scope?: DocumentScope;
+  readonly scopes?: readonly DocumentScope[];
 }
 
 export interface SearchOptions {
@@ -46,7 +45,7 @@ export interface SearchOptions {
 }
 
 export const DEFAULT_SORT: SortSpec = Object.freeze({ key: "relevance", direction: "desc" });
-export const NO_FILTERS: ResultFilters = Object.freeze({ folder: "", includeSubfolders: true, nameContains: "" });
+export const NO_FILTERS: ResultFilters = Object.freeze({ includeSubfolders: true, nameContains: "" });
 export const DEFAULT_OPTIONS: SearchOptions = Object.freeze({ sort: DEFAULT_SORT, filters: NO_FILTERS });
 
 const SORT_KEYS: readonly SortKey[] = ["relevance", "name", "modified", "path", "matches"];
@@ -68,15 +67,6 @@ export const MAX_FILTER_TEXT = 200;
 const capText = (s: string): string => (s.length <= MAX_FILTER_TEXT ? s : Array.from(s).slice(0, MAX_FILTER_TEXT).join(""));
 
 /**
- * Forme canonique d'un dossier : espaces rognés, NFC, exactement un « / » final ; « », « / » et « assets// »
- * donnent respectivement « », « » et « assets/ ». La casse est conservée (comparaison sensible à la casse).
- */
-export function normalizedFolder(folder: string): string {
-  const f = nfc(folder.trim()).replace(/\/+$/, "");
-  return f === "" ? "" : `${f}/`;
-}
-
-/**
  * Besoin de recherche sur le nom : même tokenisation que l'index (casse, accents et ponctuation ignorés), jetons
  * rejoints par une espace. « mon fichier », « mon_fichier » et « mon-fichier » se valent donc ; une saisie faite
  * seulement d'espaces ou de diacritiques donne une chaîne vide, c'est-à-dire un filtre inactif.
@@ -90,11 +80,21 @@ export function isValidPageRange(min: number | undefined, max: number | undefine
   return min === undefined || max === undefined || min <= max;
 }
 
+/** Ancien filtre `folder` d'une entrée inconnue, s'il est présent et non vide ; sinon undefined. */
+export function legacyFolderOf(filters: unknown): string | undefined {
+  return isRecord(filters) && typeof filters["folder"] === "string" && filters["folder"].trim() !== "" ? filters["folder"] : undefined;
+}
+
 /**
  * Reconstruit des options sûres à partir d'une entrée inconnue : valeurs invalides ramenées aux défauts. Une portée présente
  * mais invalide est retirée ; `onInvalidScope` (optionnel) en est alors informé, pour que ce retrait ne soit jamais silencieux.
+ * De même `onLegacyFolder` reçoit l'ancien dossier d'assets (non vide), ignoré depuis que le chemin est une portée de documents.
  */
-export function normalizeSearchOptions(input: unknown, onInvalidScope?: (raw: unknown) => void): SearchOptions {
+export function normalizeSearchOptions(
+  input: unknown,
+  onInvalidScope?: (raw: unknown) => void,
+  onLegacyFolder?: (folder: string) => void,
+): SearchOptions {
   const src = isRecord(input) ? input : {};
   const sortSrc = isRecord(src["sort"]) ? src["sort"] : {};
   const knownKey = SORT_KEYS.find((k) => k === sortSrc["key"]);
@@ -109,57 +109,61 @@ export function normalizeSearchOptions(input: unknown, onInvalidScope?: (raw: un
     maxPages = undefined;
   }
   const modifiedAfterMs = isFiniteNumber(f["modifiedAfterMs"]) ? f["modifiedAfterMs"] : undefined;
-  const scope = normalizedScope(f["scope"]);
-  if (scope === undefined && f["scope"] !== undefined) onInvalidScope?.(f["scope"]);
+  const { scopes, invalid } = readScopes(f);
+  if (invalid !== undefined) onInvalidScope?.(invalid);
+  const legacy = legacyFolderOf(f);
+  if (legacy !== undefined) onLegacyFolder?.(legacy);
   const filters: ResultFilters = {
-    // Exclusion mutuelle : une portée active vide le dossier.
-    folder: scope === undefined && typeof f["folder"] === "string" ? normalizedFolder(capText(f["folder"].trim())) : NO_FILTERS.folder,
     includeSubfolders: typeof f["includeSubfolders"] === "boolean" ? f["includeSubfolders"] : NO_FILTERS.includeSubfolders,
     nameContains: typeof f["nameContains"] === "string" ? capText(f["nameContains"].trim()) : NO_FILTERS.nameContains,
     ...(minPages !== undefined ? { minPages } : {}),
     ...(maxPages !== undefined ? { maxPages } : {}),
     ...(modifiedAfterMs !== undefined ? { modifiedAfterMs } : {}),
-    ...(scope !== undefined ? { scope } : {}),
+    ...(scopes !== undefined ? { scopes } : {}),
   };
   return { sort: { key, direction }, filters };
 }
 
-function sameScope(a: DocumentScope | undefined, b: DocumentScope | undefined): boolean {
+/** Identité d'une portée : la cible (type, cahier, chemin du document), jamais le libellé (un document renommé reste le même). */
+const scopeTarget = (s: DocumentScope): string => `${s.kind}|${s.box}|${s.kind === "document" ? s.docPath : ""}`;
+
+/** Mêmes cibles, sans tenir compte de l'ordre. */
+function sameScopes(a: readonly DocumentScope[] | undefined, b: readonly DocumentScope[] | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
-  return (
-    a.kind === b.kind &&
-    a.box === b.box &&
-    a.label === b.label &&
-    (a.kind === "document" ? a.docPath : undefined) === (b.kind === "document" ? b.docPath : undefined)
-  );
+  if (a.length !== b.length) return false;
+  const left = a.map(scopeTarget).sort();
+  const right = b.map(scopeTarget).sort();
+  return left.every((key, i) => key === right[i]);
 }
+
+/** Des cahiers seuls contiennent toujours tous leurs documents : l'indicateur « enfants » n'y a aucun effet. */
+const effectiveIncludeSubfolders = (f: ResultFilters): boolean =>
+  f.scopes !== undefined && !f.scopes.some((s) => s.kind === "document") ? true : f.includeSubfolders;
 
 /** Égalité champ par champ (indépendante de l'ordre des clés) ; à appliquer à des options normalisées. */
 export function sameOptions(a: SearchOptions, b: SearchOptions): boolean {
   return (
     a.sort.key === b.sort.key &&
     a.sort.direction === b.sort.direction &&
-    a.filters.folder === b.filters.folder &&
-    a.filters.includeSubfolders === b.filters.includeSubfolders &&
+    effectiveIncludeSubfolders(a.filters) === effectiveIncludeSubfolders(b.filters) &&
     a.filters.nameContains === b.filters.nameContains &&
     a.filters.minPages === b.filters.minPages &&
     a.filters.maxPages === b.filters.maxPages &&
     a.filters.modifiedAfterMs === b.filters.modifiedAfterMs &&
-    sameScope(a.filters.scope, b.filters.scope)
+    sameScopes(a.filters.scopes, b.filters.scopes)
   );
 }
 
 /** Nombre de critères actifs (le choix « sous-dossiers » n'est pas un critère à lui seul). */
 export function countActiveFilters(filters: ResultFilters): number {
   let n = 0;
-  if (normalizedFolder(filters.folder) !== "") n++;
   if (normalizedNeedle(filters.nameContains) !== "") n++;
   if (isValidPageRange(filters.minPages, filters.maxPages)) {
     if (filters.minPages !== undefined) n++;
     if (filters.maxPages !== undefined) n++;
   }
   if (filters.modifiedAfterMs !== undefined) n++;
-  if (filters.scope !== undefined) n++;
+  if (filters.scopes !== undefined) n++;
   return n;
 }
 
@@ -184,9 +188,8 @@ export function applyFilters<T extends { readonly docId: string }>(
   scopePaths?: ReadonlySet<string>,
 ): FilterOutcome<T> {
   if (countActiveFilters(filters) === 0) return { kept: [...docs], hidden: 0 };
-  const scoped = filters.scope !== undefined;
+  const scoped = filters.scopes !== undefined;
   if (scoped && scopePaths === undefined) return { kept: [], hidden: docs.length };
-  const prefix = normalizedFolder(filters.folder);
   const needle = normalizedNeedle(filters.nameContains);
   const rangeOk = isValidPageRange(filters.minPages, filters.maxPages);
   const kept: T[] = [];
@@ -199,10 +202,6 @@ export function applyFilters<T extends { readonly docId: string }>(
       continue;
     }
     let ok = !scoped || (scopePaths?.has(nfc(info.path)) ?? false);
-    if (ok && prefix !== "") {
-      const path = nfc(info.path);
-      ok = path.startsWith(prefix) && (filters.includeSubfolders || !path.slice(prefix.length).includes("/"));
-    }
     if (ok && needle !== "") ok = tokenize(info.title).join(" ").includes(needle);
     if (ok && rangeOk) {
       if (filters.minPages !== undefined && info.pageCount < filters.minPages) ok = false;
@@ -213,16 +212,6 @@ export function applyFilters<T extends { readonly docId: string }>(
     else hidden++;
   }
   return { kept, hidden };
-}
-
-/** Tous les dossiers contenant un PDF, avec leurs parents (« assets/ », « assets/a/ »...), dédoublonnés et triés. */
-export function listFolders(docs: readonly DocInfo[]): readonly string[] {
-  const folders = new Set<string>();
-  for (const doc of docs) {
-    const path = nfc(doc.path);
-    for (let i = path.indexOf("/", 1); i !== -1; i = path.indexOf("/", i + 1)) folders.add(path.slice(0, i + 1));
-  }
-  return [...folders].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 // --- Tri ---------------------------------------------------------------------------------------------------------
