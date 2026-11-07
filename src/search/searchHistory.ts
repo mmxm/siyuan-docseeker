@@ -15,11 +15,6 @@ export function addToHistory(history: readonly string[], query: string): string[
   return [q, ...history.filter((h) => h !== q)].slice(0, HISTORY_LIMIT);
 }
 
-export function removeFromHistory(history: readonly string[], query: string): string[] {
-  const q = query.trim();
-  return history.filter((h) => h !== q);
-}
-
 export function clearHistory(): string[] {
   return [];
 }

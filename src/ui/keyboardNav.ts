@@ -21,7 +21,7 @@ export type NavAction =
   | { readonly type: "open"; readonly alternate: boolean }
   /** Champ : lancer la recherche. */
   | { readonly type: "submit" }
-  /** Champ : afficher la liste de l'historique (Alt+Bas). */
+  /** Champ : ouvrir le menu d'historique (Alt+Bas). */
   | { readonly type: "openHistory" }
   /** Carte : revenir au champ SANS le vider. */
   | { readonly type: "backToInput" }
@@ -71,49 +71,6 @@ export function resolveKey(e: KeyInput, context: KeyContext): NavAction {
   if (e.key === "Escape") return { type: "backToInput" };
   const direction = CARD_MOVES[e.key];
   return direction ? { type: "move", direction } : NONE;
-}
-
-export type HistoryAction =
-  | { readonly type: "move"; readonly direction: "next" | "prev" }
-  | { readonly type: "choose" }
-  /** `consume` : la touche est consommée (preventDefault) ; faux pour Tab, qui garde son rôle de navigation. */
-  | { readonly type: "close"; readonly consume: boolean }
-  /** Maj+Suppr : retire la requête active de l'historique. */
-  | { readonly type: "removeActive" }
-  | { readonly type: "none" };
-
-/** Touches du champ quand la liste de l'historique est ouverte. */
-export function resolveHistoryKey(e: KeyInput): HistoryAction {
-  const none: HistoryAction = { type: "none" };
-  if (e.isComposing) return none;
-  if (e.ctrlKey === true || e.metaKey === true || e.altKey === true) return none;
-  if (e.shiftKey === true) return e.key === "Delete" ? { type: "removeActive" } : none;
-  switch (e.key) {
-    case "ArrowDown":
-      return { type: "move", direction: "next" };
-    case "ArrowUp":
-      return { type: "move", direction: "prev" };
-    case "Enter":
-      return { type: "choose" };
-    case "Escape":
-      return { type: "close", consume: true };
-    case "Tab":
-      return { type: "close", consume: false };
-    default:
-      return none;
-  }
-}
-
-/**
- * Option active suivante. Indices : -1 = aucune, 0..n-1 = requêtes, n = « Supprimer tout l'historique ».
- * Bouclage ; depuis « aucune », Haut va à la dernière REQUÊTE (jamais à « Supprimer tout »).
- */
-export function nextHistoryIndex(current: number, queryCount: number, direction: "next" | "prev"): number {
-  if (queryCount <= 0) return -1;
-  if (current < 0) return direction === "next" ? 0 : queryCount - 1;
-  const last = queryCount; // « Supprimer tout »
-  if (direction === "next") return current >= last ? 0 : current + 1;
-  return current <= 0 ? last : current - 1;
 }
 
 export interface Rect {

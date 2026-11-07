@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SearchViewModel } from "../../../src/search/searchController";
 import { mountSearchView, type SearchViewDeps, type ThumbnailAttacher } from "../../../src/ui/searchView";
 import { SEARCH_STYLE_ID } from "../../../src/ui/searchStyles";
+import { createNativeFakes } from "./nativeFakes";
 
 function doc(id: string, pages: number[], title = `Titre ${id}`) {
   return {
@@ -31,8 +32,9 @@ let detach: Mock;
 let attach: Mock;
 let onOpen: Mock;
 let submit: Mock;
+let fakes: ReturnType<typeof createNativeFakes>;
 
-function mount(extra: { onOpenSettings?: () => void; t?: (key: string) => string; options?: NonNullable<SearchViewDeps["options"]> } = {}) {
+function mount(extra: Partial<SearchViewDeps> = {}) {
   const thumbnails: ThumbnailAttacher = { attach: attach as ThumbnailAttacher["attach"] };
   return mountSearchView(host, {
     controller: { submit: submit as (q: string) => void, getViewModel: () => vm },
@@ -43,6 +45,8 @@ function mount(extra: { onOpenSettings?: () => void; t?: (key: string) => string
     thumbnails,
     onOpen: onOpen as (d: string, p: number, q: string) => void,
     getDocMeta: () => ({ pdfSize: 10, pdfModifiedMs: 20 }),
+    openMenu: fakes.openMenu,
+    openDialog: fakes.openDialog,
     ...extra,
   });
 }
@@ -70,6 +74,7 @@ beforeEach(() => {
   attach = vi.fn(() => detach);
   onOpen = vi.fn();
   submit = vi.fn();
+  fakes = createNativeFakes();
 });
 
 describe("mountSearchView", () => {
@@ -940,12 +945,15 @@ describe("filtres dans la vue", () => {
       onOpen: onOpen as (d: string, p: number, q: string) => void,
       getDocMeta: () => undefined,
       options: optionsDeps(),
+      openMenu: fakes.openMenu,
+      openDialog: fakes.openDialog,
       indexActivity: { getSnapshot: () => ({ phase: "idle" }) as never, subscribe: () => () => undefined },
     });
     const root = host.querySelector(".docseeker-search")!;
     const kids = Array.from(root.children).map((c) => c.className.split(" ")[0]);
     expect(kids.slice(0, 3)).toEqual(["docseeker-search-box", "docseeker-toolbar", "docseeker-index-row"]);
-    expect(host.querySelector(".docseeker-toolbar > details.docseeker-filters")).not.toBeNull();
+    expect(host.querySelector(".docseeker-toolbar > .block__icons.docseeker-icons")).not.toBeNull();
+    expect(host.querySelector("details, select")).toBeNull();
   });
 
   it("statut des résultats : documents masqués au pluriel et au singulier", () => {
@@ -1056,54 +1064,40 @@ describe("filtres dans la vue", () => {
     }
   });
 
-  it("réinitialisation par le bouton du statut, panneau fermé : le focus revient à la saisie", () => {
+  it("réinitialisation par le bouton du statut : le focus va au bouton « Filtres » de la barre", () => {
     opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
     mount({ options: optionsDeps() });
-    const select = host.querySelector<HTMLSelectElement>("details select")!;
-    vi.spyOn(select, "focus").mockImplementation(() => undefined); // un select d'un details fermé ne prend pas le focus
     update(noResult(2));
     resetButton()!.focus();
     resetButton()!.click();
-    expect(document.activeElement).toBe(host.querySelector("input[type=search]"));
+    expect(document.activeElement).toBe(host.querySelector('.docseeker-icons button[aria-label^="Filtres"]'));
   });
 
-  it("réinitialisation par le bouton du statut, panneau ouvert : le focus va sur « Dossier »", () => {
-    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 3 } };
+  it("la barre suit les options modifiées de l'extérieur à chaque rendu (chemin et résumé)", () => {
     mount({ options: optionsDeps() });
-    host.querySelector<HTMLDetailsElement>("details")!.open = true;
-    update(noResult(2));
-    resetButton()!.focus();
-    resetButton()!.click();
-    expect(document.activeElement).toBe(host.querySelector("details select"));
+    opts = { ...opts, filters: { ...NO_FILTERS, folder: "assets/a/", minPages: 2 } };
+    update({ kind: "empty-query" });
+    expect(host.querySelector(".search__path")!.textContent).toBe("assets/a/");
+    expect(host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")).toBe("Filtres (2 actifs)");
   });
 
-  it("panneau ouvert : un nouveau dossier et le résumé se mettent à jour sans basculer le panneau", () => {
-    let folders = ["assets/"];
-    mount({ options: { ...optionsDeps(), getFolders: () => folders } });
-    const details = host.querySelector<HTMLDetailsElement>("details")!;
-    details.open = true;
-    const values = () => Array.from(host.querySelectorAll<HTMLOptionElement>("details select option")).map((o) => o.value);
-    expect(values()).toEqual(["", "assets/"]);
-    folders = ["assets/", "assets/new/"];
-    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 2 } }; // setOptions externe
-    update({ kind: "empty-query" });
-    expect(values()).toEqual(["", "assets/", "assets/new/"]);
-    expect(host.querySelector("summary")!.textContent).toBe("Filtres (1 actif)");
+  it("compteur de la rangée : « N documents » avec des résultats, vide sinon", () => {
+    mount({ options: optionsDeps() });
+    const counter = () => host.querySelector<HTMLElement>(".docseeker-count")!;
+    expect(counter().hidden).toBe(true);
+    update(results([doc("a", [1, 2]), doc("b", [3])]));
+    expect(counter().textContent).toBe("2 documents");
+    expect(counter().hidden).toBe(false);
+    update(results([doc("a", [1, 2])]));
+    expect(counter().textContent).toBe("1 document");
+    update(noResult(0));
+    expect(counter().hidden).toBe(true);
+    expect(counter().textContent).toBe("");
   });
 
-  it("panneau fermé : la liste n'est pas reconstruite (résumé à jour), puis reconstruite à l'ouverture", () => {
-    let folders = ["assets/"];
-    mount({ options: { ...optionsDeps(), getFolders: () => folders } });
-    const details = host.querySelector<HTMLDetailsElement>("details")!;
-    const values = () => Array.from(host.querySelectorAll<HTMLOptionElement>("details select option")).map((o) => o.value);
-    folders = ["assets/", "assets/new/"];
-    opts = { ...opts, filters: { ...NO_FILTERS, minPages: 2 } };
-    update({ kind: "empty-query" });
-    expect(values()).toEqual(["", "assets/"]);
-    expect(host.querySelector("summary")!.textContent).toBe("Filtres (1 actif)");
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-    expect(values()).toEqual(["", "assets/", "assets/new/"]);
+  it("deps.options sans openMenu ou sans openDialog : erreur explicite au montage", () => {
+    expect(() => mount({ options: optionsDeps(), openMenu: undefined as unknown as NonNullable<SearchViewDeps["openMenu"]> })).toThrow(/openMenu/);
+    expect(() => mount({ options: optionsDeps(), openDialog: undefined as unknown as NonNullable<SearchViewDeps["openDialog"]> })).toThrow(/openDialog/);
   });
 
   it("deux vues montées ensemble : tous les ids du document sont uniques", () => {
@@ -1118,8 +1112,11 @@ describe("filtres dans la vue", () => {
         onOpen: onOpen as (d: string, p: number, q: string) => void,
         getDocMeta: () => undefined,
         options: optionsDeps(),
+        openMenu: fakes.openMenu,
+        openDialog: fakes.openDialog,
       });
     }
+    for (const h of [host, second]) h.querySelector<HTMLButtonElement>('.docseeker-icons button[aria-label^="Filtres"]')!.click(); // ids du dialogue
     const ids = Array.from(document.querySelectorAll("[id]")).map((e) => e.id);
     expect(ids.length).toBeGreaterThan(10);
     expect(new Set(ids).size).toBe(ids.length);

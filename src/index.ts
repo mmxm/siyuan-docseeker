@@ -1,4 +1,5 @@
 import { Plugin, Setting, confirm, openTab, showMessage } from "siyuan";
+import { openDialog, openMenu } from "./siyuan/nativeUi";
 import { createKernelApi } from "./siyuan/kernelApi";
 import { traceKeys } from "./diagnostic/traceKeys";
 import { formatReport, runM0Diagnostic, type PdfjsLike } from "./diagnostic/m0";
@@ -363,6 +364,8 @@ export default class DocSeekerPlugin extends Plugin {
       store: this.getPetalStore(kernel),
       sharedIndex,
       onOpenSettings: () => this.openSetting(),
+      openMenu,
+      openDialog,
       settings: this.settings, // tri et regroupement mémorisés
       indexActivity: this.getActivity(),
       openTab: openTab as unknown as OpenTabFn,

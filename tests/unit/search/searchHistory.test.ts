@@ -5,7 +5,6 @@ import {
   addToHistory,
   clearHistory,
   normalizeHistory,
-  removeFromHistory,
 } from "../../../src/search/searchHistory";
 
 describe("addToHistory", () => {
@@ -60,20 +59,6 @@ describe("addToHistory", () => {
     const input = Object.freeze(["a", "b"]);
     expect(() => addToHistory(input, "c")).not.toThrow();
     expect(input).toEqual(["a", "b"]);
-  });
-});
-
-describe("removeFromHistory", () => {
-  it("retire la requête (comparée après trim)", () => {
-    expect(removeFromHistory(["a", "b", "c"], "b")).toEqual(["a", "c"]);
-    expect(removeFromHistory(["a", "b"], " a ")).toEqual(["b"]);
-  });
-  it("requête absente : liste équivalente", () => {
-    expect(removeFromHistory(["a"], "z")).toEqual(["a"]);
-  });
-  it("sensible à la casse : « Chat » ne retire pas « chat »", () => {
-    expect(removeFromHistory(["chat", "Chat"], "Chat")).toEqual(["chat"]);
-    expect(removeFromHistory(["chat"], "CHAT")).toEqual(["chat"]);
   });
 });
 

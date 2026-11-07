@@ -9,12 +9,12 @@ import {
   docBoundaryIndex,
   navigableIndices,
   nextCardIndex,
-  nextHistoryIndex,
-  resolveHistoryKey,
   resolveKey,
   type Rect,
 } from "./keyboardNav";
 import { containingFolder } from "./pathLabel";
+import { makeIconButton, svgIcon } from "./icons";
+import { MENU_ID_HISTORY, type MenuHandle, type NativeMenuItem, type OpenDialog, type OpenMenu } from "./nativeUiTypes";
 import { ensureSearchStyle } from "./searchStyles";
 import { mountSearchToolbar, type SearchToolbar } from "./searchToolbar";
 import { nextUiId } from "./uniqueId";
@@ -42,12 +42,14 @@ export interface SearchViewDeps {
   readonly measure?: (el: HTMLElement) => Rect;
   /** Historique des requêtes soumises : absent, le champ reste un simple champ de recherche. */
   readonly history?: {
-    /** Lue à chaque ouverture de la liste (la plus récente en tête). */
+    /** Lue à chaque ouverture du menu (la plus récente en tête). */
     get(): readonly string[];
     add(query: string): void;
-    remove(query: string): void;
     clear(): void;
   };
+  /** Menus et dialogues natifs de SiYuan (injectés ; requis avec `options` ou `history`, voir `mountSearchView`). */
+  readonly openMenu?: OpenMenu;
+  readonly openDialog?: OpenDialog;
   /** Ouvre le panneau de paramètres du plugin (où se lance l'indexation). */
   onOpenSettings?(): void;
   getDocMeta(docId: string): { pdfSize: number; pdfModifiedMs: number } | undefined;
@@ -67,7 +69,7 @@ export interface SearchViewDeps {
   };
   /** Regroupement par document au montage (défaut : oui). État de VUE : changer de mode ne relance aucune recherche. */
   readonly initialGroupByDocument?: boolean;
-  /** Appelé à chaque changement de la case « Regrouper par document » (pour le mémoriser). */
+  /** Appelé à chaque changement de regroupement choisi dans le menu « Plus » (pour le mémoriser). */
   readonly onGroupByDocumentChange?: (groupByDocument: boolean) => void;
 }
 
@@ -142,9 +144,9 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   filtersLabel: "Filtres",
   filtersActiveOne: "Filtres (1 actif)",
   filtersActiveMany: "Filtres ({n} actifs)",
-  filterFolder: "Dossier",
   filterAllFolders: "Tous les dossiers",
-  filterSubfolders: "Inclure les sous-dossiers",
+  foldersMoreOne: "… {n} autre dossier",
+  foldersMoreMany: "… {n} autres dossiers",
   filterName: "Nom du document contient",
   filterMinPages: "Pages au moins",
   filterMaxPages: "Pages au plus",
@@ -158,7 +160,6 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   hiddenByFiltersMany: "{n} documents masqués par les filtres",
   noResultFiltersOne: "Aucun résultat avec 1 filtre actif.",
   noResultFiltersMany: "Aucun résultat avec {n} filtres actifs.",
-  sortBy: "Trier par",
   sortRelevanceDesc: "Pertinence",
   sortRelevanceAsc: "ASC de pertinence",
   sortModifiedAsc: "Modifier le temps croissant",
@@ -171,9 +172,19 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   expandAll: "Élargir",
   collapseAll: "Réduire",
   rankingRefinedPages: "Pages classées par proximité et taille de police",
-  historyLabel: "Historique des requêtes",
   historyClear: "Supprimer tout l'historique",
-  historyShow: "Afficher l'historique des requêtes",
+  historyIcon: "⌥↓",
+  historyEmpty: "Historique vide",
+  pathSpecify: "Spécifier le chemin",
+  includeChildren: "Inclure les documents enfants",
+  moreMenu: "Plus",
+  sortMenu: "Tri",
+  groupMenu: "Groupe",
+  groupNone: "Aucun regroupement",
+  removePath: "Supprimer",
+  clearField: "Effacer",
+  dialogCancel: "Annuler",
+  dialogConfirm: "Confirmer",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -188,6 +199,9 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   };
   const count = (n: number, one: string, many: string): string => tr(n === 1 ? one : many, { n });
   ensureSearchStyle(doc);
+  const { openMenu, openDialog } = deps;
+  if ((deps.options || deps.history) && !openMenu) throw new Error("mountSearchView : deps.openMenu est requis avec deps.options ou deps.history");
+  if (deps.options && !openDialog) throw new Error("mountSearchView : deps.openDialog est requis avec deps.options");
 
   const root = doc.createElement("div");
   root.className = "docseeker-search";
@@ -200,10 +214,22 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   input.placeholder = tr("searchPlaceholder");
   input.setAttribute("aria-label", tr("searchLabel"));
   input.setAttribute("enterkeyhint", "search");
-  // Conteneur du champ : repère de la liste d'historique (positionnée sous le champ).
+  // Conteneur du champ : repère de l'icône d'historique (à gauche) et de la croix « Effacer » (à droite). Le champ est
+  // le premier dans l'ordre du DOM (donc de tabulation) ; la mise en page place les icônes autour.
   const searchBox = doc.createElement("div");
-  searchBox.className = "docseeker-search-box";
+  searchBox.className = "docseeker-search-box b3-form__icon";
   searchBox.appendChild(input);
+  const clearButton = makeIconButton(doc, "docseeker-clear", tr("clearField"), [svgIcon(doc, "iconCloseRound", "b3-form__icon-clear")]);
+  clearButton.hidden = true;
+  const syncClear = (): void => {
+    clearButton.hidden = input.value === "";
+  };
+  let historyButton: HTMLButtonElement | undefined;
+  if (deps.history) {
+    historyButton = makeIconButton(doc, "docseeker-history-icon", tr("historyIcon"), [svgIcon(doc, "iconSearch"), svgIcon(doc, "iconDown", "search__arrowdown")]);
+    searchBox.append(historyButton);
+  }
+  searchBox.append(clearButton);
 
   // Deux régions live présentes dès le montage (sinon certains lecteurs d'écran n'annoncent rien).
   const statusEl = doc.createElement("div");
@@ -275,16 +301,6 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   root.append(searchBox, ...(toolbarEl ? [toolbarEl] : []), ...(activityRow ? [activityRow] : []), statusEl, alertEl, actions, list, flatFooter);
   host.appendChild(root);
   const opts = deps.options;
-  // Fonctions liées explicitement : pas de spread de méthodes (qui perdrait `this` d'un objet à classe).
-  const toolbar: SearchToolbar | undefined =
-    opts && toolbarEl
-      ? mountSearchToolbar(toolbarEl, {
-          getOptions: () => opts.getOptions(),
-          setOptions: (next) => opts.setOptions(next),
-          getFolders: () => opts.getFolders(),
-          t: (key, vars) => tr(key, vars),
-        })
-      : undefined;
 
   const entries = new Map<string, DocEntry>();
   /** Mode liste plate : une entrée par page, clé « docId|page ». Vide en mode regroupé. */
@@ -292,48 +308,12 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
   let groupByDocument = deps.initialGroupByDocument ?? true;
   let disposed = false;
 
-  // Commandes de regroupement (état de vue), dans la barre d'outils : sélecteur de tri, regroupement, Élargir, Réduire,
-  // puis le panneau Filtres (ordre du DOM = ordre de tabulation).
-  let groupBox: HTMLInputElement | undefined;
-  let expandBtn: HTMLButtonElement | undefined;
-  let collapseBtn: HTMLButtonElement | undefined;
-  if (toolbarEl) {
-    const wrap = doc.createElement("div");
-    wrap.className = "docseeker-view-options";
-    const label = doc.createElement("label");
-    label.className = "docseeker-group";
-    groupBox = doc.createElement("input");
-    groupBox.type = "checkbox";
-    groupBox.id = nextUiId("docseeker-group");
-    groupBox.checked = groupByDocument;
-    label.htmlFor = groupBox.id;
-    label.append(groupBox, tr("groupByDocument"));
-    const makeBtn = (cls: string, key: string): HTMLButtonElement => {
-      const b = doc.createElement("button");
-      b.type = "button";
-      b.className = `b3-button b3-button--outline ${cls}`;
-      b.textContent = tr(key);
-      b.setAttribute("aria-disabled", "true");
-      return b;
-    };
-    expandBtn = makeBtn("docseeker-expand-all", "expandAll");
-    collapseBtn = makeBtn("docseeker-collapse-all", "collapseAll");
-    wrap.append(label, expandBtn, collapseBtn);
-    const filters = Array.from(toolbarEl.children).find((c) => c.tagName === "DETAILS");
-    toolbarEl.insertBefore(wrap, filters ?? null);
-  }
-
-  /** « Élargir » / « Réduire » : désactivés (aria-disabled, focus conservé) quand l'état demandé est déjà atteint. */
-  const refreshExpansionButtons = (): void => {
-    if (!expandBtn || !collapseBtn) return;
-    const all = [...entries.values()];
-    expandBtn.setAttribute("aria-disabled", String(!all.some((e) => e.canExpand())));
-    collapseBtn.setAttribute("aria-disabled", String(!all.some((e) => e.canCollapse())));
-  };
+  let toolbar: SearchToolbar | undefined;
+  /** « Élargir » / « Réduire » : la barre relit l'état (aria-disabled) après chaque changement de cartes. */
+  const refreshExpansionButtons = (): void => toolbar?.refresh();
   const applyGroupChrome = (): void => {
     list.classList.toggle("docseeker-list--flat", !groupByDocument);
-    if (expandBtn) expandBtn.hidden = !groupByDocument;
-    if (collapseBtn) collapseBtn.hidden = !groupByDocument;
+    toolbar?.refresh();
   };
   applyGroupChrome();
   // Nombre de cartes affichées par document déplié ; valable pour une seule requête.
@@ -805,77 +785,27 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         break;
       }
     }
+    toolbar?.setCounter(vm.kind === "results" ? count(vm.total, "docOne", "docMany") : "");
     refreshExpansionButtons();
     // La carte focalisée a disparu : le focus retombait sur <body>, on le rend à la saisie.
     if (hadFocus && !list.contains(doc.activeElement) && !disposed) input.focus();
   };
 
-  // Champ vidé sans clavier (croix native de type=search) : retour immédiat à l'état vide.
-  // Du texte tapé ne lance rien.
+  // Champ vidé sans clavier (événement `search`) ou par saisie : retour immédiat à l'état vide. Du texte tapé ne lance rien.
   const submitIfCleared = (): void => {
     if (input.value === "") deps.controller.submit("");
   };
-  input.addEventListener("search", submitIfCleared);
-  input.addEventListener("input", submitIfCleared);
-  // --- Historique des requêtes : combobox éditable (le focus reste dans le champ, option active par aria-activedescendant).
+  input.addEventListener("search", () => {
+    syncClear();
+    submitIfCleared();
+  });
+  input.addEventListener("input", () => {
+    syncClear();
+    submitIfCleared();
+  });
+
+  // --- Historique des requêtes : menu natif de SiYuan (le champ garde son focus ; plus de liste maison).
   const historyDeps = deps.history;
-  let historyOpen = false;
-  let historyActive = -1;
-  let historyQueries: readonly string[] = [];
-  let historyList: HTMLUListElement | undefined;
-  const historyOptions = (): HTMLElement[] =>
-    historyList ? Array.from(historyList.querySelectorAll<HTMLElement>('[role="option"]')) : [];
-
-  const setHistoryActive = (index: number): void => {
-    historyActive = index;
-    const options = historyOptions();
-    options.forEach((o, i) => o.setAttribute("aria-selected", String(i === index)));
-    const current = options[index];
-    if (current) {
-      input.setAttribute("aria-activedescendant", current.id);
-      current.scrollIntoView?.({ block: "nearest" });
-    } else {
-      input.removeAttribute("aria-activedescendant");
-    }
-  };
-
-  const closeHistory = (): void => {
-    if (!historyOpen || !historyList) return;
-    historyOpen = false;
-    historyList.hidden = true;
-    historyList.replaceChildren();
-    input.setAttribute("aria-expanded", "false");
-    setHistoryActive(-1);
-  };
-
-  /** Reconstruit les options d'après l'historique courant ; faux (et fermée) s'il est vide. */
-  const fillHistory = (): boolean => {
-    if (!historyDeps || !historyList) return false;
-    historyQueries = [...historyDeps.get()];
-    if (historyQueries.length === 0) return false;
-    const makeOption = (text: string, className: string): HTMLLIElement => {
-      const li = doc.createElement("li");
-      li.id = nextUiId("docseeker-history-option");
-      li.className = className;
-      li.setAttribute("role", "option");
-      li.setAttribute("aria-selected", "false");
-      li.textContent = text;
-      return li;
-    };
-    const options = historyQueries.map((q) => makeOption(q, "docseeker-history-option"));
-    options.push(makeOption(tr("historyClear"), "docseeker-history-option docseeker-history-clear"));
-    historyList.replaceChildren(...options);
-    return true;
-  };
-
-  const openHistory = (): boolean => {
-    if (disposed || !historyList || !fillHistory()) return false;
-    historyOpen = true;
-    historyList.hidden = false;
-    input.setAttribute("aria-expanded", "true");
-    setHistoryActive(-1);
-    return true;
-  };
 
   /** Lance une recherche et la mémorise (les requêtes vides ne le sont pas). Seule voie de soumission au clavier ou à la souris. */
   const submitQuery = (query: string): void => {
@@ -883,107 +813,56 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (query.trim() !== "") historyDeps?.add(query);
   };
 
-  const chooseHistory = (index: number): void => {
-    const query = historyQueries[index];
-    closeHistory();
-    if (query === undefined) {
-      historyDeps?.clear(); // dernière option : « Supprimer tout l'historique »
-      return;
-    }
-    input.value = query;
-    submitQuery(query);
+  /** Menu d'historique ouvert par la vue : fermé au dispose. Le focus est rendu par l'adaptateur (à l'élément ouvrant : le champ). */
+  let historyMenu: MenuHandle | undefined;
+  /** Ouvre le menu d'historique ; faux s'il n'y a pas d'historique branché. L'historique est relu à chaque ouverture. */
+  const openHistoryMenu = (): boolean => {
+    if (disposed || !historyDeps || !openMenu) return false;
+    const queries = historyDeps.get();
+    const items: NativeMenuItem[] =
+      queries.length === 0
+        ? [{ label: tr("historyEmpty"), disabled: true }]
+        : [
+            ...queries.map((query): NativeMenuItem => ({
+              label: query,
+              click: () => {
+                if (disposed) return;
+                input.value = query;
+                syncClear();
+                submitQuery(query);
+                input.focus();
+              },
+            })),
+            { separator: true },
+            {
+              label: tr("historyClear"),
+              click: () => {
+                if (!disposed) historyDeps.clear();
+              },
+            },
+          ];
+    const r = searchBox.getBoundingClientRect();
+    historyMenu = openMenu(items, { x: r.left, y: r.bottom, w: r.width, h: r.height }, undefined, MENU_ID_HISTORY);
+    return true;
+  };
+  historyButton?.setAttribute("data-menu", "true"); // exclusion native du gestionnaire tactile de SiYuan
+  historyButton?.addEventListener("click", (e) => {
+    // SiYuan ferme les menus sur tout clic qui atteint `window` : sans stopPropagation, le menu s'ouvre puis se referme
+    // dans le même clic (souris comme Entrée/Espace, qui produisent le même `click`).
+    e.stopPropagation();
+    input.focus(); // le menu d'historique appartient au champ : c'est lui qui retrouve le focus à la fermeture
+    openHistoryMenu();
+  });
+  clearButton.addEventListener("click", () => {
+    input.value = "";
+    syncClear();
+    deps.controller.submit("");
     input.focus();
-  };
-
-  /** Vrai si la touche a été traitée par la liste ouverte. */
-  const handleHistoryKey = (e: KeyboardEvent): boolean => {
-    const action = resolveHistoryKey(e);
-    switch (action.type) {
-      case "move":
-        e.preventDefault();
-        setHistoryActive(nextHistoryIndex(historyActive, historyQueries.length, action.direction));
-        return true;
-      case "choose":
-        e.preventDefault();
-        if (historyActive >= 0) chooseHistory(historyActive);
-        else {
-          closeHistory();
-          submitQuery(input.value);
-        }
-        return true;
-      case "close":
-        if (action.consume) e.preventDefault();
-        closeHistory();
-        return true;
-      case "removeActive": {
-        const query = historyQueries[historyActive];
-        if (query === undefined) return false; // « aucune » ou « Supprimer tout » : rien à retirer
-        e.preventDefault();
-        historyDeps?.remove(query);
-        if (fillHistory()) setHistoryActive(-1);
-        else closeHistory();
-        return true;
-      }
-      default:
-        return false;
-    }
-  };
-
-  let removeHistoryListeners: (() => void) | undefined;
-  if (historyDeps) {
-    const list = doc.createElement("ul");
-    list.className = "docseeker-history-list";
-    list.id = nextUiId("docseeker-history");
-    list.hidden = true;
-    list.setAttribute("role", "listbox");
-    list.setAttribute("aria-label", tr("historyLabel"));
-    historyList = list;
-    const toggle = doc.createElement("button");
-    toggle.type = "button";
-    toggle.tabIndex = -1; // la souris seulement : au clavier, Alt+Bas
-    toggle.className = "b3-button b3-button--outline docseeker-history-toggle";
-    toggle.textContent = "▾";
-    toggle.title = tr("historyShow");
-    toggle.setAttribute("aria-label", tr("historyShow"));
-    toggle.setAttribute("aria-controls", list.id);
-    searchBox.append(toggle, list);
-    input.setAttribute("role", "combobox");
-    input.setAttribute("aria-haspopup", "listbox");
-    input.setAttribute("aria-autocomplete", "list");
-    input.setAttribute("aria-expanded", "false");
-    input.setAttribute("aria-controls", list.id);
-
-    // Garde le focus dans le champ pendant un clic sur le bouton ou une option.
-    const keepFocus = (e: Event): void => e.preventDefault();
-    toggle.addEventListener("mousedown", keepFocus);
-    list.addEventListener("mousedown", keepFocus);
-    toggle.addEventListener("click", () => {
-      if (historyOpen) closeHistory();
-      else openHistory();
-      input.focus();
-    });
-    list.addEventListener("click", (e) => {
-      const option = (e.target as Element).closest<HTMLElement>('[role="option"]');
-      if (!option) return;
-      const index = historyOptions().indexOf(option);
-      if (index >= 0) chooseHistory(index);
-    });
-    const onOutside = (e: Event): void => {
-      if (historyOpen && !searchBox.contains(e.target as Node)) closeHistory();
-    };
-    doc.addEventListener("mousedown", onOutside, true);
-    doc.addEventListener("click", onOutside, true);
-    removeHistoryListeners = () => {
-      doc.removeEventListener("mousedown", onOutside, true);
-      doc.removeEventListener("click", onOutside, true);
-    };
-  }
-  input.addEventListener("input", closeHistory); // la liste n'est pas filtrée : taper la ferme
+  });
 
   // Taper ne lance rien : la recherche part à Entrée (hors composition IME). Les touches sont décidées par
   // `resolveKey` ; `preventDefault` n'est appelé que si l'action a eu lieu.
   input.addEventListener("keydown", (e) => {
-    if (historyOpen && handleHistoryKey(e)) return;
     const action = resolveKey(e, "input");
     switch (action.type) {
       case "submit":
@@ -993,6 +872,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       case "clear":
         e.preventDefault();
         input.value = "";
+        syncClear();
         deps.controller.submit("");
         break;
       case "move": {
@@ -1004,20 +884,16 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         break;
       }
       case "openHistory":
-        if (!historyOpen && openHistory()) e.preventDefault();
+        if (openHistoryMenu()) {
+          e.preventDefault();
+          e.stopPropagation(); // frappe entièrement traitée ici : aucun raccourci global ne doit la reprendre
+        }
         break;
       default:
         break;
     }
   });
 
-  groupBox?.addEventListener("change", () => {
-    if (!groupBox) return;
-    groupByDocument = groupBox.checked;
-    applyGroupChrome();
-    render();
-    deps.onGroupByDocumentChange?.(groupByDocument);
-  });
   flatMore.addEventListener("click", () => {
     const wasFocused = doc.activeElement === flatMore;
     const before = allCards().length;
@@ -1028,20 +904,9 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     const firstNew = allCards()[before];
     if (wasFocused && flatMore.hidden && firstNew) focusCard(firstNew);
   });
-  expandBtn?.addEventListener("click", () => {
-    if (expandBtn?.getAttribute("aria-disabled") === "true") return;
-    for (const entry of entries.values()) entry.expandAll();
-    refreshExpansionButtons();
-  });
-  collapseBtn?.addEventListener("click", () => {
-    if (collapseBtn?.getAttribute("aria-disabled") === "true") return;
-    for (const entry of entries.values()) entry.collapseAll();
-    refreshExpansionButtons();
-  });
-
   resetButton?.addEventListener("click", () => {
-    toolbar?.reset();
-    // Le panneau de filtres est peut-être replié : si le focus n'a pas pu y aller, retour à la saisie.
+    toolbar?.reset(); // met le focus sur le bouton « Filtres »
+    // Filet : si le focus n'est nulle part dans la vue, retour à la saisie.
     if (!root.contains(doc.activeElement) || doc.activeElement === doc.body || doc.activeElement === resetButton) input.focus();
   });
 
@@ -1117,6 +982,37 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       }
     }
   });
+
+  if (opts && toolbarEl && openMenu && openDialog) {
+    // Fonctions liées explicitement : pas de spread de méthodes (qui perdrait `this` d'un objet à classe).
+    toolbar = mountSearchToolbar(toolbarEl, {
+      getOptions: () => opts.getOptions(),
+      setOptions: (next) => opts.setOptions(next),
+      getFolders: () => opts.getFolders(),
+      t: (key, vars) => tr(key, vars),
+      openMenu,
+      openDialog,
+      getGroupByDocument: () => groupByDocument,
+      setGroupByDocument: (next) => {
+        if (disposed || next === groupByDocument) return;
+        groupByDocument = next;
+        applyGroupChrome();
+        render();
+        deps.onGroupByDocumentChange?.(groupByDocument);
+      },
+      expansion: {
+        canExpand: () => [...entries.values()].some((e) => e.canExpand()),
+        canCollapse: () => [...entries.values()].some((e) => e.canCollapse()),
+        expandAll: () => {
+          for (const entry of entries.values()) entry.expandAll();
+        },
+        collapseAll: () => {
+          for (const entry of entries.values()) entry.collapseAll();
+        },
+      },
+    });
+    toolbar.refresh();
+  }
 
   const unsubscribe = deps.subscribe(render);
   render();
@@ -1212,7 +1108,6 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     setGroupByDocument(next) {
       if (disposed || next === groupByDocument) return;
       groupByDocument = next;
-      if (groupBox) groupBox.checked = next;
       applyGroupChrome();
       render();
     },
@@ -1223,11 +1118,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       if (disposed) return;
       disposed = true;
       unsubscribe();
-      removeHistoryListeners?.();
       cleanupActivity?.();
       toolbar?.dispose();
       clearList();
       root.remove();
+      historyMenu?.close(); // après le retrait : l'adaptateur ne rend alors le focus à aucun élément détaché
     },
   };
 }

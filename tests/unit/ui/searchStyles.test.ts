@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { SEARCH_CSS } from "../../../src/ui/searchStyles";
+import { SEARCH_CSS, SEARCH_STYLE_ID, ensureSearchStyle } from "../../../src/ui/searchStyles";
+import { mountSearchView } from "../../../src/ui/searchView";
 
 const FOCUS = "outline: 2px solid var(--b3-theme-primary); outline-offset: 2px";
 
@@ -109,145 +111,125 @@ describe("SEARCH_CSS", () => {
     expect(inner).toContain("unicode-bidi: bidi-override");
   });
 
-  describe("barre de filtres", () => {
-    it.each([
-      ".docseeker-filters > summary:focus-visible",
-      ".docseeker-filter-field input:focus-visible",
-      ".docseeker-filter-field select:focus-visible",
-      ".docseeker-filter-reset:focus-visible",
-      ".docseeker-reset-filters:focus-visible",
-    ])("donne un focus visible fort à %s", (selector) => {
-      expect(rulesFor(selector).join(" ")).toContain(FOCUS);
+  describe("barre d'icônes native (10f)", () => {
+    const forced = (): string => SEARCH_CSS.slice(SEARCH_CSS.indexOf("@media (forced-colors: active)"));
+    const BTN = ".docseeker-icons .block__icon";
+
+    it("la rangée passe à la ligne, sans largeur fixe (320 px) ni défilement horizontal", () => {
+      const rule = rulesFor(".docseeker-icons").join(" ");
+      expect(rule).toContain("display: flex");
+      expect(rule).toContain("flex-wrap: wrap");
+      expect(rule).toContain("min-width: 0");
+      expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
+      expect(rule).not.toMatch(/overflow-x:\s*(auto|scroll)/);
     });
 
-    it("la barre est un flex qui passe à la ligne, avec un espace de 8px", () => {
+    it("le bouton-icône est réinitialisé (fond transparent, sans bordure) et fait au moins 32 px", () => {
+      const rule = rulesFor(BTN).join(" ");
+      expect(rule).toMatch(/background:\s*transparent/);
+      expect(rule).toMatch(/border:\s*0|border:\s*none/);
+      expect(rule).toMatch(/min-height:\s*32px/);
+      expect(rule).toMatch(/min-width:\s*32px/);
+      expect(rule).toContain("justify-content: center");
+    });
+
+    it("focus visible fort au clavier", () => {
+      expect(rulesFor(`${BTN}:focus-visible`).join(" ")).toContain(FOCUS);
+    });
+
+    it("aria-disabled : estompé et non cliquable, mais reste focalisable (pas de pointer-events: none)", () => {
+      const rule = rulesFor(`${BTN}[aria-disabled="true"]`).join(" ");
+      expect(rule).toMatch(/opacity:\s*0?\.\d+/);
+      expect(rule).toContain("cursor: not-allowed");
+      expect(rule).not.toContain("pointer-events");
+    });
+
+    it("[hidden] respecté (le display du bouton ne le masque pas)", () => {
+      expect(rulesFor(`${BTN}[hidden]`).join(" ")).toContain("display: none");
+      expect(rulesFor(".docseeker-count[hidden]").join(" ")).toContain("display: none");
+      expect(rulesFor(".docseeker-icons .search__path[hidden]").join(" ")).toContain("display: none");
+    });
+
+    it("l'étiquette de chemin s'abrège avec une ellipse et peut rétrécir ; le padding natif de droite est annulé", () => {
+      const rule = rulesFor(".docseeker-icons .search__path").join(" ");
+      expect(rule).toContain("overflow: hidden");
+      expect(rule).toContain("text-overflow: ellipsis");
+      expect(rule).toContain("white-space: nowrap");
+      expect(rule).toContain("min-width: 0");
+      expect(rule).toMatch(/padding-right:\s*0/);
+      expect(rule).toMatch(/max-width:\s*100%/);
+    });
+
+    it("couleurs forcées : focus Highlight, bouton désactivé GrayText", () => {
+      expect(forced()).toContain(`${BTN}:focus-visible`);
+      expect(forced()).toMatch(/\.docseeker-icons \.block__icon\[aria-disabled="true"\][^}]*GrayText/);
+    });
+
+    it("les anciennes règles du select de tri, de la case, du <details> et des boutons texte ont disparu", () => {
+      for (const gone of [".docseeker-sort", ".docseeker-group", ".docseeker-view-options", ".docseeker-filters", ".docseeker-expand-all", ".docseeker-collapse-all", "docseeker-filter-check"]) {
+        expect(SEARCH_CSS, gone).not.toContain(gone);
+      }
+    });
+
+    it("la barre reste un flex qui passe à la ligne", () => {
       const rule = rulesFor(".docseeker-toolbar").join(" ");
       expect(rule).toContain("display: flex");
       expect(rule).toContain("flex-wrap: wrap");
-      expect(rule).toContain("gap: 8px");
     });
 
-    it("la grille s'adapte à la largeur, sans largeur fixe (320 px)", () => {
-      const rule = rulesFor(".docseeker-filter-grid").join(" ");
-      expect(rule).toContain("repeat(auto-fit, minmax(min(100%, 140px), 1fr))");
-      expect(rule).not.toMatch(/(?<!max-|min-)width:\s*\d+px/);
-    });
-
-    it("les champs et le select se plient à la largeur de leur cellule, sans largeur fixe en px", () => {
-      for (const selector of ['.docseeker-filter-field input:not([type="checkbox"])', ".docseeker-filter-field select"]) {
-        const rule = rulesFor(selector).join(" ");
-        expect(rule, selector).not.toBe("");
-        expect(rule, selector).toContain("width: 100%");
-        expect(rule, selector).toContain("box-sizing: border-box");
-        expect(rule, selector).not.toMatch(/(?<![-\w])width:\s*\d+px/);
-      }
-    });
-
-    it("garantit 32px de hauteur minimale aux contrôles, au résumé et au bouton", () => {
-      for (const selector of [
-        '.docseeker-filter-field input:not([type="checkbox"])',
-        ".docseeker-filter-field select",
-        ".docseeker-filters > summary",
-        ".docseeker-filter-reset",
-        ".docseeker-reset-filters",
-      ]) {
-        expect(rulesFor(selector).join(" "), selector).toMatch(/min-height:\s*32px/);
-      }
-    });
-
-    it("l'erreur utilise la couleur d'erreur du thème et le champ invalide un contour", () => {
-      expect(rulesFor(".docseeker-filter-error").join(" ")).toContain("var(--b3-theme-error)");
-      expect(rulesFor('.docseeker-filter-field [aria-invalid="true"]').join(" ")).toContain("var(--b3-theme-error)");
-    });
-
-    it("le bouton aria-disabled est visiblement inactif ; l'erreur masquée n'occupe rien", () => {
-      expect(rulesFor('.docseeker-filter-reset[aria-disabled="true"]').join(" ")).toContain("cursor: not-allowed");
-      expect(rulesFor(".docseeker-filter-error[hidden]").join(" ")).toContain("display: none");
-    });
-
-    it("prévoit un bloc forced-colors pour le focus des filtres", () => {
-      const idx = SEARCH_CSS.indexOf("@media (forced-colors: active)");
-      expect(idx).toBeGreaterThan(-1);
-      const block = SEARCH_CSS.slice(idx);
-      expect(block).toContain(".docseeker-filter-field");
-      expect(block).toContain("Highlight");
+    it("la largeur max d'une carte plate reste liée à la variable --docseeker-thumb-width", () => {
+      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*120px/);
+      expect(rulesFor(".docseeker-thumb").join(" ")).toContain("width: var(--docseeker-thumb-width)");
+      expect(rulesFor(".docseeker-card--flat").join(" ")).toMatch(/max-width:\s*calc\(var\(--docseeker-thumb-width\)\s*\+\s*\d+px\)/);
+      expect(SEARCH_CSS).not.toContain("136px");
     });
   });
 
-  describe("tri et regroupement (10c)", () => {
-    const forced = (): string => SEARCH_CSS.slice(SEARCH_CSS.indexOf("@media (forced-colors: active)"));
-
-    it("la barre d'outils est sur une ligne flex-wrap ; tri, regroupement et Filtres en sont les enfants", () => {
-      const toolbar = rulesFor(".docseeker-toolbar").join(" ");
-      expect(toolbar).toContain("display: flex");
-      expect(toolbar).toContain("flex-wrap: wrap");
-      expect(rulesFor(".docseeker-sort").join(" ")).toMatch(/display:\s*flex/);
-      expect(rulesFor(".docseeker-view-options").join(" ")).toMatch(/display:\s*flex/);
-      expect(rulesFor(".docseeker-view-options").join(" ")).toContain("flex-wrap: wrap");
+  describe("dialogue des filtres", () => {
+    it("la grille s'adapte à la largeur, sans largeur fixe", () => {
+      const rule = rulesFor(".docseeker-filter-grid").join(" ");
+      expect(rule).toContain("repeat(auto-fit, minmax(min(100%, 140px), 1fr))");
+      expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
     });
 
-    it("le panneau Filtres ne prend toute la largeur que déplié (sinon il partage la ligne)", () => {
-      expect(rulesFor(".docseeker-filters").join(" ")).not.toMatch(/flex:\s*1 1 100%/);
-      expect(rulesFor(".docseeker-filters[open]").join(" ")).toMatch(/flex:\s*1 1 100%/);
+    it("les champs se plient à la largeur de leur cellule et font au moins 32 px", () => {
+      const rule = rulesFor(".docseeker-filter-field input").join(" ");
+      expect(rule).toContain("width: 100%");
+      expect(rule).toContain("box-sizing: border-box");
+      expect(rule).toMatch(/min-height:\s*32px/);
+      expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
+      expect(rulesFor(".docseeker-filter-field input:focus-visible").join(" ")).toContain(FOCUS);
     });
 
-    it("le sélecteur, la case, Élargir et Réduire font au moins 32px", () => {
-      expect(rulesFor(".docseeker-sort select").join(" ")).toMatch(/min-height:\s*32px/);
-      expect(rulesFor(".docseeker-group").join(" ")).toMatch(/min-height:\s*32px/);
-      expect(rulesFor(".docseeker-expand-all").join(" ")).toMatch(/min-height:\s*32px/);
-      expect(rulesFor(".docseeker-collapse-all").join(" ")).toMatch(/min-height:\s*32px/);
-      expect(rulesFor(".docseeker-expand-all").join(" ")).toMatch(/min-width:\s*32px/);
+    it("erreur et champ invalide : couleur d'erreur du thème ; l'erreur masquée n'occupe rien", () => {
+      expect(rulesFor(".docseeker-filter-error").join(" ")).toContain("var(--b3-theme-error)");
+      expect(rulesFor('.docseeker-filter-field [aria-invalid="true"]').join(" ")).toContain("var(--b3-theme-error)");
+      expect(rulesFor(".docseeker-filter-error[hidden]").join(" ")).toContain("display: none");
     });
 
-    it("rien ne dépasse 320px de large : le sélecteur se réduit (min-width: 0, max-width: 100%)", () => {
-      const rule = rulesFor(".docseeker-sort select").join(" ");
-      expect(rule).toContain("max-width: 100%");
-      expect(rulesFor(".docseeker-sort").join(" ")).toContain("min-width: 0");
-      expect(SEARCH_CSS).not.toMatch(/\.docseeker-(sort|view-options|group)[^{]*\{[^}]*(?<!max-)(?<!min-)width:\s*\d{3,}px/);
-    });
-
-    it.each([
-      ".docseeker-sort select:focus-visible",
-      ".docseeker-group input:focus-visible",
-      ".docseeker-expand-all:focus-visible",
-      ".docseeker-collapse-all:focus-visible",
-    ])("focus visible fort : %s", (selector) => {
-      expect(rulesFor(selector).join(" ")).toContain(FOCUS);
-    });
-
-    it("Élargir / Réduire aria-disabled : estompés et non cliquables, et visibles en couleurs forcées", () => {
-      for (const b of [".docseeker-expand-all", ".docseeker-collapse-all"]) {
-        const rule = rulesFor(`${b}[aria-disabled="true"]`).join(" ");
-        expect(rule).toMatch(/opacity:\s*0?\.\d+/);
-        expect(rule).toContain("cursor: not-allowed");
-        expect(forced()).toContain(`${b}[aria-disabled="true"]`);
+    it("boutons de réinitialisation : 32 px, focus visible, aria-disabled estompé", () => {
+      for (const sel of [".docseeker-filter-reset", ".docseeker-reset-filters"]) {
+        expect(rulesFor(sel).join(" "), sel).toMatch(/min-height:\s*32px/);
+        expect(rulesFor(`${sel}:focus-visible`).join(" "), sel).toContain(FOCUS);
       }
-      expect(rulesFor(".docseeker-expand-all[hidden]").join(" ")).toContain("display: none");
+      expect(rulesFor('.docseeker-filter-reset[aria-disabled="true"]').join(" ")).toContain("cursor: not-allowed");
+      expect(rulesFor(".docseeker-reset-filters[hidden]").join(" ")).toContain("display: none");
     });
 
-    it("couleurs forcées : le focus des nouveaux contrôles utilise Highlight", () => {
-      const media = forced();
-      for (const sel of [".docseeker-sort select:focus-visible", ".docseeker-group input:focus-visible", ".docseeker-expand-all:focus-visible", ".docseeker-collapse-all:focus-visible"]) {
-        expect(media).toContain(sel);
-      }
+    it("couleurs forcées : champ invalide, focus et bouton désactivé", () => {
+      const block = SEARCH_CSS.slice(SEARCH_CSS.indexOf("@media (forced-colors: active)"));
+      expect(block).toContain(".docseeker-filter-field input:focus-visible");
+      expect(block).toContain('.docseeker-filter-field [aria-invalid="true"]');
+      expect(block).toContain('.docseeker-filter-reset[aria-disabled="true"]');
     });
+  });
 
-    it("liste plate : cartes en flux, titre de la carte à capacité limitée", () => {
+  describe("liste plate", () => {
+    it("cartes en flux, titre à capacité limitée, pied de liste", () => {
       expect(rulesFor(".docseeker-list--flat").join(" ")).toMatch(/display:\s*flex/);
       expect(rulesFor(".docseeker-list--flat").join(" ")).toContain("flex-wrap: wrap");
       expect(rulesFor(".docseeker-card-title").join(" ")).toMatch(/overflow-wrap:\s*anywhere|text-overflow/);
       expect(rulesFor(".docseeker-flat-item").join(" ")).toContain("min-width: 0");
-    });
-
-    it("la largeur max d'une carte plate est liée à la largeur de la vignette (variable CSS), sans 136px en dur", () => {
-      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*120px/);
-      expect(rulesFor(".docseeker-thumb").join(" ")).toContain("width: var(--docseeker-thumb-width)");
-      const flat = rulesFor(".docseeker-card--flat").join(" ");
-      expect(flat).toMatch(/max-width:\s*calc\(var\(--docseeker-thumb-width\)\s*\+\s*\d+px\)/);
-      expect(SEARCH_CSS).not.toContain("136px");
-    });
-
-    it("pied de la liste plate : bouton et note ont une taille de cible suffisante, focus visible, [hidden] respecté", () => {
       expect(rulesFor(".docseeker-flat-more").join(" ")).toMatch(/min-height:\s*32px/);
       expect(rulesFor(".docseeker-flat-more:focus-visible").join(" ")).toContain(FOCUS);
       expect(rulesFor(".docseeker-flat-more[hidden]").join(" ")).toContain("display: none");
@@ -257,41 +239,100 @@ describe("SEARCH_CSS", () => {
   });
 });
 
-describe("SEARCH_CSS : historique des requêtes (J10 10e)", () => {
-  it("le conteneur du champ est le repère de positionnement de la liste", () => {
+describe("SEARCH_CSS : champ de recherche, icône d'historique et croix (10f)", () => {
+  const ICON = ".docseeker-search-box .docseeker-history-icon";
+  const CLEAR = ".docseeker-search-box .docseeker-clear";
+
+  it("le conteneur du champ est le repère de positionnement des deux icônes", () => {
     expect(rulesFor(".docseeker-search-box").join(" ")).toMatch(/position:\s*relative/);
   });
 
-  it("la liste est posée sous le champ, ne dépasse pas la largeur, défile en interne", () => {
-    const css = rulesFor(".docseeker-history-list").join(" ");
-    expect(css).toMatch(/position:\s*absolute/);
-    expect(css).toMatch(/top:\s*100%/);
-    expect(css).toMatch(/left:\s*0/);
-    expect(css).toMatch(/right:\s*0/);
-    expect(css).toMatch(/max-height:\s*\d+px/);
-    expect(css).toMatch(/overflow-y:\s*auto/);
-    expect(css).toMatch(/z-index:\s*\d+/);
-    expect(css).not.toMatch(/(^|[^-])width:\s*\d+px/); // aucune largeur fixe (320 px)
+  it("l'icône d'historique est posée à gauche dans le champ, la croix à droite, chacune d'au moins 32 px", () => {
+    const icon = rulesFor(ICON).join(" ");
+    expect(icon).toMatch(/position:\s*absolute/);
+    expect(icon).toMatch(/left:\s*0/);
+    expect(icon).toMatch(/min-width:\s*32px/);
+    const clear = rulesFor(CLEAR).join(" ");
+    expect(clear).toMatch(/position:\s*absolute/);
+    expect(clear).toMatch(/right:\s*0/);
+    expect(clear).toMatch(/min-width:\s*32px/);
+    for (const rule of [icon, clear]) {
+      expect(rule).toMatch(/background:\s*transparent/);
+      expect(rule).toMatch(/border:\s*0|border:\s*none/);
+      expect(rule).toMatch(/top:\s*0/);
+      expect(rule).toMatch(/bottom:\s*0/);
+    }
   });
 
-  it("la liste masquée l'est réellement", () => {
-    expect(rulesFor(".docseeker-history-list[hidden]").join(" ")).toMatch(/display:\s*none/);
+  it("le champ laisse la place aux deux icônes (padding gauche et droit) sans largeur fixe", () => {
+    const rule = rulesFor('.docseeker-search-box input[type="search"]').join(" ");
+    expect(rule).toMatch(/padding-left:\s*\d+px/);
+    expect(rule).toMatch(/padding-right:\s*\d+px/);
+    expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
   });
 
-  it("options et bouton ont une cible de 32 px, l'option active est visible (fond + contour)", () => {
-    expect(rulesFor(".docseeker-history-option").join(" ")).toMatch(/min-height:\s*32px/);
-    expect(rulesFor(".docseeker-history-toggle").join(" ")).toMatch(/min-height:\s*32px/);
-    expect(rulesFor(".docseeker-history-toggle").join(" ")).toMatch(/min-width:\s*32px/);
-    const selected = rulesFor('.docseeker-history-option[aria-selected="true"]').join(" ");
-    expect(selected).toMatch(/background/);
-    expect(selected).toMatch(/outline:\s*2px solid var\(--b3-theme-primary\)/);
+  it("focus visible fort pour l'icône et la croix, et [hidden] respecté pour la croix", () => {
+    expect(rulesFor(`${ICON}:focus-visible`).join(" ")).toContain(FOCUS);
+    expect(rulesFor(`${CLEAR}:focus-visible`).join(" ")).toContain(FOCUS);
+    expect(rulesFor(`${CLEAR}[hidden]`).join(" ")).toContain("display: none");
   });
 
-  it("le bouton a un focus visible fort", () => {
-    expect(rulesFor(".docseeker-history-toggle:focus-visible").join(" ")).toContain(FOCUS);
+  it("la croix native du type=search est masquée (une seule croix)", () => {
+    expect(SEARCH_CSS).toMatch(/input\[type="search"\]::-webkit-search-cancel-button\s*\{[^}]*display:\s*none/);
   });
 
-  it("le texte long d'une requête passe à la ligne", () => {
-    expect(rulesFor(".docseeker-history-option").join(" ")).toMatch(/overflow-wrap:\s*anywhere/);
+  it("couleurs forcées : focus de l'icône et de la croix en Highlight", () => {
+    const block = SEARCH_CSS.slice(SEARCH_CSS.indexOf("@media (forced-colors: active)"));
+    expect(block).toContain(`${ICON}:focus-visible`);
+    expect(block).toContain(`${CLEAR}:focus-visible`);
+  });
+
+  it("plus aucune règle pour la liste d'historique maison", () => {
+    for (const gone of ["docseeker-history-list", "docseeker-history-option", "docseeker-history-toggle", "docseeker-history-clear"]) {
+      expect(SEARCH_CSS, gone).not.toContain(gone);
+    }
+  });
+});
+
+describe("ensureSearchStyle : la feuille sert aussi aux dialogues (hors de la vue)", () => {
+  const countStyles = (): number => document.querySelectorAll(`style#${SEARCH_STYLE_ID}`).length;
+  const mount = (host: HTMLElement) =>
+    mountSearchView(host, {
+      controller: { submit: () => undefined, getViewModel: () => ({ kind: "empty-query" }) },
+      subscribe: () => () => undefined,
+      thumbnails: { attach: () => () => undefined },
+      onOpen: () => undefined,
+      getDocMeta: () => undefined,
+    });
+
+  it("idempotent : deux appels, une seule feuille, avec le CSS complet", () => {
+    document.head.innerHTML = "";
+    ensureSearchStyle(document);
+    ensureSearchStyle(document);
+    expect(countStyles()).toBe(1);
+    expect(document.getElementById(SEARCH_STYLE_ID)!.textContent).toBe(SEARCH_CSS);
+  });
+
+  it("le dispose de la DERNIÈRE vue ne retire pas la feuille (un dialogue qui s'ouvre ou se détruit encore en a besoin)", () => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const view = mount(host);
+    expect(countStyles()).toBe(1);
+    view.dispose();
+    expect(countStyles()).toBe(1);
+  });
+
+  it("deux vues : une seule feuille, toujours là après le dispose des deux", () => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+    const [a, b] = [document.createElement("div"), document.createElement("div")];
+    document.body.append(a, b);
+    const [one, two] = [mount(a), mount(b)];
+    expect(countStyles()).toBe(1);
+    one.dispose();
+    two.dispose();
+    expect(countStyles()).toBe(1);
   });
 });

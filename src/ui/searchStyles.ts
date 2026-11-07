@@ -5,42 +5,36 @@ export const SEARCH_CSS = `
 .docseeker-search { --docseeker-thumb-width: 120px; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 8px; gap: 8px; color: var(--b3-theme-on-background); background: var(--b3-theme-background); }
 .docseeker-search input[type="search"] { width: 100%; box-sizing: border-box; min-height: 32px; }
 .docseeker-search input[type="search"]:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
-.docseeker-search-box { position: relative; display: flex; align-items: stretch; gap: 4px; min-width: 0; }
-.docseeker-search-box input[type="search"] { flex: 1 1 auto; min-width: 0; }
-.docseeker-history-toggle { flex: 0 0 auto; min-height: 32px; min-width: 32px; padding: 0 8px; }
-.docseeker-history-toggle[hidden] { display: none; }
-.docseeker-history-toggle:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
-.docseeker-history-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; box-sizing: border-box; margin: 2px 0 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; background: var(--b3-theme-background); color: var(--b3-theme-on-background); border: 1px solid var(--b3-border-color); border-radius: var(--b3-border-radius, 4px); box-shadow: var(--b3-point-shadow, 0 2px 8px rgba(0, 0, 0, 0.2)); }
-.docseeker-history-list[hidden] { display: none; }
-.docseeker-history-option { display: flex; align-items: center; box-sizing: border-box; min-height: 32px; padding: 4px 8px; cursor: pointer; overflow-wrap: anywhere; }
-.docseeker-history-option:hover { background: var(--b3-list-hover, var(--b3-theme-surface)); }
-.docseeker-history-option[aria-selected="true"] { background: var(--b3-list-hover, var(--b3-theme-surface)); outline: 2px solid var(--b3-theme-primary); outline-offset: -2px; }
-.docseeker-history-clear { border-top: 1px solid var(--b3-border-color); color: var(--b3-theme-on-surface); }
+.docseeker-search-box { position: relative; display: flex; align-items: stretch; min-width: 0; }
+.docseeker-search-box input[type="search"] { flex: 1 1 auto; min-width: 0; padding-left: 44px; padding-right: 32px; }
+.docseeker-search input[type="search"]::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
+.docseeker-search-box .docseeker-history-icon, .docseeker-search-box .docseeker-clear { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; padding: 0; margin: 0; background: transparent; border: 0; border-radius: var(--b3-border-radius, 4px); color: var(--b3-theme-on-surface); cursor: pointer; }
+.docseeker-search-box .docseeker-history-icon { left: 0; min-width: 44px; gap: 2px; }
+.docseeker-search-box .docseeker-clear { right: 0; }
+.docseeker-search-box .docseeker-history-icon:hover, .docseeker-search-box .docseeker-clear:hover { color: var(--b3-theme-on-background); }
+.docseeker-search-box .docseeker-history-icon:focus-visible, .docseeker-search-box .docseeker-clear:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-search-box .docseeker-clear[hidden] { display: none; }
+.docseeker-search-box svg { height: 16px; width: 16px; flex: none; }
+.docseeker-search-box .search__arrowdown { height: 12px; width: 12px; }
+.docseeker-icons { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; min-width: 0; min-height: 32px; padding: 0; box-sizing: border-box; }
+.docseeker-icons .block__icon { display: flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; box-sizing: border-box; margin: 0; padding: 4px; background: transparent; border: 0; color: var(--b3-theme-on-surface); cursor: pointer; font: inherit; }
+.docseeker-icons .block__icon:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-icons .block__icon[aria-disabled="true"] { opacity: 0.38; cursor: not-allowed; }
+.docseeker-icons .block__icon[hidden] { display: none; }
+.docseeker-icons .block__icon svg { height: 16px; width: 16px; }
+.docseeker-count { font-size: 12px; margin-right: 8px; }
+.docseeker-count[hidden] { display: none; }
+.docseeker-icons .search__path { flex: 0 1 auto; min-width: 0; max-width: 100%; padding-right: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.docseeker-icons .search__path[hidden] { display: none; }
+.docseeker-path-text { direction: ltr; unicode-bidi: bidi-override; }
+.docseeker-filter-field input { width: 100%; box-sizing: border-box; min-height: 32px; }
 .docseeker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
-.docseeker-filters { flex: 0 1 auto; min-width: 0; }
-.docseeker-filters[open] { flex: 1 1 100%; }
-.docseeker-sort { display: flex; align-items: center; gap: 4px 8px; flex: 0 1 auto; min-width: 0; max-width: 100%; }
-.docseeker-sort label { font-size: 12px; color: var(--b3-theme-on-surface); white-space: nowrap; }
-.docseeker-sort select { min-height: 32px; min-width: 0; max-width: 100%; box-sizing: border-box; }
-.docseeker-sort select:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
-.docseeker-view-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
-.docseeker-group { display: flex; align-items: center; gap: 6px; min-height: 32px; font-size: 12px; color: var(--b3-theme-on-surface); cursor: pointer; }
-.docseeker-group input { margin: 0; min-width: 16px; min-height: 16px; }
-.docseeker-group input:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
-.docseeker-expand-all, .docseeker-collapse-all { min-height: 32px; min-width: 32px; font-size: 12px; }
-.docseeker-expand-all:focus-visible, .docseeker-collapse-all:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
-.docseeker-expand-all[aria-disabled="true"], .docseeker-collapse-all[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
-.docseeker-expand-all[hidden], .docseeker-collapse-all[hidden] { display: none; }
-.docseeker-filters > summary { display: flex; align-items: center; min-height: 32px; cursor: pointer; font-size: 12px; color: var(--b3-theme-on-surface); }
-.docseeker-filters > summary:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; padding: 4px 0 8px; align-items: end; }
 .docseeker-filter-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .docseeker-filter-field label { font-size: 12px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
-.docseeker-filter-field input:not([type="checkbox"]), .docseeker-filter-field select { width: 100%; box-sizing: border-box; min-height: 32px; }
-.docseeker-filter-field input:focus-visible, .docseeker-filter-field select:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+
+.docseeker-filter-field input:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-filter-field [aria-invalid="true"] { border-color: var(--b3-theme-error); box-shadow: 0 0 0 1px var(--b3-theme-error); }
-.docseeker-filter-check { flex-direction: row; align-items: center; gap: 8px; min-height: 32px; }
-.docseeker-filter-check input { margin: 0; min-width: 16px; min-height: 16px; }
 .docseeker-filter-error { margin: 0; font-size: 12px; color: var(--b3-theme-error); overflow-wrap: anywhere; }
 .docseeker-filter-error[hidden] { display: none; }
 .docseeker-filter-actions { display: flex; align-items: flex-end; }
@@ -105,11 +99,12 @@ export const SEARCH_CSS = `
 @media (forced-colors: active) {
   .docseeker-highlight { background: transparent; outline: 2px solid Highlight; outline-offset: -2px; }
   .docseeker-card:focus-visible { outline-color: Highlight; }
-  .docseeker-filters > summary:focus-visible, .docseeker-filter-field input:focus-visible, .docseeker-filter-field select:focus-visible, .docseeker-filter-reset:focus-visible, .docseeker-reset-filters:focus-visible { outline-color: Highlight; }
+  .docseeker-filter-field input:focus-visible, .docseeker-filter-reset:focus-visible, .docseeker-reset-filters:focus-visible { outline-color: Highlight; }
   .docseeker-filter-field [aria-invalid="true"] { border-color: Mark; box-shadow: none; outline: 2px solid Mark; }
   .docseeker-filter-reset[aria-disabled="true"] { opacity: 1; color: GrayText; border-color: GrayText; }
-  .docseeker-sort select:focus-visible, .docseeker-group input:focus-visible, .docseeker-expand-all:focus-visible, .docseeker-collapse-all:focus-visible { outline-color: Highlight; }
-  .docseeker-expand-all[aria-disabled="true"], .docseeker-collapse-all[aria-disabled="true"] { opacity: 1; color: GrayText; border-color: GrayText; }
+  .docseeker-icons .block__icon:focus-visible { outline-color: Highlight; }
+  .docseeker-icons .block__icon[aria-disabled="true"] { opacity: 1; color: GrayText; }
+  .docseeker-search-box .docseeker-history-icon:focus-visible, .docseeker-search-box .docseeker-clear:focus-visible { outline-color: Highlight; }
 }
 `;
 

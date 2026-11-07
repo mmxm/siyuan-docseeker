@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
+import * as nav from "../../../src/ui/keyboardNav";
 import {
   docBoundaryIndex,
   navigableIndices,
   nextCardIndex,
-  nextHistoryIndex,
-  resolveHistoryKey,
   resolveKey,
   type KeyInput,
   type NavAction,
@@ -104,57 +103,11 @@ describe("resolveKey : contexte champ", () => {
   });
 });
 
-describe("resolveHistoryKey", () => {
-  const cases: readonly [string, Partial<KeyInput>, ReturnType<typeof resolveHistoryKey>][] = [
-    ["ArrowDown", {}, { type: "move", direction: "next" }],
-    ["ArrowUp", {}, { type: "move", direction: "prev" }],
-    ["Enter", {}, { type: "choose" }],
-    ["Escape", {}, { type: "close", consume: true }],
-    ["Tab", {}, { type: "close", consume: false }],
-    ["Delete", { shiftKey: true }, { type: "removeActive" }],
-    ["Delete", {}, { type: "none" }],
-    ["ArrowDown", { altKey: true }, { type: "none" }],
-    ["ArrowDown", { ctrlKey: true }, { type: "none" }],
-    ["ArrowUp", { metaKey: true }, { type: "none" }],
-    ["Enter", { ctrlKey: true }, { type: "none" }],
-    ["Escape", { altKey: true }, { type: "none" }],
-    ["Enter", { isComposing: true }, { type: "none" }],
-    ["Escape", { isComposing: true }, { type: "none" }],
-    ["ArrowDown", { isComposing: true }, { type: "none" }],
-    ["ArrowLeft", {}, { type: "none" }],
-    ["a", {}, { type: "none" }],
-  ];
-  it.each(cases)("%s %j", (key, mods, expected) => {
-    expect(resolveHistoryKey({ key, ...mods })).toEqual(expected);
-  });
-});
-
-describe("nextHistoryIndex", () => {
-  it("avance depuis « aucune » sur la première requête", () => {
-    expect(nextHistoryIndex(-1, 3, "next")).toBe(0);
-  });
-  it("recule depuis « aucune » sur la DERNIÈRE requête, pas sur « Supprimer tout »", () => {
-    expect(nextHistoryIndex(-1, 3, "prev")).toBe(2);
-  });
-  it("parcourt les requêtes puis « Supprimer tout » (index = nombre de requêtes), puis reboucle", () => {
-    expect(nextHistoryIndex(0, 3, "next")).toBe(1);
-    expect(nextHistoryIndex(2, 3, "next")).toBe(3);
-    expect(nextHistoryIndex(3, 3, "next")).toBe(0);
-  });
-  it("reboucle vers l'arrière", () => {
-    expect(nextHistoryIndex(1, 3, "prev")).toBe(0);
-    expect(nextHistoryIndex(0, 3, "prev")).toBe(3);
-    expect(nextHistoryIndex(3, 3, "prev")).toBe(2);
-  });
-  it("une seule requête", () => {
-    expect(nextHistoryIndex(-1, 1, "next")).toBe(0);
-    expect(nextHistoryIndex(-1, 1, "prev")).toBe(0);
-    expect(nextHistoryIndex(0, 1, "next")).toBe(1);
-    expect(nextHistoryIndex(1, 1, "next")).toBe(0);
-  });
-  it("aucune requête : aucune option active", () => {
-    expect(nextHistoryIndex(-1, 0, "next")).toBe(-1);
-    expect(nextHistoryIndex(-1, 0, "prev")).toBe(-1);
+describe("clavier de l'ancienne liste d'historique (supprimée avec le menu natif)", () => {
+  it("n'exporte plus resolveHistoryKey ni nextHistoryIndex ; Alt+Bas reste l'action « openHistory » du champ", () => {
+    expect(nav).not.toHaveProperty("resolveHistoryKey");
+    expect(nav).not.toHaveProperty("nextHistoryIndex");
+    expect(resolveKey({ key: "ArrowDown", altKey: true }, "input")).toEqual({ type: "openHistory" });
   });
 });
 

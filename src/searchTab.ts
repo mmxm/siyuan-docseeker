@@ -10,7 +10,7 @@ import { createPageMatchService } from "./search/pageMatches";
 import { createProximityRanker } from "./search/proximityRanker";
 import { DEFAULT_OPTIONS, isProposedSort, listFolders } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
-import { addToHistory, clearHistory, removeFromHistory } from "./search/searchHistory";
+import { addToHistory, clearHistory } from "./search/searchHistory";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
@@ -19,6 +19,7 @@ import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
 import type { DocSeekerSettings } from "./settings";
+import type { OpenDialog, OpenMenu } from "./ui/nativeUiTypes";
 import { mountSearchView } from "./ui/searchView";
 
 export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
@@ -60,6 +61,9 @@ export interface SearchTabDeps {
   readonly schedule?: (fn: () => void, ms: number) => unknown;
   readonly clear?: (handle: unknown) => void;
   readonly t?: (key: string) => string;
+  /** Menus et dialogues natifs de SiYuan (voir `src/siyuan/nativeUi.ts`), injectés par le plugin. */
+  readonly openMenu: OpenMenu;
+  readonly openDialog: OpenDialog;
   /**
    * Réglages persistés : le tri et le regroupement y sont lus au montage et réécrits à chaque changement.
    * Si le fichier n'est pas encore lu au montage (`ready` en attente), l'onglet démarre avec les défauts puis applique
@@ -423,9 +427,10 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     history: {
       get: currentHistory,
       add: (query) => editHistory((history) => addToHistory(history, query)),
-      remove: (query) => editHistory((history) => removeFromHistory(history, query)),
       clear: () => editHistory(() => clearHistory()),
     },
+    openMenu: deps.openMenu,
+    openDialog: deps.openDialog,
     ...(deps.onOpenSettings ? { onOpenSettings: deps.onOpenSettings } : {}),
     getDocMeta: (docId) => {
       const info = searchStore.getDoc(docId);

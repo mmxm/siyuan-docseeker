@@ -2,11 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SearchViewModel } from "../../../src/search/searchController";
 import { mountSearchView, type SearchView, type SearchViewDeps } from "../../../src/ui/searchView";
+import { createNativeFakes, findItem, pick } from "./nativeFakes";
 
+const XLINK = "http://www.w3.org/1999/xlink";
 let host: HTMLElement;
 let vm: SearchViewModel;
 let submit: Mock;
 let view: SearchView | undefined;
+let fakes: ReturnType<typeof createNativeFakes>;
 
 function fakeHistory(initial: string[]) {
   let list = [...initial];
@@ -14,9 +17,6 @@ function fakeHistory(initial: string[]) {
     get: vi.fn(() => list),
     add: vi.fn((q: string) => {
       list = [q, ...list.filter((x) => x !== q)];
-    }),
-    remove: vi.fn((q: string) => {
-      list = list.filter((x) => x !== q);
     }),
     clear: vi.fn(() => {
       list = [];
@@ -31,19 +31,18 @@ function mount(history: ReturnType<typeof fakeHistory> | undefined, extra: Parti
     thumbnails: { attach: () => () => undefined },
     onOpen: vi.fn(),
     getDocMeta: () => ({ pdfSize: 1, pdfModifiedMs: 2 }),
+    openMenu: fakes.openMenu,
+    openDialog: fakes.openDialog,
     ...(history ? { history } : {}),
     ...extra,
   });
   return view;
 }
 const input = () => host.querySelector<HTMLInputElement>("input")!;
-const listbox = () => host.querySelector<HTMLElement>('[role="listbox"]');
-const optionEls = () => Array.from(host.querySelectorAll<HTMLElement>('[role="option"]'));
-const optionTexts = () => optionEls().map((o) => o.textContent);
-const toggle = () => host.querySelector<HTMLButtonElement>("button.docseeker-history-toggle");
-const isOpen = () => input().getAttribute("aria-expanded") === "true";
-const active = () => input().getAttribute("aria-activedescendant");
-const activeText = () => optionEls().find((o) => o.id === active())?.textContent;
+const historyIcon = () => host.querySelector<HTMLButtonElement>("button.docseeker-history-icon");
+const clearBtn = () => host.querySelector<HTMLButtonElement>("button.docseeker-clear")!;
+const labels = () => fakes.lastMenu().items.map((i) => (i.separator ? "---" : i.label));
+const CLEAR = "Supprimer tout l'historique";
 
 function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
   const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
@@ -51,7 +50,10 @@ function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
   return e;
 }
 const altDown = () => press("ArrowDown", { altKey: true });
-const CLEAR = "Supprimer tout l'historique";
+const withCard = (): SearchViewModel => ({
+  kind: "results", query: "chat", partial: false, total: 1, failedCount: 0, ranking: "bm25", hiddenByFilters: 0,
+  docs: [{ docId: "a", title: "A", path: "/a.pdf", matchingPages: 1, relevance: 1, pages: [{ page: 1, score: 1 }] }],
+});
 
 beforeEach(() => {
   document.head.innerHTML = "";
@@ -60,6 +62,7 @@ beforeEach(() => {
   document.body.appendChild(host);
   vm = { kind: "empty-query" };
   submit = vi.fn();
+  fakes = createNativeFakes();
 });
 afterEach(() => {
   view?.dispose();
@@ -67,348 +70,351 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("historique : structure combobox", () => {
-  it("sans deps.history : aucun combobox, aucun bouton, aucune liste", () => {
+describe("champ de recherche : structure (icône d'historique, croix « Effacer »)", () => {
+  it("sans deps.history : pas d'icône d'historique, le champ reste un champ de recherche simple", () => {
     mount(undefined);
-    expect(input().getAttribute("role")).toBeNull();
-    expect(toggle()).toBeNull();
-    expect(listbox()).toBeNull();
+    expect(historyIcon()).toBeNull();
+    expect(input().type).toBe("search");
   });
 
-  it("avec deps.history : champ combobox fermé, relié à une liste masquée", () => {
+  it("plus de combobox ni de liste maison : aucun rôle combobox/listbox/option, aucune aria-expanded", () => {
     mount(fakeHistory(["a"]));
-    expect(input().getAttribute("role")).toBe("combobox");
-    expect(input().getAttribute("aria-expanded")).toBe("false");
-    expect(input().getAttribute("aria-haspopup")).toBe("listbox");
-    expect(input().getAttribute("aria-activedescendant")).toBeNull();
-    const list = listbox()!;
-    expect(list.tagName).toBe("UL");
-    expect(list.id).not.toBe("");
-    expect(input().getAttribute("aria-controls")).toBe(list.id);
-    expect(list.hidden).toBe(true);
-    expect(list.getAttribute("aria-label")).toBe("Historique des requêtes");
+    altDown();
+    expect(host.querySelector('[role="combobox"], [role="listbox"], [role="option"], [aria-expanded], [aria-activedescendant]')).toBeNull();
+    expect(host.querySelector(".docseeker-history-list, .docseeker-history-toggle, .docseeker-history-option")).toBeNull();
   });
 
-  it("deux vues : identifiants de liste distincts", () => {
+  it("icône d'historique : vrai <button type=button>, aria-label « ⌥↓ », svg #iconSearch + svg.search__arrowdown #iconDown", () => {
     mount(fakeHistory(["a"]));
-    const first = listbox()!.id;
-    const other = document.createElement("div");
-    document.body.appendChild(other);
-    const second = mountSearchView(other, {
-      controller: { submit: vi.fn(), getViewModel: () => vm },
-      subscribe: () => () => undefined,
-      thumbnails: { attach: () => () => undefined },
-      onOpen: vi.fn(),
-      getDocMeta: () => undefined,
-      history: fakeHistory(["b"]),
-    });
-    expect(other.querySelector('[role="listbox"]')!.id).not.toBe(first);
-    second.dispose();
+    const b = historyIcon()!;
+    expect(b.tagName).toBe("BUTTON");
+    expect(b.type).toBe("button");
+    expect(b.getAttribute("aria-label")).toBe("⌥↓");
+    expect(b.classList.contains("ariaLabel")).toBe(true);
+    expect(b.getAttribute("data-position")).toBe("9south");
+    const svgs = Array.from(b.querySelectorAll("svg"));
+    expect(svgs).toHaveLength(2);
+    expect(svgs[0]!.querySelector("use")!.getAttributeNS(XLINK, "href")).toBe("#iconSearch");
+    expect(svgs[1]!.classList.contains("search__arrowdown")).toBe(true);
+    expect(svgs[1]!.querySelector("use")!.getAttributeNS(XLINK, "href")).toBe("#iconDown");
+    expect(svgs[0]!.namespaceURI).toBe("http://www.w3.org/2000/svg");
   });
 
-  it("aucune région live ni texte masqué ajouté pour l'historique", () => {
+  it("croix « Effacer » : <button type=button> aria-label « Effacer », svg #iconCloseRound", () => {
+    mount(fakeHistory([]));
+    const b = clearBtn();
+    expect(b.tagName).toBe("BUTTON");
+    expect(b.type).toBe("button");
+    expect(b.getAttribute("aria-label")).toBe("Effacer");
+    expect(b.querySelector("svg")!.classList.contains("b3-form__icon-clear")).toBe(true);
+    expect(b.querySelector("use")!.getAttributeNS(XLINK, "href")).toBe("#iconCloseRound");
+  });
+
+  it("la croix existe aussi sans historique", () => {
+    mount(undefined);
+    expect(clearBtn()).not.toBeNull();
+  });
+
+  it("ordre de tabulation : champ, icône d'historique, croix (visible) — le champ reste le premier arrêt", () => {
+    mount(fakeHistory(["a"]));
+    input().value = "x";
+    input().dispatchEvent(new Event("input"));
+    const box = host.querySelector(".docseeker-search-box")!;
+    const tabbables = Array.from(box.querySelectorAll<HTMLElement>("input, button")).filter((e) => !e.hidden && e.tabIndex >= 0);
+    expect(tabbables).toEqual([input(), historyIcon(), clearBtn()]);
+  });
+
+  it("aucune région live ni texte masqué ajouté pour l'historique ou la croix", () => {
     mount(fakeHistory(["a"]));
     altDown();
     const box = input().closest(".docseeker-search-box")!;
-    expect(box.querySelector("[aria-live]")).toBeNull();
-    expect(box.querySelector('[role="status"], [role="alert"]')).toBeNull();
-    expect(box.querySelector("[aria-hidden]")).toBeNull();
+    expect(box.querySelector("[aria-live], [role=status], [role=alert], [aria-hidden]")).toBeNull();
   });
 
-  it("bouton « Historique » : tabindex -1, nom constant, cible de 32 px par CSS", () => {
-    mount(fakeHistory(["a"]));
-    const b = toggle()!;
-    expect(b.tabIndex).toBe(-1);
-    expect(b.type).toBe("button");
-    expect(b.getAttribute("aria-label")).toBe("Afficher l'historique des requêtes");
-    expect(b.getAttribute("aria-controls")).toBe(listbox()!.id);
-    b.click();
-    expect(b.getAttribute("aria-label")).toBe("Afficher l'historique des requêtes");
-    expect(b.hasAttribute("aria-expanded")).toBe(false);
+  it("n'écrit jamais innerHTML", () => {
+    const setter = vi.spyOn(Element.prototype, "innerHTML", "set");
+    mount(fakeHistory(["<b>x</b>"]));
+    historyIcon()!.click();
+    clearBtn().click();
+    expect(setter).not.toHaveBeenCalled();
   });
 });
 
-describe("historique : ouverture et options", () => {
-  it("Alt+Bas ouvre la liste : requêtes puis « Supprimer tout l'historique », focus dans le champ, événement annulé", () => {
-    mount(fakeHistory(["chien", "chat"]));
-    input().focus();
-    const e = altDown();
-    expect(e.defaultPrevented).toBe(true);
-    expect(isOpen()).toBe(true);
-    expect(listbox()!.hidden).toBe(false);
-    expect(optionTexts()).toEqual(["chien", "chat", CLEAR]);
-    expect(optionEls().every((o) => o.id !== "")).toBe(true);
-    expect(new Set(optionEls().map((o) => o.id)).size).toBe(3);
-    expect(document.activeElement).toBe(input());
-    expect(active()).toBeNull();
-    expect(optionEls().every((o) => o.getAttribute("aria-selected") === "false")).toBe(true);
+describe("croix « Effacer »", () => {
+  it("cachée quand le champ est vide ; visible dès qu'il y a du texte ; recachée quand il est vidé", () => {
+    mount(undefined);
+    expect(clearBtn().hidden).toBe(true);
+    input().value = "chat";
+    input().dispatchEvent(new Event("input"));
+    expect(clearBtn().hidden).toBe(false);
+    input().value = "";
+    input().dispatchEvent(new Event("input"));
+    expect(clearBtn().hidden).toBe(true);
   });
 
-  it("historique vide : Alt+Bas ne s'ouvre pas et n'est pas annulé", () => {
-    mount(fakeHistory([]));
-    input().focus();
-    const e = altDown();
-    expect(isOpen()).toBe(false);
-    expect(e.defaultPrevented).toBe(false);
-    expect(listbox()!.hidden).toBe(true);
-  });
-
-  it("le texte des entrées passe par textContent (aucun HTML interprété)", () => {
-    mount(fakeHistory(['<img src=x onerror="alert(1)">&amp;']));
-    altDown();
-    expect(listbox()!.querySelector("img")).toBeNull();
-    expect(optionTexts()[0]).toBe('<img src=x onerror="alert(1)">&amp;');
-  });
-
-  it("la liste se relit à chaque ouverture", () => {
+  it("clic : vide le champ, relance la requête vide (submit(\"\")), rend le focus au champ, se cache, ne mémorise rien", () => {
     const history = fakeHistory(["a"]);
     mount(history);
-    altDown();
-    expect(optionTexts()).toEqual(["a", CLEAR]);
-    press("Escape");
-    history.add("b");
-    altDown();
-    expect(optionTexts()).toEqual(["b", "a", CLEAR]);
-  });
-
-  it("bouton : ouvre, rend le focus au champ, referme au second clic ; vide : n'ouvre pas", () => {
-    mount(fakeHistory(["a"]));
-    toggle()!.click();
-    expect(isOpen()).toBe(true);
+    input().value = "chat";
+    input().dispatchEvent(new Event("input"));
+    clearBtn().focus();
+    clearBtn().click();
+    expect(input().value).toBe("");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("");
     expect(document.activeElement).toBe(input());
-    toggle()!.click();
-    expect(isOpen()).toBe(false);
-    view!.dispose();
-    document.body.innerHTML = "";
-    host = document.createElement("div");
-    document.body.appendChild(host);
-    mount(fakeHistory([]));
-    toggle()!.click();
-    expect(isOpen()).toBe(false);
+    expect(clearBtn().hidden).toBe(true);
+    expect(history.add).not.toHaveBeenCalled();
   });
 
-  it("mousedown sur le bouton et sur une option : preventDefault (le focus reste dans le champ)", () => {
-    mount(fakeHistory(["a"]));
-    const b = toggle()!;
-    expect(b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }))).toBe(false);
-    altDown();
-    expect(optionEls()[0]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }))).toBe(false);
+  it("Échap dans le champ (vider) cache aussi la croix", () => {
+    mount(undefined);
+    input().value = "chat";
+    input().dispatchEvent(new Event("input"));
+    press("Escape");
+    expect(input().value).toBe("");
+    expect(clearBtn().hidden).toBe(true);
+  });
+
+  it("un texte rempli par un choix de l'historique montre la croix", () => {
+    mount(fakeHistory(["chat"]));
+    historyIcon()!.click();
+    pick(fakes.lastMenu(), "chat");
+    expect(clearBtn().hidden).toBe(false);
+  });
+
+  it("la croix native du type=search est masquée par le CSS (une seule croix visible)", async () => {
+    const { SEARCH_CSS } = await import("../../../src/ui/searchStyles");
+    expect(SEARCH_CSS).toMatch(/::-webkit-search-cancel-button\s*\{[^}]*display:\s*none/);
   });
 });
 
-describe("historique : option active au clavier", () => {
-  it("Bas parcourt les requêtes puis « Supprimer tout », et reboucle ; aria-activedescendant suit", () => {
-    mount(fakeHistory(["a", "b"]));
-    input().focus();
-    altDown();
-    expect(press("ArrowDown").defaultPrevented).toBe(true);
-    expect(activeText()).toBe("a");
-    expect(optionEls()[0]!.getAttribute("aria-selected")).toBe("true");
-    press("ArrowDown");
-    expect(activeText()).toBe("b");
-    press("ArrowDown");
-    expect(activeText()).toBe(CLEAR);
-    press("ArrowDown");
-    expect(activeText()).toBe("a");
-    expect(optionEls().filter((o) => o.getAttribute("aria-selected") === "true")).toHaveLength(1);
+describe("menu d'historique : ouverture", () => {
+  it("clic sur l'icône : UN menu (requêtes, séparateur, « Supprimer tout l'historique »)", () => {
+    mount(fakeHistory(["chat", "chien"]));
+    historyIcon()!.click();
+    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
+    expect(labels()).toEqual(["chat", "chien", "---", CLEAR]);
+  });
+
+  it("Alt+Bas dans le champ : même menu, événement annulé, focus toujours au champ", () => {
+    mount(fakeHistory(["chat"]));
+    view!.focusInput();
+    const e = altDown();
+    expect(e.defaultPrevented).toBe(true);
+    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
+    expect(labels()).toEqual(["chat", "---", CLEAR]);
     expect(document.activeElement).toBe(input());
   });
 
-  it("Haut depuis « aucune » va à la dernière REQUÊTE (pas à « Supprimer tout »), puis recule et reboucle", () => {
-    mount(fakeHistory(["a", "b"]));
-    altDown();
-    press("ArrowUp");
-    expect(activeText()).toBe("b");
-    press("ArrowUp");
-    expect(activeText()).toBe("a");
-    press("ArrowUp");
-    expect(activeText()).toBe(CLEAR);
-  });
-
-  it("Bas avec la liste ouverte ne saute pas à une carte de résultat", () => {
-    vm = {
-      kind: "results", query: "chat", partial: false, total: 1, failedCount: 0, ranking: "bm25", hiddenByFilters: 0,
-      docs: [{ docId: "a", title: "A", path: "/a.pdf", matchingPages: 1, relevance: 1, pages: [{ page: 1, score: 1 }] }],
-    };
+  it("Alt+Bas ne saute PAS à la première carte de résultat, même avec des résultats", () => {
+    vm = withCard();
     mount(fakeHistory(["a"]));
     view!.focusInput();
     altDown();
-    press("ArrowDown");
     expect(document.activeElement).toBe(input());
   });
 
-  it("Entrée sur une requête : remplit le champ ET lance la recherche, mémorise, ferme", () => {
-    const history = fakeHistory(["a", "b"]);
-    mount(history);
-    input().value = "autre";
-    altDown();
+  it("Bas seul saute toujours à la carte (clavier des cartes inchangé)", () => {
+    vm = withCard();
+    mount(fakeHistory(["a"]));
+    view!.focusInput();
     press("ArrowDown");
-    press("ArrowDown");
-    const e = press("Enter");
-    expect(e.defaultPrevented).toBe(true);
-    expect(input().value).toBe("b");
-    expect(submit).toHaveBeenCalledWith("b");
-    expect(history.add).toHaveBeenCalledWith("b");
-    expect(isOpen()).toBe(false);
-    expect(listbox()!.hidden).toBe(true);
-    expect(active()).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector("button.docseeker-card"));
+    expect(fakes.openMenu).not.toHaveBeenCalled();
+  });
+
+  it("Alt+Bas sans deps.history : aucun menu, événement non annulé, pas de saut à la carte", () => {
+    vm = withCard();
+    mount(undefined);
+    view!.focusInput();
+    const e = altDown();
+    expect(e.defaultPrevented).toBe(false);
+    expect(fakes.openMenu).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(input());
   });
 
-  it("Entrée sur « Supprimer tout » : vide l'historique, ne lance aucune recherche, ferme", () => {
-    const history = fakeHistory(["a"]);
-    mount(history);
-    input().value = "garde";
-    altDown();
-    press("ArrowUp");
-    press("ArrowDown"); // a -> CLEAR
-    expect(activeText()).toBe(CLEAR);
-    press("Enter");
-    expect(history.clear).toHaveBeenCalledTimes(1);
-    expect(submit).not.toHaveBeenCalled();
-    expect(input().value).toBe("garde");
-    expect(isOpen()).toBe(false);
-  });
-
-  it("Entrée sans option active : recherche normale du texte saisi, mémorisée, liste fermée", () => {
-    const history = fakeHistory(["a"]);
-    mount(history);
-    input().value = "chat";
-    altDown();
-    press("Enter");
-    expect(submit).toHaveBeenCalledWith("chat");
-    expect(history.add).toHaveBeenCalledWith("chat");
-    expect(isOpen()).toBe(false);
-  });
-
-  it("Entrée pendant une composition IME avec la liste ouverte : rien", () => {
-    const history = fakeHistory(["a"]);
-    mount(history);
-    altDown();
-    press("ArrowDown");
-    const e = press("Enter", { isComposing: true });
-    expect(e.defaultPrevented).toBe(false);
-    expect(submit).not.toHaveBeenCalled();
-    expect(isOpen()).toBe(true);
-  });
-
-  it("Échap ferme sans vider le champ ni relancer ; Échap suivant vide (comportement actuel)", () => {
+  it("Alt+Maj+Bas, Ctrl+Alt+Bas et Alt+Bas en composition IME : rien", () => {
     mount(fakeHistory(["a"]));
-    input().value = "chat";
-    altDown();
-    const e = press("Escape");
+    press("ArrowDown", { altKey: true, shiftKey: true });
+    press("ArrowDown", { altKey: true, ctrlKey: true });
+    press("ArrowDown", { altKey: true, isComposing: true });
+    expect(fakes.openMenu).not.toHaveBeenCalled();
+  });
+
+  it("l'ancre est le cadre du champ (bas-gauche, largeur, hauteur)", () => {
+    mount(fakeHistory(["a"]));
+    const box = host.querySelector<HTMLElement>(".docseeker-search-box")!;
+    vi.spyOn(box, "getBoundingClientRect").mockReturnValue({ left: 8, bottom: 48, width: 304, height: 32 } as DOMRect);
+    historyIcon()!.click();
+    expect(fakes.lastMenu().anchor).toEqual({ x: 8, y: 48, w: 304, h: 32 });
+  });
+
+  it("l'historique est relu à chaque ouverture", () => {
+    const history = fakeHistory(["a"]);
+    mount(history);
+    historyIcon()!.click();
+    history.add("b");
+    historyIcon()!.click();
+    expect(labels()).toEqual(["b", "a", "---", CLEAR]);
+  });
+
+  it("le texte des entrées est transmis tel quel (l'adaptateur échappe ; la vue n'interprète rien)", () => {
+    mount(fakeHistory(["<b>x</b> & y"]));
+    historyIcon()!.click();
+    expect(fakes.lastMenu().items[0]!.label).toBe("<b>x</b> & y");
+  });
+
+  it("historique VIDE : le menu s'ouvre avec un seul élément désactivé « Historique vide » (ni séparateur ni « Supprimer tout »)", () => {
+    mount(fakeHistory([]));
+    historyIcon()!.click();
+    expect(fakes.lastMenu().items).toHaveLength(1);
+    expect(fakes.lastMenu().items[0]).toMatchObject({ label: "Historique vide", disabled: true });
+    expect(fakes.lastMenu().items[0]!.click).toBeUndefined();
+  });
+
+  it("historique vide et Alt+Bas : même menu, événement annulé (pas de saut à la carte)", () => {
+    vm = withCard();
+    mount(fakeHistory([]));
+    view!.focusInput();
+    const e = altDown();
     expect(e.defaultPrevented).toBe(true);
-    expect(isOpen()).toBe(false);
-    expect(input().value).toBe("chat");
-    expect(submit).not.toHaveBeenCalled();
-    press("Escape");
-    expect(input().value).toBe("");
-    expect(submit).toHaveBeenCalledWith("");
+    expect(labels()).toEqual(["Historique vide"]);
+    expect(document.activeElement).toBe(input());
   });
 
-  it("Tab ferme la liste sans annuler l'événement (le focus part normalement)", () => {
+  it("le focus n'est plus géré par la vue : openMenu est appelé sans onClose (l'adaptateur le rend à l'élément ouvrant)", () => {
     mount(fakeHistory(["a"]));
-    altDown();
-    const e = press("Tab");
-    expect(isOpen()).toBe(false);
-    expect(e.defaultPrevented).toBe(false);
+    historyIcon()!.click();
+    expect(fakes.openMenu.mock.calls[0]![2]).toBeUndefined();
   });
 
-  it("une frappe dans le champ ferme la liste", () => {
+  it("le clic sur l'icône place d'abord le focus dans le champ : c'est lui que le menu retrouvera à sa fermeture", () => {
     mount(fakeHistory(["a"]));
-    altDown();
-    input().value = "x";
-    input().dispatchEvent(new Event("input", { bubbles: true }));
-    expect(isOpen()).toBe(false);
-  });
-
-  it("les autres touches (gauche, lettres) restent au champ, liste ouverte", () => {
-    mount(fakeHistory(["a"]));
-    altDown();
-    expect(press("ArrowLeft").defaultPrevented).toBe(false);
-    expect(press("a").defaultPrevented).toBe(false);
-    expect(isOpen()).toBe(true);
-  });
-
-  it("Maj+Suppr retire la requête active et garde la liste ouverte ; la dernière retirée la ferme", () => {
-    const history = fakeHistory(["a", "b"]);
-    mount(history);
-    altDown();
-    press("ArrowDown");
-    const e = press("Delete", { shiftKey: true });
-    expect(e.defaultPrevented).toBe(true);
-    expect(history.remove).toHaveBeenCalledWith("a");
-    expect(optionTexts()).toEqual(["b", CLEAR]);
-    expect(isOpen()).toBe(true);
-    press("ArrowDown");
-    press("Delete", { shiftKey: true });
-    expect(history.remove).toHaveBeenCalledWith("b");
-    expect(isOpen()).toBe(false);
-  });
-
-  it("Maj+Suppr sans option active ou sur « Supprimer tout » : rien", () => {
-    const history = fakeHistory(["a"]);
-    mount(history);
-    altDown();
-    expect(press("Delete", { shiftKey: true }).defaultPrevented).toBe(false);
-    press("ArrowUp");
-    press("ArrowDown"); // CLEAR
-    expect(press("Delete", { shiftKey: true }).defaultPrevented).toBe(false);
-    expect(history.remove).not.toHaveBeenCalled();
-    expect(history.clear).not.toHaveBeenCalled();
+    historyIcon()!.focus();
+    historyIcon()!.click();
+    expect(document.activeElement).toBe(input());
   });
 });
 
-describe("historique : souris", () => {
-  it("clic sur une requête : remplit, lance, mémorise, ferme, focus au champ", () => {
-    const history = fakeHistory(["a", "b"]);
-    mount(history);
+describe("menu d'historique : le clic d'ouverture ne doit pas atteindre window (SiYuan ferme alors le menu aussitôt)", () => {
+  it("clic souris sur l'icône : n'atteint ni document ni window", () => {
+    mount(fakeHistory(["a"]));
+    const onDoc = vi.fn();
+    const onWin = vi.fn();
+    document.addEventListener("click", onDoc);
+    window.addEventListener("click", onWin);
+    try {
+      historyIcon()!.click();
+    } finally {
+      document.removeEventListener("click", onDoc);
+      window.removeEventListener("click", onWin);
+    }
+    expect(onDoc).not.toHaveBeenCalled();
+    expect(onWin).not.toHaveBeenCalled();
+    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("activation au clavier (Entrée/Espace -> click detail 0) : idem", () => {
+    mount(fakeHistory(["a"]));
+    const onDoc = vi.fn();
+    document.addEventListener("click", onDoc);
+    try {
+      historyIcon()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
+    } finally {
+      document.removeEventListener("click", onDoc);
+    }
+    expect(onDoc).not.toHaveBeenCalled();
+    expect(fakes.openMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("Alt+Bas traité : la frappe n'atteint pas document (aucun raccourci global de SiYuan ne la reprend)", () => {
+    mount(fakeHistory(["a"]));
+    const onDoc = vi.fn();
+    document.addEventListener("keydown", onDoc);
+    try {
+      altDown();
+      press("a"); // une autre touche, elle, remonte normalement
+    } finally {
+      document.removeEventListener("keydown", onDoc);
+    }
+    expect(onDoc).toHaveBeenCalledTimes(1);
+    expect((onDoc.mock.calls[0]![0] as KeyboardEvent).key).toBe("a");
+  });
+
+  it("Alt+Bas non traité (pas d'historique branché) : la frappe remonte normalement", () => {
+    mount(undefined);
+    const onDoc = vi.fn();
+    document.addEventListener("keydown", onDoc);
+    try {
+      altDown();
+    } finally {
+      document.removeEventListener("keydown", onDoc);
+    }
+    expect(onDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it("l'icône porte data-menu=\"true\" et le menu l'identifiant « docseeker-history » (le même pour Alt+Bas)", () => {
+    mount(fakeHistory(["a"]));
+    expect(historyIcon()!.getAttribute("data-menu")).toBe("true");
+    historyIcon()!.click();
     altDown();
-    optionEls()[1]!.click();
-    expect(input().value).toBe("b");
-    expect(submit).toHaveBeenCalledWith("b");
-    expect(history.add).toHaveBeenCalledWith("b");
-    expect(isOpen()).toBe(false);
+    expect(fakes.openMenu.mock.calls.map((c) => c[3])).toEqual(["docseeker-history", "docseeker-history"]);
+  });
+
+  it("la croix « Effacer » n'ouvre rien : son clic remonte (SiYuan peut fermer un menu resté ouvert)", () => {
+    mount(fakeHistory(["a"]));
+    input().value = "x";
+    input().dispatchEvent(new Event("input"));
+    const onDoc = vi.fn();
+    document.addEventListener("click", onDoc);
+    try {
+      clearBtn().click();
+    } finally {
+      document.removeEventListener("click", onDoc);
+    }
+    expect(onDoc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("menu d'historique : choix", () => {
+  it("une requête : remplit le champ ET lance la recherche, la mémorise, focus au champ", () => {
+    const history = fakeHistory(["chat", "chien"]);
+    mount(history);
+    historyIcon()!.click();
+    pick(fakes.lastMenu(), "chien");
+    expect(input().value).toBe("chien");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("chien");
+    expect(history.add).toHaveBeenCalledWith("chien");
     expect(document.activeElement).toBe(input());
   });
 
-  it("clic sur « Supprimer tout l'historique » : vide la liste, ferme", () => {
-    const history = fakeHistory(["a", "b"]);
+  it("« Supprimer tout l'historique » : vide l'historique, ne lance aucune recherche, ne touche pas au champ", () => {
+    const history = fakeHistory(["chat"]);
     mount(history);
-    altDown();
-    host.querySelector<HTMLElement>(".docseeker-history-clear")!.click();
+    input().value = "texte";
+    historyIcon()!.click();
+    pick(fakes.lastMenu(), CLEAR);
     expect(history.clear).toHaveBeenCalledTimes(1);
-    expect(isOpen()).toBe(false);
     expect(submit).not.toHaveBeenCalled();
+    expect(input().value).toBe("texte");
+    historyIcon()!.click();
+    expect(labels()).toEqual(["Historique vide"]);
   });
 
-  it("clic (mousedown) à l'extérieur ferme ; dans la liste ou sur le champ, non", () => {
+  it("le séparateur est un élément séparateur sans action ni libellé", () => {
     mount(fakeHistory(["a"]));
-    altDown();
-    optionEls()[0]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    input().dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(isOpen()).toBe(true);
-    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(isOpen()).toBe(false);
-    altDown();
-    document.body.click();
-    expect(isOpen()).toBe(false);
-  });
-
-  it("dispose retire l'écouteur du document", () => {
-    const add = vi.spyOn(document, "addEventListener");
-    const remove = vi.spyOn(document, "removeEventListener");
-    mount(fakeHistory(["a"]));
-    const added = add.mock.calls.filter(([type]) => type === "mousedown" || type === "click");
-    expect(added.length).toBeGreaterThan(0);
-    view!.dispose();
-    view = undefined;
-    for (const [type, fn] of added) expect(remove).toHaveBeenCalledWith(type, fn, expect.anything());
+    historyIcon()!.click();
+    const sep = fakes.lastMenu().items[1]!;
+    expect(sep.separator).toBe(true);
+    expect(sep.click).toBeUndefined();
+    expect(sep.label).toBeUndefined();
   });
 });
 
 describe("historique : requêtes soumises", () => {
-  it("Entrée dans le champ mémorise la requête (liste fermée)", () => {
+  it("Entrée dans le champ mémorise la requête", () => {
     const history = fakeHistory([]);
     mount(history);
     input().value = "  chat  ";
@@ -422,7 +428,6 @@ describe("historique : requêtes soumises", () => {
     mount(history);
     input().value = "   ";
     press("Enter");
-    expect(history.add).not.toHaveBeenCalled();
     input().value = "";
     press("Enter");
     expect(history.add).not.toHaveBeenCalled();
@@ -436,5 +441,61 @@ describe("historique : requêtes soumises", () => {
     input().value = "";
     input().dispatchEvent(new Event("search"));
     expect(history.add).not.toHaveBeenCalled();
+  });
+});
+
+describe("cycle de vie", () => {
+  it("dispose retire l'icône et la croix ; aucun écouteur sur document n'a été ajouté", () => {
+    const added: string[] = [];
+    const spy = vi.spyOn(document, "addEventListener").mockImplementation((type: string) => {
+      added.push(type);
+    });
+    mount(fakeHistory(["a"]));
+    spy.mockRestore();
+    expect(added).toEqual([]);
+    view!.dispose();
+    view = undefined;
+    expect(host.querySelector(".docseeker-history-icon, .docseeker-clear")).toBeNull();
+  });
+
+  it("dispose avec le menu d'historique ouvert : le menu est fermé (handle.close)", () => {
+    mount(fakeHistory(["a"]));
+    historyIcon()!.click();
+    const menu = fakes.lastMenu();
+    view!.dispose();
+    view = undefined;
+    expect(menu.closed).toBe(true);
+  });
+
+  it("dispose, puis un clic tardif sur une requête de l'historique : ni champ rempli, ni recherche, ni mémorisation", () => {
+    const history = fakeHistory(["chat"]);
+    mount(history);
+    historyIcon()!.click();
+    const menu = fakes.lastMenu();
+    const field = input();
+    view!.dispose();
+    view = undefined;
+    findItem(menu.items, "chat").click!();
+    expect(field.value).toBe("");
+    expect(submit).not.toHaveBeenCalled();
+    expect(history.add).not.toHaveBeenCalled();
+  });
+
+  it("dispose, puis un clic tardif sur « Supprimer tout l'historique » : l'historique n'est pas vidé", () => {
+    const history = fakeHistory(["chat"]);
+    mount(history);
+    historyIcon()!.click();
+    const menu = fakes.lastMenu();
+    view!.dispose();
+    view = undefined;
+    findItem(menu.items, CLEAR).click!();
+    expect(history.clear).not.toHaveBeenCalled();
+  });
+
+  it("dispose sans menu ouvert : aucun close, aucune erreur", () => {
+    mount(fakeHistory(["a"]));
+    expect(() => view!.dispose()).not.toThrow();
+    view = undefined;
+    expect(fakes.openMenu).not.toHaveBeenCalled();
   });
 });

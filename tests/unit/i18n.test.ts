@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FREQUENCY_MINUTES } from "../../src/settings";
 
@@ -7,17 +8,27 @@ const NEW_KEYS = [
   "autoIndexRunning", "autoIndexCount", "autoIndexUpToDate", "autoIndexFailed", "autoIndexDiscoveryFailed",
   "autoIndexPartialOne", "autoIndexPartialMany", "indexingMayMiss", "clearDoneRebuilding", "clearDoneWillRebuild",
   "settingsSaveFailed", "autoIndexIntervalDisabledHint", "autoIndexMigrating",
-  "filtersLabel", "filtersActiveOne", "filtersActiveMany", "filterFolder", "filterAllFolders", "filterSubfolders",
+  "filtersLabel", "filtersActiveOne", "filtersActiveMany", "filterAllFolders",
   "filterName", "filterMinPages", "filterMaxPages", "filterModifiedAfter", "filterReset", "filterError",
   "filterErrMinMax", "filterErrInteger", "filterErrDate", "hiddenByFiltersOne", "hiddenByFiltersMany",
   "noResultFiltersOne", "noResultFiltersMany",
-  "sortBy", "sortRelevanceDesc", "sortRelevanceAsc", "sortModifiedAsc", "sortModifiedDesc", "sortNameAsc", "sortNameDesc",
+  "sortRelevanceDesc", "sortRelevanceAsc", "sortModifiedAsc", "sortModifiedDesc", "sortNameAsc", "sortNameDesc",
   "sortPathAsc", "sortMatchesDesc", "groupByDocument", "expandAll", "collapseAll", "rankingRefinedPages",
   "flatMoreOne", "flatMoreMany", "settingNotSaved",
-  "historyLabel", "historyClear", "historyShow", "commandOpenSearch", "commandFocusSearch",
+  "pathSpecify", "includeChildren", "moreMenu", "sortMenu", "groupMenu", "groupNone", "removePath", "clearField",
+  "dialogCancel", "dialogConfirm",
+  "historyClear", "historyEmpty", "historyIcon", "commandOpenSearch", "commandFocusSearch",
   "traceKeys", "traceKeysRunning", "traceKeysDone", "traceKeysNoTab", "traceKeysFailed", "traceKeysNoKey",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
+/** Contenu de tous les .ts d'un dossier (récursif), commentaires de ligne et de bloc retirés. */
+function collectSources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return collectSources(path);
+    return path.endsWith(".ts") ? [read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")] : [];
+  });
+}
 
 describe("i18n/fr_FR.json", () => {
   it("contient toutes les clés demandées par le panneau et le plugin", () => {
@@ -60,6 +71,10 @@ describe("i18n/fr_FR.json", () => {
 
   it("a retiré les clés mortes (pause/reprise, fréquence d'une minute, anciens libellés d'indicateur)", () => {
     for (const key of ["pause", "resume", "indexingPaused", "freq1", "autoIndexRunningShort"]) expect(fr).not.toHaveProperty(key);
+  });
+
+  it("a retiré les clés de l'ancienne barre (select de tri, case sous-dossiers, liste d'historique maison)", () => {
+    for (const key of ["filterFolder", "filterSubfolders", "sortBy", "historyLabel", "historyShow"]) expect(fr).not.toHaveProperty(key);
   });
 
   it("le bouton de diagnostic a son propre libellé, distinct du titre de l'item", () => {
@@ -127,7 +142,7 @@ describe("i18n/fr_FR.json", () => {
     }
   });
 
-  it.each(["historyLabel", "historyClear", "historyShow"])("%s : valeur non vide, identique dans la vue et fr_FR.json", async (key) => {
+  it.each(["historyClear", "historyEmpty", "historyIcon"])("%s : valeur non vide, identique dans la vue et fr_FR.json", async (key) => {
     const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
     expect(fr[key]?.trim()).toBeTruthy();
     expect(DEFAULT_STRINGS[key]?.trim()).toBeTruthy();
@@ -135,7 +150,6 @@ describe("i18n/fr_FR.json", () => {
   });
 
   it("libellés du tri et du regroupement : ceux de la recherche native de SiYuan quand ils existent", () => {
-    expect(fr.sortBy).toBe("Trier par");
     expect(fr.sortRelevanceDesc).toBe("Pertinence");
     expect(fr.sortRelevanceAsc).toBe("ASC de pertinence");
     expect(fr.sortModifiedAsc).toBe("Modifier le temps croissant");
@@ -172,5 +186,66 @@ describe("i18n/fr_FR.json", () => {
     const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
     expect(DEFAULT_STRINGS["flatMoreOne"]).toBe(fr.flatMoreOne);
     expect(DEFAULT_STRINGS["flatMoreMany"]).toBe(fr.flatMoreMany);
+  });
+
+  it("libellés de la barre d'icônes : ceux de la recherche native de SiYuan 3.8.9 (français)", () => {
+    expect(fr.pathSpecify).toBe("Spécifier le chemin");
+    expect(fr.includeChildren).toBe("Inclure les documents enfants");
+    expect(fr.moreMenu).toBe("Plus");
+    expect(fr.sortMenu).toBe("Tri");
+    expect(fr.groupMenu).toBe("Groupe");
+    expect(fr.groupNone).toBe("Aucun regroupement");
+    expect(fr.filtersLabel).toBe("Filtres");
+    expect(fr.removePath).toBe("Supprimer");
+    expect(fr.clearField).toBe("Effacer");
+    expect(fr.dialogCancel).toBe("Annuler");
+    expect(fr.dialogConfirm).toBe("Confirmer");
+    expect(fr.historyEmpty).toBe("Historique vide");
+    expect(fr.historyIcon).toBe("⌥↓");
+    expect(fr.historyClear).toBe("Supprimer tout l'historique");
+  });
+
+  it("aucun libellé de la barre, du menu ni du dialogue ne contient < > & (SiYuan les insère comme HTML)", () => {
+    const keys = [
+      "pathSpecify", "includeChildren", "moreMenu", "sortMenu", "groupMenu", "groupNone", "removePath", "clearField",
+      "dialogCancel", "dialogConfirm", "historyEmpty", "historyIcon", "historyClear", "filtersLabel", "filtersActiveOne",
+      "filtersActiveMany", "filterAllFolders", "groupByDocument", "expandAll", "collapseAll",
+      ...(["Desc", "Asc"].flatMap((d) => ["Relevance", "Modified", "Name"].map((k) => `sort${k}${d}`))),
+    ];
+    for (const key of keys.filter((k) => typeof fr[k] === "string")) expect(fr[key], key).not.toMatch(/[<>&]/);
+  });
+
+  it("chaque clé de la barre existe dans fr_FR.json ET dans les chaînes par défaut de la vue, avec le même texte", async () => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    const keys = ["pathSpecify", "includeChildren", "moreMenu", "sortMenu", "groupMenu", "groupNone", "removePath", "clearField", "dialogCancel", "dialogConfirm", "historyEmpty", "historyIcon"];
+    for (const key of keys) {
+      expect(fr[key], key).toBeTypeOf("string");
+      expect(DEFAULT_STRINGS[key], key).toBe(fr[key]);
+    }
+  });
+
+  it("les clés RETIRÉES de l'ancienne barre ne sont plus référencées dans src (aucune référence morte)", () => {
+    const sources = ["src/ui/searchView.ts", "src/ui/searchToolbar.ts", "src/search/resultOptions.ts", "src/searchTab.ts"].map(read).join("\n");
+    const dead = ["filterFolder", "filterSubfolders", "sortBy", "historyLabel", "historyShow"].filter((k) => new RegExp(`\\b${k}\\b`).test(sources));
+    expect(dead).toEqual([]);
+  });
+
+  it("balayage : chaque clé des chaînes par défaut de la vue est UTILISÉE dans src (entre guillemets : t(), tr(), labelKey...)", async () => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    const sources = collectSources("src").join("\n");
+    // La définition de DEFAULT_STRINGS écrit les clés sans guillemets : seule une vraie utilisation les entoure.
+    const unused = Object.keys(DEFAULT_STRINGS).filter((k) => !new RegExp(`["'\`]${k}["'\`]`).test(sources));
+    expect(unused).toEqual([]);
+  });
+
+  it("menu des dossiers : « … N autre(s) dossier(s) », avec {n}, sans < > &, identique dans la vue et fr_FR.json", async () => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    for (const key of ["foldersMoreOne", "foldersMoreMany"]) {
+      expect(fr[key], key).toContain("{n}");
+      expect(fr[key], key).not.toMatch(/[<>&]/);
+      expect(DEFAULT_STRINGS[key], key).toBe(fr[key]);
+    }
+    expect(fr.foldersMoreOne).toBe("… {n} autre dossier");
+    expect(fr.foldersMoreMany).toBe("… {n} autres dossiers");
   });
 });

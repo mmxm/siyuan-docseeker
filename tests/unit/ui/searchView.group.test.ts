@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createNativeFakes, findItem } from "./nativeFakes";
 import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
 import type { SearchViewModel } from "../../../src/search/searchController";
 import { MAX_CARDS_PER_DOC, mountSearchView, type SearchViewDeps, type ThumbnailAttacher } from "../../../src/ui/searchView";
@@ -22,6 +23,7 @@ let submit: Mock;
 let setOptions: Mock;
 let opts: SearchOptions;
 let onGroup: Mock;
+let fakes: ReturnType<typeof createNativeFakes>;
 
 function mount(extra: Partial<SearchViewDeps> = {}, withOptions = true) {
   return mountSearchView(host, {
@@ -37,6 +39,8 @@ function mount(extra: Partial<SearchViewDeps> = {}, withOptions = true) {
       ? { options: { getOptions: () => opts, setOptions: setOptions as (o: SearchOptions) => void, getFolders: () => [] } }
       : {}),
     onGroupByDocumentChange: onGroup as (v: boolean) => void,
+    openMenu: fakes.openMenu,
+    openDialog: fakes.openDialog,
     ...extra,
   });
 }
@@ -48,16 +52,17 @@ const status = () => host.querySelector(".docseeker-status")!.textContent ?? "";
 const cards = () => Array.from(host.querySelectorAll<HTMLButtonElement>("li button.docseeker-card"));
 const cardKeys = () => cards().map((c) => `${c.dataset["docId"]}|${c.dataset["page"]}`);
 const items = () => Array.from(host.querySelectorAll<HTMLLIElement>(".docseeker-list > li"));
-const button = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === label)!;
-const groupBox = (): HTMLInputElement => {
-  const label = Array.from(host.querySelectorAll("label")).find((l) => l.textContent === "Regrouper par document");
-  if (!label) throw new Error("case « Regrouper par document » introuvable");
-  return document.getElementById(label.htmlFor) as HTMLInputElement;
+const icons = () => host.querySelector(".docseeker-icons")!;
+const button = (name: string) => icons().querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+const MORE = "Plus";
+/** Sous-menu « Groupe » tel que la barre l'affiche maintenant. */
+const groupMenu = () => {
+  button(MORE).click();
+  return findItem(fakes.lastMenu().items, "Groupe").submenu!;
 };
+const isGrouped = (): boolean => groupMenu().find((i) => i.label === "Regrouper par document")!.current === true;
 const toggleGroup = (checked: boolean): void => {
-  const box = groupBox();
-  box.checked = checked;
-  box.dispatchEvent(new Event("change", { bubbles: true }));
+  groupMenu().find((i) => i.label === (checked ? "Regrouper par document" : "Aucun regroupement"))!.click!();
 };
 
 beforeEach(() => {
@@ -71,6 +76,7 @@ beforeEach(() => {
   onOpen = vi.fn();
   submit = vi.fn();
   onGroup = vi.fn();
+  fakes = createNativeFakes();
   opts = { sort: { key: "relevance", direction: "desc" }, filters: NO_FILTERS };
   setOptions = vi.fn((o: SearchOptions) => {
     opts = o;
@@ -78,25 +84,20 @@ beforeEach(() => {
 });
 
 describe("regroupement : commandes", () => {
-  it("case « Regrouper par document » (input checkbox dans un label), cochée par défaut", () => {
+  it("regroupement par défaut : le menu « Groupe » marque « Regrouper par document » comme courant", () => {
     mount();
-    const box = groupBox();
-    expect(box.type).toBe("checkbox");
-    expect(box.checked).toBe(true);
-    expect(box.closest("label")?.textContent).toBe("Regrouper par document");
+    expect(groupMenu().map((i) => [i.label, i.current === true])).toEqual([
+      ["Aucun regroupement", false],
+      ["Regrouper par document", true],
+    ]);
   });
 
-  it("boutons Élargir et Réduire (type button) dans la barre d'outils, avant le panneau Filtres, sur la même ligne", () => {
+  it("« Élargir » et « Réduire » sont des boutons-icônes de la rangée, après « Filtres » (ordre de tabulation)", () => {
     mount();
-    const toolbar = host.querySelector(".docseeker-toolbar")!;
-    const details = toolbar.querySelector(":scope > details.docseeker-filters")!;
-    for (const name of ["Élargir", "Réduire"]) {
-      const b = button(name);
-      expect(b.type).toBe("button");
-      expect(b.closest(".docseeker-toolbar")).toBe(toolbar);
-      expect(b.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
-    expect(groupBox().compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const names = Array.from(icons().querySelectorAll("button")).map((b) => b.getAttribute("aria-label"));
+    expect(names.slice(-2)).toEqual(["Élargir", "Réduire"]);
+    expect(names.indexOf("Filtres")).toBeLessThan(names.indexOf("Élargir"));
+    for (const name of ["Élargir", "Réduire"]) expect(button(name).type).toBe("button");
   });
 
   it("aucune commande de regroupement sans barre d'outils (pas de deps.options)", () => {
@@ -107,10 +108,30 @@ describe("regroupement : commandes", () => {
   it("initialGroupByDocument=false : case décochée, liste plate, boutons Élargir/Réduire masqués", () => {
     vm = results([doc("a", [1, 2]), doc("b", [3])]);
     mount({ initialGroupByDocument: false });
-    expect(groupBox().checked).toBe(false);
+    expect(isGrouped()).toBe(false);
     expect(items()).toHaveLength(3);
     expect(button("Élargir").hidden).toBe(true);
     expect(button("Réduire").hidden).toBe(true);
+  });
+});
+
+describe("regroupement : après dispose", () => {
+  it("dispose avec le menu « Plus » ouvert : fermé ; un clic tardif sur « Aucun regroupement » ne change rien et ne mémorise rien", () => {
+    const view = mount();
+    button(MORE).click();
+    const menu = fakes.lastMenu();
+    view.dispose();
+    expect(menu.closed).toBe(true);
+    findItem(menu.items, "Groupe", "Aucun regroupement").click!();
+    expect(onGroup).not.toHaveBeenCalled();
+    expect(setOptions).not.toHaveBeenCalled();
+  });
+
+  it("view.setGroupByDocument après dispose : sans effet", () => {
+    const view = mount();
+    view.dispose();
+    view.setGroupByDocument(false);
+    expect(onGroup).not.toHaveBeenCalled();
   });
 });
 
@@ -167,14 +188,14 @@ describe("regroupement : liste plate", () => {
     expect(document.activeElement).toBe(cards()[1]);
   });
 
-  it("le focus reste sur la case après bascule, dans les deux sens", () => {
+  it("le focus reste sur « Plus » après bascule, dans les deux sens", () => {
     vm = sample();
     mount();
-    groupBox().focus();
+    button(MORE).focus();
     toggleGroup(false);
-    expect(document.activeElement).toBe(groupBox());
+    expect(document.activeElement).toBe(button(MORE));
     toggleGroup(true);
-    expect(document.activeElement).toBe(groupBox());
+    expect(document.activeElement).toBe(button(MORE));
     expect(host.querySelectorAll(".docseeker-doc-heading")).toHaveLength(2);
     expect(onGroup).toHaveBeenLastCalledWith(true);
   });

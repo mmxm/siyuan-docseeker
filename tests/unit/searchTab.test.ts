@@ -8,6 +8,9 @@ import { RERANK_GRACE_MS } from "../../src/search/searchController";
 import type { SortSpec } from "../../src/search/resultOptions";
 import type { DocSeekerSettings } from "../../src/settings";
 import { createSharedIndex, type SharedIndex } from "../../src/search/sharedIndex";
+import { SORT_CHOICES, sortToValue } from "../../src/search/resultOptions";
+import { DEFAULT_STRINGS } from "../../src/ui/searchView";
+import { createNativeFakes, findItem, pick } from "./ui/nativeFakes";
 
 const PDF_A = "assets/Alpha-20240101120000-abc1234.pdf";
 const PDF_B = "assets/Beta-20240101120000-def5678.pdf";
@@ -53,6 +56,52 @@ interface Harness {
 }
 
 const sharedInstances: SharedIndex[] = [];
+/** Menus et dialogues natifs injectés (recréés à chaque test, voir le beforeEach de haut niveau ci-dessous). */
+let fakes = createNativeFakes();
+beforeEach(() => {
+  fakes = createNativeFakes();
+});
+
+const iconBtn = (host: HTMLElement, name: string): HTMLButtonElement =>
+  host.querySelector<HTMLButtonElement>(`.docseeker-icons button[aria-label="${name}"]`)!;
+const SORT_LABELS = new Map(SORT_CHOICES.map((c) => [sortToValue(c.spec), DEFAULT_STRINGS[c.labelKey]!]));
+/** Tri courant d'après le sous-menu « Tri » de « Plus » (valeur « clé:sens », « » si aucun n'est courant). */
+const sortValue = (host: HTMLElement): string => {
+  iconBtn(host, "Plus").click();
+  const current = findItem(fakes.lastMenu().items, "Tri").submenu!.find((i) => i.current);
+  return [...SORT_LABELS].find(([, label]) => label === current?.label)?.[0] ?? "";
+};
+const sortSelect = (host: HTMLElement) => ({ get value() { return sortValue(host); } });
+const choose = (host: HTMLElement, value: string): void => {
+  iconBtn(host, "Plus").click();
+  pick(fakes.lastMenu(), "Tri", SORT_LABELS.get(value)!);
+};
+const isGrouped = (host: HTMLElement): boolean => {
+  iconBtn(host, "Plus").click();
+  return findItem(fakes.lastMenu().items, "Groupe").submenu!.find((i) => i.label === "Regrouper par document")!.current === true;
+};
+const setGroup = (host: HTMLElement, grouped: boolean): void => {
+  iconBtn(host, "Plus").click();
+  pick(fakes.lastMenu(), "Groupe", grouped ? "Regrouper par document" : "Aucun regroupement");
+};
+/** Ouvre le dialogue « Filtres », renseigne des champs (par libellé) puis confirme ; renvoie vrai si le dialogue s'est fermé. */
+const applyFilters = (host: HTMLElement, fields: Readonly<Record<string, string>>): boolean => {
+  iconBtn(host, host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")!).click();
+  const dialog = fakes.lastDialog();
+  for (const [label, value] of Object.entries(fields)) {
+    const l = [...dialog.container.querySelectorAll("label")].find((x) => x.textContent === label)!;
+    const input = document.getElementById(l.htmlFor) as HTMLInputElement;
+    input.value = value;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  return dialog.confirm();
+};
+const filtersLabel = (host: HTMLElement): string => host.querySelector('.docseeker-icons button[aria-label^="Filtres"]')!.getAttribute("aria-label")!;
+/** Dossiers proposés par le menu « Spécifier le chemin » (valeurs filtrées : libellés sans « Tous les dossiers »). */
+const folderMenu = (host: HTMLElement): string[] => {
+  iconBtn(host, "Spécifier le chemin").click();
+  return fakes.lastMenu().items.map((i) => (i.label ?? "").replace(/\u00a0/g, ""));
+};
 
 function harness(over: { ids?: string[]; autoStart?: boolean; paths?: Readonly<Record<string, string>> } = {}): Harness {
   const ids = over.ids ?? ["a"];
@@ -112,6 +161,8 @@ function harness(over: { ids?: string[]; autoStart?: boolean; paths?: Readonly<R
     observerFactory: () => ({ observe: vi.fn(), unobserve: vi.fn(), disconnect: observerDisconnect }),
     cache: { get: async () => undefined, put: async () => undefined, clear: async () => undefined },
     onWarn,
+    openMenu: fakes.openMenu,
+    openDialog: fakes.openDialog,
   };
   return {
     host, deps, shared, files, list, read, listeners, openSettings, openPdfAtPage, decodePageMatches, onWarn, observerDisconnect,
@@ -1142,12 +1193,8 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const h = harness({ ids: ["a", "b"] });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    const details = h.host.querySelector<HTMLDetailsElement>("details.docseeker-filters")!;
-    expect(details).not.toBeNull();
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-    const select = h.host.querySelector<HTMLSelectElement>(".docseeker-filters select")!;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "assets/"]);
+    expect(h.host.querySelector(".docseeker-icons")).not.toBeNull();
+    expect(folderMenu(h.host)).toEqual(["Tous les dossiers", "assets"]);
     tab.dispose();
   });
 
@@ -1157,15 +1204,13 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     await flush();
     await type(h.host, "chat");
     expect(h.host.querySelector(".docseeker-status")!.textContent).toContain("2 documents");
-    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
-    name.value = "beta";
-    name.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(applyFilters(h.host, { "Nom du document contient": "beta" })).toBe(true);
     await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
     await flush();
     const status = h.host.querySelector(".docseeker-status")!.textContent!;
     expect(status).toContain("1 document,");
     expect(status).toContain("1 document masqué par les filtres");
-    expect(h.host.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres (1 actif)");
+    expect(filtersLabel(h.host)).toBe("Filtres (1 actif)");
     tab.dispose();
   });
 
@@ -1173,13 +1218,11 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const h = harness({ ids: ["a", "b"] });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
-    name.value = "beta";
-    name.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(applyFilters(h.host, { "Nom du document contient": "beta" })).toBe(true);
     await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
     await flush();
     expect(cards(h.host)).toHaveLength(0);
-    expect(h.host.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres (1 actif)");
+    expect(filtersLabel(h.host)).toBe("Filtres (1 actif)");
     tab.dispose();
   });
 
@@ -1196,16 +1239,14 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const setItem = vi.spyOn(Storage.prototype, "setItem");
     const tab = mountSearchTab(h.host, deps);
     await flush();
-    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
-    name.value = "x";
-    name.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(h.host.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres (1 actif)");
+    applyFilters(h.host, { "Nom du document contient": "x" });
+    expect(filtersLabel(h.host)).toBe("Filtres (1 actif)");
     tab.dispose();
     const host2 = document.createElement("div");
     document.body.append(host2);
     const tab2 = mountSearchTab(host2, deps); // mêmes deps : seul l'état en mémoire de l'onglet pouvait survivre
     await flush();
-    expect(host2.querySelector(".docseeker-filters summary")!.textContent).toBe("Filtres");
+    expect(filtersLabel(host2)).toBe("Filtres");
     expect(setItem).not.toHaveBeenCalled();
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
@@ -1218,11 +1259,7 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    const details = h.host.querySelector<HTMLDetailsElement>("details.docseeker-filters")!;
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-    const select = h.host.querySelector<HTMLSelectElement>(".docseeker-filters select")!;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "assets/", "assets/a/", "assets/b/"]);
+    expect(folderMenu(h.host)).toEqual(["Tous les dossiers", "assets", "a", "b"]);
     tab.dispose();
   });
 
@@ -1230,14 +1267,10 @@ describe("mountSearchTab : filtres (J10 b)", () => {
     const h = harness({ ids: ["a", "b"], paths: { a: "assets/a/x.pdf", b: "assets/b/y.pdf" } });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
-    const details = h.host.querySelector<HTMLDetailsElement>("details.docseeker-filters")!;
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
     const reads = h.read.mock.calls.length;
     const decodes = h.decodePageMatches.mock.calls.length;
-    const select = h.host.querySelector<HTMLSelectElement>(".docseeker-filters select")!;
-    select.value = "assets/a/";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    iconBtn(h.host, "Spécifier le chemin").click();
+    pick(fakes.lastMenu(), "\u00a0\u00a0a");
     await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS * 2);
     await flush();
     expect(h.read.mock.calls.length).toBe(reads);
@@ -1265,13 +1298,6 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     return { get, update, settings: { get, update } };
   }
   const withSettings = (h: Harness, settings: NonNullable<SearchTabDeps["settings"]>): SearchTabDeps => ({ ...h.deps, settings });
-  const sortSelect = (host: HTMLElement) => host.querySelector<HTMLSelectElement>(".docseeker-sort select")!;
-  const groupBox = (host: HTMLElement) => host.querySelector<HTMLInputElement>(".docseeker-group input")!;
-  const choose = (host: HTMLElement, value: string): void => {
-    const select = sortSelect(host);
-    select.value = value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  };
   const order = (host: HTMLElement): string[] => cards(host).map((c) => `${c.dataset["docId"]}|${c.dataset["page"]}`);
 
   it("lit le tri mémorisé au montage : sélecteur, contrôleur (ordre des documents)", async () => {
@@ -1291,7 +1317,7 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
     expect(sortSelect(h.host).value).toBe("relevance:desc");
-    expect(groupBox(h.host).checked).toBe(true);
+    expect(isGrouped(h.host)).toBe(true);
     await type(h.host, "chat");
     expect(order(h.host).map((k) => k.split("|")[0])).toEqual(["a", "a", "b", "b"]);
     tab.dispose();
@@ -1302,7 +1328,7 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const { settings } = settingsFor({ groupByDocument: false });
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
-    expect(groupBox(h.host).checked).toBe(false);
+    expect(isGrouped(h.host)).toBe(false);
     await type(h.host, "chat");
     expect(h.host.querySelectorAll(".docseeker-list > li")).toHaveLength(4);
     expect(h.host.querySelector(".docseeker-doc-heading")).toBeNull();
@@ -1343,12 +1369,10 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const { settings, update } = settingsFor();
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
-    groupBox(h.host).checked = false;
-    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    setGroup(h.host, false);
     expect(update).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith({ groupByDocument: false });
-    groupBox(h.host).checked = true;
-    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    setGroup(h.host, true);
     expect(update).toHaveBeenLastCalledWith({ groupByDocument: true });
     tab.dispose();
   });
@@ -1358,12 +1382,10 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const { settings, update } = settingsFor();
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
-    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
-    name.value = "beta";
-    name.dispatchEvent(new Event("change", { bubbles: true }));
-    const min = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="number"]')!;
-    min.value = "2";
-    min.dispatchEvent(new Event("change", { bubbles: true }));
+    applyFilters(h.host, { "Nom du document contient": "beta" });
+    applyFilters(h.host, { "Pages au moins": "2" });
+    iconBtn(h.host, "Spécifier le chemin").click();
+    pick(fakes.lastMenu(), "assets");
     await vi.advanceTimersByTimeAsync(RERANK_GRACE_MS);
     await flush();
     expect(update).not.toHaveBeenCalled();
@@ -1376,9 +1398,7 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
     choose(h.host, "name:asc");
-    const name = h.host.querySelector<HTMLInputElement>('.docseeker-filters input[type="search"]')!;
-    name.value = "beta";
-    name.dispatchEvent(new Event("change", { bubbles: true }));
+    applyFilters(h.host, { "Nom du document contient": "beta" });
     expect(update).toHaveBeenCalledTimes(1);
     tab.dispose();
   });
@@ -1391,8 +1411,7 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
     choose(h.host, "name:asc");
-    groupBox(h.host).checked = false;
-    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    setGroup(h.host, false);
     await flush();
     const failures = h.onWarn.mock.calls.filter((c) => c[1] === boom);
     expect(failures).toHaveLength(2);
@@ -1455,13 +1474,6 @@ describe("mountSearchTab : tri et regroupement mémorisés (J10 c)", () => {
 describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J10 10c)", () => {
   const SORTED = { key: "name", direction: "desc" } as const;
   const messageText = (host: HTMLElement): string => host.querySelector(".docseeker-message")!.textContent ?? "";
-  const sortSelect = (host: HTMLElement) => host.querySelector<HTMLSelectElement>(".docseeker-sort select")!;
-  const groupBox = (host: HTMLElement) => host.querySelector<HTMLInputElement>(".docseeker-group input")!;
-  const choose = (host: HTMLElement, value: string): void => {
-    const select = sortSelect(host);
-    select.value = value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  };
   const firstIds = (host: HTMLElement): string[] => cards(host).map((c) => c.dataset["docId"]!);
 
   /** Réglages dont le chargement se termine sur commande : `get()` renvoie les défauts jusque-là. */
@@ -1493,7 +1505,7 @@ describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J
     expect(firstIds(h.host)).toEqual(["a", "a", "b", "b"]);
     await finishLoading({ sort: SORTED, groupByDocument: false });
     expect(sortSelect(h.host).value).toBe("name:desc");
-    expect(groupBox(h.host).checked).toBe(false);
+    expect(isGrouped(h.host)).toBe(false);
     expect(h.host.querySelector(".docseeker-list--flat")).not.toBeNull();
     expect(firstIds(h.host).slice(0, 2)).toEqual(["b", "b"]);
     // Appliquer le tri et le regroupement lus ne les réécrit pas ; seule la requête soumise avant la lecture est écrite.
@@ -1522,7 +1534,7 @@ describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J
     choose(h.host, "name:asc");
     await finishLoading({ sort: SORTED, groupByDocument: false });
     expect(sortSelect(h.host).value).toBe("name:asc");
-    expect(groupBox(h.host).checked).toBe(false);
+    expect(isGrouped(h.host)).toBe(false);
     tab.dispose();
   });
 
@@ -1531,10 +1543,9 @@ describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J
     const { settings, finishLoading } = lateSettings();
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
-    groupBox(h.host).checked = false;
-    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    setGroup(h.host, false);
     await finishLoading({ sort: SORTED, groupByDocument: true });
-    expect(groupBox(h.host).checked).toBe(false);
+    expect(isGrouped(h.host)).toBe(false);
     expect(sortSelect(h.host).value).toBe("name:desc");
     tab.dispose();
   });
@@ -1626,8 +1637,7 @@ describe("mountSearchTab : réglages pas encore chargés, échecs d'écriture (J
     };
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
-    groupBox(h.host).checked = false;
-    groupBox(h.host).dispatchEvent(new Event("change", { bubbles: true }));
+    setGroup(h.host, false);
     expect(messageText(h.host)).toBe("Réglage non enregistré");
     tab.dispose();
   });
@@ -1715,8 +1725,8 @@ describe("mountSearchTab : ouverture à droite (J10 10e)", () => {
 
 describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
   const input = (host: HTMLElement) => host.querySelector<HTMLInputElement>("input")!;
-  const options = (host: HTMLElement) =>
-    [...host.querySelectorAll<HTMLElement>('[role="listbox"] [role="option"]')].map((o) => o.textContent);
+  /** Entrées du dernier menu d'historique ouvert (séparateur exclu). */
+  const options = (_host: HTMLElement) => fakes.lastMenu().items.filter((i) => !i.separator).map((i) => i.label);
   const altDown = (host: HTMLElement): void => {
     input(host).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
   };
@@ -1783,22 +1793,23 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
     altDown(h.host);
-    h.host.querySelector<HTMLElement>(".docseeker-history-clear")!.click();
+    pick(fakes.lastMenu(), "Supprimer tout l'historique");
     await flush();
     expect(update).toHaveBeenLastCalledWith({ history: [] });
     tab.dispose();
   });
 
-  it("Maj+Suppr sur l'option active : update sans cette requête", async () => {
+  it("le menu rejoue une requête : champ rempli, recherche lancée, historique remonté en tête (update)", async () => {
     const h = harness();
     const { settings, update } = liveSettings(["a", "b"]);
     const tab = mountSearchTab(h.host, withSettings(h, settings));
     await flush();
     altDown(h.host);
-    const key = (init: KeyboardEventInit) => input(h.host).dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }));
-    key({ key: "ArrowDown" });
-    key({ key: "Delete", shiftKey: true });
-    expect(update).toHaveBeenLastCalledWith({ history: ["b"] });
+    pick(fakes.lastMenu(), "b");
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(input(h.host).value).toBe("b");
+    expect(update).toHaveBeenLastCalledWith({ history: ["b", "a"] });
     tab.dispose();
   });
 
@@ -1993,7 +2004,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
     tab.dispose();
   });
 
-  it("opérations d'avant la lecture rejouées dans l'ordre (add, remove, clear, add) en UNE seule écriture", async () => {
+  it("opérations d'avant la lecture rejouées dans l'ordre (add, add, clear, add) en UNE seule écriture", async () => {
     const h = harness();
     const { settings, update, finish } = pendingSettings();
     const tab = mountSearchTab(h.host, withSettings(h, settings));
@@ -2001,10 +2012,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
     await type(h.host, "a");
     await type(h.host, "b"); // local : [b, a]
     altDown(h.host);
-    pressKey(h.host, { key: "ArrowDown" }); // b
-    pressKey(h.host, { key: "ArrowDown" }); // a
-    pressKey(h.host, { key: "Delete", shiftKey: true }); // remove a
-    h.host.querySelector<HTMLElement>(".docseeker-history-clear")!.click(); // clear
+    pick(fakes.lastMenu(), "Supprimer tout l'historique"); // clear
     await type(h.host, "c");
     expect(update).not.toHaveBeenCalled();
     await finish({ history: ["ancien"] });

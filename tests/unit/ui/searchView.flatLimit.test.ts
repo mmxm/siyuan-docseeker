@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createNativeFakes, pick } from "./nativeFakes";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
 import type { SearchViewModel } from "../../../src/search/searchController";
@@ -22,6 +23,7 @@ let detaches: Mock[];
 let onGroup: Mock;
 let opts: SearchOptions;
 let views: { dispose(): void }[];
+const fakes = createNativeFakes();
 
 function mount(extra: Partial<SearchViewDeps> = {}) {
   const view = mountSearchView(host, {
@@ -34,6 +36,8 @@ function mount(extra: Partial<SearchViewDeps> = {}) {
     onOpen: vi.fn(),
     getDocMeta: () => ({ pdfSize: 10, pdfModifiedMs: 20 }),
     options: { getOptions: () => opts, setOptions: vi.fn(), getFolders: () => [] },
+    openMenu: fakes.openMenu,
+    openDialog: fakes.openDialog,
     onGroupByDocumentChange: onGroup as (v: boolean) => void,
     initialGroupByDocument: false,
     ...extra,
@@ -219,9 +223,8 @@ describe("liste plate : plafond global", () => {
   it("le passage au mode regroupé détache les cartes plates et masque le pied de liste ; setGroupByDocument(false) les remet à 60", () => {
     const view = mount();
     update(results(many(150, 10)));
-    const box = host.querySelector<HTMLInputElement>(".docseeker-group input")!;
-    box.checked = true;
-    box.dispatchEvent(new Event("change", { bubbles: true }));
+    host.querySelector<HTMLButtonElement>('.docseeker-icons button[aria-label="Plus"]')!.click();
+    pick(fakes.lastMenu(), "Groupe", "Regrouper par document");
     expect(footer()!.hidden).toBe(true);
     expect(onGroup).toHaveBeenCalledWith(true);
     view.setGroupByDocument(false);
@@ -259,17 +262,20 @@ describe("API de la vue pour les réglages différés", () => {
     update(results(many(3, 2)));
     expect(host.querySelector(".docseeker-list--flat")).toBeNull();
     view.setGroupByDocument(false);
-    expect(host.querySelector<HTMLInputElement>(".docseeker-group input")!.checked).toBe(false);
+    host.querySelector<HTMLButtonElement>('.docseeker-icons button[aria-label="Plus"]')!.click();
+    expect(fakes.lastMenu().items.find((i) => i.label === "Groupe")!.submenu!.map((i) => i.current === true)).toEqual([true, false]);
     expect(host.querySelector(".docseeker-list--flat")).not.toBeNull();
     expect(onGroup).not.toHaveBeenCalled();
   });
 
-  it("refreshOptions rafraîchit la barre d'outils (le sélecteur suit les options)", () => {
+  it("refreshOptions rafraîchit la barre d'outils (le menu Tri suit les options)", () => {
     const view = mount();
-    const select = host.querySelector<HTMLSelectElement>(".docseeker-sort select")!;
-    expect(select.value).toBe("relevance:desc");
+    const more = host.querySelector<HTMLButtonElement>('.docseeker-icons button[aria-label="Plus"]')!;
+    more.click();
+    expect(fakes.lastMenu().items[0]!.submenu!.find((i) => i.current)?.label).toBe("Pertinence");
     opts = { sort: { key: "name", direction: "desc" }, filters: NO_FILTERS };
     view.refreshOptions();
-    expect(select.value).toBe("name:desc");
+    more.click();
+    expect(fakes.lastMenu().items[0]!.submenu!.find((i) => i.current)?.label).toBe("Nom décroissant");
   });
 });
