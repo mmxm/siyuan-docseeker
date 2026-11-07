@@ -280,10 +280,12 @@ describe("lazy page box decoding", () => {
 });
 
 describe("stabilité du format et compression", () => {
-  it("stabilité du format : octets figés pour un petit exemple (à régénérer volontairement)", async () => {
+  it("stabilité du format : l'en-tête est figé et l'exemple figé (écrit par une version précédente) se décode toujours en l'index attendu", async () => {
     const bytes = await encodeIndex(smallIndex());
     expect(toHex(bytes.slice(0, 8))).toBe("44535831" + "0200" + "0100");
-    expect(toHex(bytes)).toBe(EXPECTED_SMALL_HEX);
+    // Les octets compressés dépendent de la version de zlib (Node local ≠ Node de la CI) : on fige donc la LECTURE, pas la sortie du compresseur.
+    const frozen = Uint8Array.from(EXPECTED_SMALL_HEX.match(/../g) ?? [], (h) => parseInt(h, 16));
+    expect(await decodeIndex(frozen)).toEqual(await decodeIndex(bytes));
   });
 
   it("compresses a repetitive example far below the equivalent JSON", async () => {
