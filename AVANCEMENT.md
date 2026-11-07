@@ -2,7 +2,7 @@
 
 > Document de passation. Il dit où en est le projet, comment il est construit, ce qui reste ouvert et comment reprendre.
 > Complète `CAHIER_DES_CHARGES.md` (le quoi), `PLAN_IMPLEMENTATION.md` (le plan et le guide d'entrée) et `CLAUDE.md` (règles de travail).
-> Dernière mise à jour : 2026-11-06 (`npm test`, `npm run typecheck`, `npm run test:coverage` et `npm run build` relancés ce jour-là ; `npm run package`, `npm run release:check` et `gh release view v0.2.0` datent du 2026-11-05 et n'ont pas été relancés).
+> Dernière mise à jour : 2026-11-07 (`npm test`, `npm run typecheck` et `npm run test:coverage` relancés ce jour-là ; `npm run build` relancé le 2026-11-06 ; `npm run package`, `npm run release:check` et `gh release view v0.2.0` datent du 2026-11-05 et n'ont pas été relancés).
 
 Légende utilisée ci-dessous :
 - **[SiYuan]** : validé à la main dans SiYuan 3.8.9 (webapp, ordinateur). Source : commits `docs:` et sections précédentes de ce fichier ; non rejouable depuis le dépôt.
@@ -15,14 +15,14 @@ Légende utilisée ci-dessous :
 
 - **Version publiée : 0.2.0.** `package.json` et `plugin.json` indiquent `0.2.0`. Tag git `v0.2.0` sur le commit `4a83cb0`.
 - **Release GitHub `DocSeeker 0.2.0` publiée** le 2026-11-05 (non brouillon, non préversion) avec `package.zip` (79 719 octets, sha256 `99f4e35c…`). Vérifié avec `gh release view v0.2.0`.
-- **Branche `main`** : identique à `origin/main` (`4a83cb0`), arbre de travail propre. `dist/` et `package.zip` sont ignorés par git.
-- **Tests : 1 911 tests verts** (`npm test`, 54 fichiers dans `tests/unit`, relancé le 2026-11-06). Les mesures de `tests/perf` ne sont pas dans `npm test`.
-- **Typage : propre** (`npm run typecheck` : `tsc --noEmit`, puis `tsconfig.test.json`, relancé le 2026-11-06).
-- **Couverture** (`npm run test:coverage`, seuil 80 % sur `src/**`, mesure du 2026-11-06) : instructions 97,42 %, branches 92,11 %, fonctions 96,24 %, lignes 98,62 %.
+- **Branche `main`** : `origin/main` est à `63021dd` (J10 poussé), arbre de travail propre à l'exception des fichiers de documentation modifiés le 2026-11-07 et non committés. `dist/` et `package.zip` sont ignorés par git.
+- **Tests : 3 115 tests verts dans 77 fichiers** (`npm test`, relancé le 2026-11-07). **Mais `npm test` sort en code 1** : une promesse rejetée non gérée dans `tests/unit/searchTab.floating.test.ts` (ligne 378) fait remonter « Errors 1 error ». Même constat pour `npm run test:coverage`. Voir §5, point 26, et §6, étape 0. Les mesures de `tests/perf` ne sont pas dans `npm test`.
+- **Typage : propre** (`npm run typecheck` : `tsc --noEmit`, puis `tsconfig.test.json`, code de sortie 0 le 2026-11-07).
+- **Couverture** (`npm run test:coverage`, seuil 80 % sur `src/**`, mesure du 2026-11-07) : instructions 97,68 %, branches 93,44 %, fonctions 96,67 %, lignes 98,81 %.
 - **Bundle** : `npm run build` relancé le 2026-11-06 : `dist/index.js` = 281 298 octets (83 360 octets gzip). `package.zip` = 79 719 octets, celui de la release 0.2.0 (non reconstruit depuis). Le bundle installé dans `~/SiYuan` est un autre fichier (266 425 octets, 13:29 le 2026-11-06) : le J11 n'y est pas copié.
 - **Ce qui marche dans SiYuan 3.8.9** : diagnostic M0, indexation de PDF réels, recherche, vignettes surlignées, clic → PDF à la bonne page avec calque, plusieurs onglets de recherche, pages dépliables, re-classement par proximité (phase 1). Détail en section 2.
 - **Ce qui manque** : pause/reprise de l'indexation (le code existe, l'interface non), dossiers surveillés et taille des vignettes dans les réglages, `preview.png`, soumission au Marché, CI. Voir section 5.
-- **Depuis J11** : ce qui est vérifié et ce qui ne l'est pas est détaillé dans la section 1 bis (J11, rubriques « Vérifié » et « Non vérifié »).
+- **Depuis J11 et J10** : ce qui est vérifié et ce qui ne l'est pas est détaillé dans la section 1 bis (J11 : rubriques « Vérifié » et « Non vérifié » ; J10 : liste à cocher des validations manuelles).
 - **Attention** : `npm run release:check` échoue actuellement sur « le tag v0.2.0 existe déjà ». C'est attendu après publication. Pour une nouvelle version, il faut d'abord incrémenter la version (voir section 7).
 
 ---
@@ -31,9 +31,11 @@ Légende utilisée ci-dessous :
 
 Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramètres du plugin : Réindexer, diagnostic, vider l'index, interrupteur d'indexation automatique) → **J9** (indexation automatique : démarrage, nouveaux PDF, suppressions, `removeStaleTmp`) → **J11** (classement phase 2, format `.dsx` v2, migration automatique grâce à J9) → **J10** (parité avec la recherche SiYuan : chemin, filtres, tris, onglet ou fenêtre flottante, raccourcis).
 
-- **Banc d'essai (J10, étape 0A)** : `npm run sandbox -- start|install|status|stop|reset` lance un noyau SiYuan jetable (port 6807, workspace dans `$TMPDIR/docseeker-sandbox`) avec le plugin et 8 PDF de test, sans toucher à `~/SiYuan` (`scripts/dev-sandbox.mjs`, `scripts/lib/`). Le noyau charge le plugin (`loadPetals`) ; l'affichage dans l'interface web n'est pas vérifié ici.
+**État : J7, J8, J9, J11 et J10 sont faits côté code et committés. Aucun n'est validé dans l'application de bureau ni dans le `~/SiYuan` de l'utilisateur.** La liste à cocher est plus bas, dans « Validations manuelles à faire ».
 
-- **J11 (classement phase 2, format `.dsx` v2, migration) : terminé côté code, non commité, validation manuelle SiYuan à faire.** Détail en section 2 (« Classement, phase 2 » et « Format `.dsx` »).
+- **Banc d'essai (J10, étape 0)** : `npm run sandbox -- start|stop|reset|status|install` lance un noyau SiYuan jetable (port 6807, espace de travail marqué `.docseeker-sandbox` dans `$TMPDIR/docseeker-sandbox` par défaut), avec le plugin et 8 PDF générés par défaut (`--pdfs N`). Il refuse `~/SiYuan`, un espace de travail existant et les ports 6806 et 55165 (`scripts/dev-sandbox.mjs`, `scripts/lib/sandboxCore.mjs`). Le noyau charge le plugin (`loadPetals`). Les essais de J10 ont été faits dans la webapp de ce noyau.
+
+- **J11 (classement phase 2, format `.dsx` v2, migration) : terminé côté code, committé (`148ee09`, 2026-11-06), validation manuelle SiYuan à faire.** Détail en section 2 (« Classement, phase 2 » et « Format `.dsx` »).
   - **Ce qui change pour l'utilisateur** : les passages en gros caractères remontent, y compris pour une requête d'un seul mot ; les index créés avant cette version sont mis à jour automatiquement, une fois, PDF par PDF (statut « Mise à jour de l'index ») ; la version 0.2.0 ne lit pas les index mis à jour.
   - **Réglages techniques (J11)** :
     - Manifeste rejeté (version globale inconnue, entrée invalide, JSON illisible, chemins en double) : avant toute écriture, l'original est sauvegardé dans `manifest.rejected.json`. Si cette sauvegarde existe avec un autre contenu, l'original va dans `manifest.rejected-<date>.json` et la première n'est pas écrasée. Si la sauvegarde est impossible, la passe échoue sans rien écrire. La sauvegarde ne peut pas passer par `<nom>.bak` : le suffixe `.bak` est réservé par `petalStore`, qui refuse ces noms (`src/siyuan/petalStore.ts`, `src/indexer/indexer.ts`).
@@ -45,6 +47,38 @@ Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramèt
   - **Non vérifié** : rien n'a été validé dans SiYuan ni sur de vrais PDF depuis J11. Le bundle J11 n'est pas copié dans `~/SiYuan` (le fichier installé est un autre bundle). La latence du re-classement et la durée de la migration d'une grosse bibliothèque ne sont pas mesurées.
   - **À valider à la main dans SiYuan** : migration d'une bibliothèque réelle ; recherche pendant la migration ; ordre des résultats sur une requête d'un mot ; latence perçue (re-classement et migration).
   - **Dettes** : § 5, « Dettes ouvertes par J11 ».
+- **J10 (parité avec la recherche SiYuan) : terminé côté code, committé, validation manuelle à faire.** Commits (tous sur `origin/main`) : `3321227` (étape 0, banc d'essai), `93ad3c8` (10b, filtres), `c8cc7b4` (10c, tris et regroupement), `cb504ec` (10e, clavier, historique, ouverture à droite, commandes), `eecc374` (10f, barre d'icônes et menus natifs), `63021dd` (10d, fenêtre flottante).
+  - **Ce qui change pour l'utilisateur** : filtres (dossier avec ou sans sous-dossiers, nom du document, pages minimum et maximum, date de modification) ; huit tris ; regroupement par document ou liste à plat (60 cartes, puis « Afficher plus ») ; clavier complet dans les résultats ; historique des 20 dernières requêtes ; quatre commandes SiYuan (« Rechercher dans les PDF » existait depuis 0.2.0), sans raccourci par défaut ; réglage « Ouverture de la recherche » (onglet, par défaut, ou fenêtre flottante) ; barre d'outils et menus repris de SiYuan.
+  - **Vérifié** : `npm run typecheck` (code 0, 2026-11-07) ; `npm test` : 3 115 tests verts dans 77 fichiers, mais code de sortie 1 (voir R12 ci-dessous) ; couverture du 2026-11-07 : instructions 97,68 %, branches 93,44 %, fonctions 96,67 %, lignes 98,81 %. Essais à la main dans la **webapp** de SiYuan 3.8.9, sur un noyau jetable et 38 PDF de médecine réels (102 Mo) copiés dans l'espace jetable, jamais dans `~/SiYuan`. Défauts trouvés et corrigés pendant ces essais : menus natifs qui se fermaient aussitôt (le clic remontait jusqu'à `window`), sous-menu qui fermait le menu parent, focus perdu après un choix, flèches (R6, défaut de conception : ↓ allait à la carte voisine du DOM, pas à celle du dessous), et `workerSrc` de PDF.js non renseigné dans un espace neuf (corrigé dans `createLoadPdf`).
+  - **Non vérifié** : aucun essai dans l'application de bureau Electron ; rien dans `~/SiYuan` ; aucune capture d'écran possible (fenêtre du navigateur intégré minimisée), donc rendu visuel, thème sombre, largeur de 320 px et surlignage dans le PDF ne sont pas vus. Le chemin exact des commandes dans les paramètres de SiYuan (onglet « Raccourci ») n'est pas vérifié non plus.
+  - **Décisions de conception** :
+    - Filtres en session seulement, jamais persistés. Ils s'appliquent après BM25 et avant le re-classement, pour que la fenêtre de re-classement ne contienne aucun document exclu (`src/search/searchController.ts`, `src/search/resultOptions.ts`).
+    - Changer le tri ne relance ni BM25 ni le re-classement : la liste publiée est re-triée. Le tri ne touche qu'à l'ordre des documents ; l'ordre des pages suit le classement.
+    - Tri, regroupement, mode d'ouverture et historique sont mémorisés dans `settings.json` (`src/settings.ts`). `settings.ready` : `update()` attend le chargement, donc plus de perte silencieuse de `autoIndex` ou `intervalMinutes`.
+    - Clavier : fonctions pures dans `src/ui/keyboardNav.ts`. ↑/↓ vont à la carte au-dessus ou au-dessous d'après la géométrie (même ligne, puis centre horizontal le plus proche). Ctrl/⌘/Alt+Entrée et Alt+clic ouvrent à droite (`position: "right"`). Maj+Entrée est consommée sans effet, car une carte est un bouton. Échap sur une carte revient au champ sans le vider.
+    - Menus, dialogue et icônes natifs : un seul adaptateur, `src/siyuan/nativeUi.ts`, qui importe `Menu` et `Dialog`. Les libellés sont échappés et nettoyés, car SiYuan les insère en `innerHTML`.
+    - Fenêtre flottante : `Dialog` de 80 vw sur 90 vh, comme la recherche native ; une seule fenêtre ; session en mémoire (`src/search/searchSession.ts`) restaurée à la réouverture, avec relance de la recherche ; destruction lancée par SiYuan détectée ; « Ouvrir dans un nouvel onglet » transfère la session par un jeton placé dans `custom.data` (expiration à 30 s).
+    - Liste des dossiers du menu bornée : 500 entrées, 8 niveaux d'indentation, 120 caractères par libellé.
+  - **Dettes** : § 5, « Dettes ouvertes par J10 ».
+
+- **Validations manuelles à faire (J10 et J11)** : à cocher et dater une fois fait. Préalable : copier le bundle J11+J10 dans l'application de bureau ou dans le `~/SiYuan` **seulement avec l'accord de l'utilisateur**, et sauvegarder ses données avant.
+  - [ ] **Migration des index v1** : au premier démarrage du bundle, les `.dsx` v1 sont mis à jour une fois, PDF par PDF (statut « Mise à jour de l'index ») ; le journal indique « dont N migré(s) » ; la bibliothèque reste utilisable. (Date : ____ ; lieu : bureau / `~/SiYuan`)
+  - [ ] **Recherche pendant la migration** : une recherche lancée pendant la migration répond avec l'ancien index, sans erreur ni blocage de l'interface.
+  - [ ] **Flèches** : ↑ ↓ ← →, Début, Fin, Page précédente et suivante, Entrée, Échap. Depuis le champ, ↓ va à la première carte.
+  - [ ] **Menus** : Plus > Tri, Plus > Groupe, Spécifier le chemin, Inclure les documents enfants, Élargir, Réduire. Fermeture au clic extérieur ; focus rendu après un choix.
+  - [ ] **Dialogue « Filtres »** : Confirmer, Annuler, Réinitialiser les filtres ; messages d'erreur (pages, dates).
+  - [ ] **Fenêtre flottante** : taille (80 % × 90 %), Échap par couches, ouvrir un PDF la ferme, réouverture relance la recherche, « Ouvrir dans un nouvel onglet », fermeture lancée par SiYuan.
+  - [ ] **Ouvrir à droite** (Ctrl/⌘/Alt+Entrée, Alt+clic) : le PDF s'ouvre dans un volet à droite, et le **surlignage est visible dans ce volet**.
+  - [ ] **Thème sombre** : résultats, barre d'outils, menus, dialogue, fenêtre flottante.
+  - [ ] **Largeur de 320 px** : barre d'outils, cartes, dialogue des filtres.
+  - [ ] **Alt+↓** ouvre l'historique. Sous macOS, vérifier que le système ne capte pas Alt+↓.
+  - [ ] **Historique** : 20 entrées au plus, sans doublon, « Supprimer tout l'historique », conservé après désactivation et réactivation du plugin.
+  - [ ] **Tri et regroupement mémorisés** après désactivation et réactivation du plugin.
+  - [ ] **Réglage « Ouverture de la recherche »** : onglet, puis fenêtre flottante ; l'icône de la barre supérieure et la commande suivent le réglage.
+  - [ ] **Commandes** : retrouver les quatre commandes dans les paramètres de SiYuan (onglet « Raccourci », libellé à confirmer), leur attribuer un raccourci, vérifier qu'il déclenche la commande.
+  - [ ] **Trace des touches** (bouton « Tracer les touches », paramètres) : à utiliser si une touche n'arrive pas au plugin.
+  - [ ] **Indexation et fenêtre** : `settings.json` conservé après rechargement ; indicateur d'état pendant une indexation (issu de J9, toujours à valider).
+
 - **J9 : fait et commité, non validé dans SiYuan.** Vérifié : typecheck propre, 1 621 tests verts (52 fichiers), cinq relectures indépendantes (TypeScript, échecs silencieux, performance, UX/accessibilité, revue finale des corrections). Nouveaux modules purs : `src/indexer/autoSync.ts` (planificateur : 3 s après `onLayoutReady`, retour de focus avec 30 s minimum, périodique 5/15/60 min depuis la fin de la passe précédente, jamais deux passes, `triggerNow` booléen), `src/indexer/indexActivity.ts` (états running/done/partial/failed pour l'indicateur), `src/settings.ts` (`settings.json` via `loadData`/`saveData`, sérialisé, réécrit si corrompu ; défaut : automatique activée, 5 min). `removeStaleTmp()` est appelé au démarrage (dette R3 fermée). Panneau : interrupteur (`role="switch"`) et fréquence (désactivée si coupé). Onglet : indicateur sous le champ, suffixe « des résultats peuvent manquer » pendant l'indexation. `IndexSummary` gagne `incomplete`/`failures` ; la garde « aucune suppression sur parcours incomplet » est intacte. Retrait progressif des PDF en échec (5 min, 30 min, 2 h ; mémoire seulement ; `resetFailures()` après vidage). `shouldYield` : les passes automatiques attendent pendant `keydown`/`pointerdown`/`wheel` (3 s). Les clés `pause`/`resume`/`indexingPaused` sont supprimées (R2 : pas de boutons pause/reprise).
   - **À valider à la main dans SiYuan** : focus/`visibilitychange` ; ajout et suppression réels d'un PDF dans `assets` ; `settings.json` conservé après rechargement ; rendu de l'interrupteur et de la liste ; vidage puis reconstruction automatique ; dossier illisible (état « partiel ») ; PDF de 0 octet (pas de clignotement, pas de rechargement toutes les 5 min) ; **latence de l'interface pendant une première indexation** (extraction dans le thread principal, non mesurée).
   - **Dette connue** : cache `(chemin, date)` dans la découverte (une passe vide fait ~1 requête HEAD par PDF) ; débounce du rafraîchissement de l'index partagé pendant un run ; une demande manuelle qui rejoint une passe automatique la laisse « automatique » ; le panneau peut afficher « 1 échec » à chaque passe automatique tant qu'un PDF échoue ; `describeEvent` en dur en français.
@@ -61,7 +95,7 @@ Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramèt
 
 ## 2. Ce qui est fait, par jalon et capacité
 
-Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : tous les commits sont du 2026-11-04 ou du 2026-11-05 (22 et 12 commits ; 34 au total, premier commit `cfa0773`).
+Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 47 commits au 2026-11-07 (22 le 2026-11-04, 13 le 2026-11-05, 10 le 2026-11-06, 2 le 2026-11-07 ; premier commit `cfa0773`). Les jalons J7 à J11 suivent M7 ; J10 est décrit en section 1 bis.
 
 ### M0 — Diagnostic technique
 - **Fichiers** : `src/diagnostic/m0.ts` (7 contrôles : `discovery`, `head`, `range`, `roundtrip`, `pdfjs`, `worker`, `auth`), `src/siyuan/kernelApi.ts`, bouton « Diagnostic M0 » dans `src/index.ts`.
@@ -132,8 +166,8 @@ Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 
 - **Fichiers** : `src/search/proximity.ts` (`fontSizePt`, `fontBonus`, `orderTopPages` à 4 clés), `src/search/proximityRanker.ts` (bonus de police par document, concurrence 1, cession de la main entre documents), `src/search/searchController.ts` (re-classement aussi pour une requête d'un seul mot ; pas de re-classement pendant l'indexation partielle), `src/search/pageMatches.ts` (les pages mesurées ne sont plus mises en cache, donc les vignettes sont redécodées), `src/core/constants.ts` (seuil 10, multiplicateur 25, plafond 400).
 - **Règle** : bonus de police = clamp((taille − 10) × 25, 0, 400), où la taille est la hauteur de boîte du mot en points (hauteur fractionnaire × hauteur de page), arrondie au dixième, maximum sur le document. Il s'ajoute aux bonus de proximité. Tri des pages : mots distincts, puis police, puis score BM25, puis numéro de page.
 - **Périmètre** : seules les 5 premières pages BM25 de chaque document sont mesurées (`PROXIMITY_PAGES`). Le moteur Rust mesure tout le document : divergence connue.
-- **Parité** : `tests/fixtures/docseeker-ranking.json` régénérée avec le vrai moteur Rust (commit `96f1f9c`, `npm run gen:ranking-fixture`) : 29 scénarios : les 17 anciens sont inchangés, et 12 sont nouveaux (`police-seuil-arrondi`, `police-plafond`, `police-sur-requete-un-mot`, `police-mot-isole-deux-termes`, `police-max-du-groupe`, `police-egalite-arrondie`, `tri-distinct-avant-police`, `tri-police-avant-bm25`, `tri-meilleure-occurrence-par-page`, `police-hors-5-pages`, `page-letter`, `page-paysage`). `KNOWN_PAGE_ORDER_GAPS` est supprimé. Tests : `tests/unit/search/proximity.parity.test.ts`, `proximity.test.ts`, `proximityRanker.test.ts`.
-- **Commits** : aucun (non commité).
+- **Parité** : `tests/fixtures/docseeker-ranking.json` régénérée avec le vrai moteur Rust (commit `148ee09`, `npm run gen:ranking-fixture`) : 29 scénarios : les 17 anciens sont inchangés, et 12 sont nouveaux (`police-seuil-arrondi`, `police-plafond`, `police-sur-requete-un-mot`, `police-mot-isole-deux-termes`, `police-max-du-groupe`, `police-egalite-arrondie`, `tri-distinct-avant-police`, `tri-police-avant-bm25`, `tri-meilleure-occurrence-par-page`, `police-hors-5-pages`, `page-letter`, `page-paysage`). `KNOWN_PAGE_ORDER_GAPS` est supprimé. Tests : `tests/unit/search/proximity.parity.test.ts`, `proximity.test.ts`, `proximityRanker.test.ts`.
+- **Commits** : `148ee09` (2026-11-06), committé avec J11 ; la fixture est mise à jour dans le même commit.
 - **[SiYuan]** : non validé. **[mesure]** : aucune. La latence du re-classement à un seul mot n'est pas mesurée (estimation de 0,3 à 1,8 s de CPU cumulé pour 60 documents, non fiable).
 - **Écarts restants avec DocSeeker** : appariement (mot d'un caractère, sous-chaîne, accents sur un mot non final, phrases entre guillemets) ; hauteurs de boîte de mots mesurées par PDF.js d'environ 6 à 12 % plus grandes que celles mesurées par PyMuPDF (moteur d'extraction de DocSeeker), sans facteur de calibration (décision) : écart mesuré sur 3 PDF seulement ; pas de fusion des micro-fragments du Rust.
 
@@ -151,7 +185,7 @@ Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 
 - **Non rejouable** sans le corpus local (`/Users/francois/Documents/DocFastExplorer/data/documents`, hors dépôt).
 
 ### Interface et install
-- **Fichiers** : `src/index.ts` (icône de barre supérieure, onglet « docseeker », panneau de paramètres `Setting` depuis J8 : Réindexer, Vider l'index, Diagnostic M0, journal des avertissements, indexation automatique depuis J9), `src/ui/settingsPanel.ts`, `src/settings.ts` (`settings.json`), `i18n/fr_FR.json` (82 clés), `icon.png` et `icon.svg` (`scripts/gen-icon.mjs`).
+- **Fichiers** : `src/index.ts` (icône de barre supérieure, onglet « docseeker », panneau de paramètres `Setting` depuis J8 : Réindexer, Vider l'index, Diagnostic M0, journal des avertissements, indexation automatique depuis J9), `src/ui/settingsPanel.ts`, `src/settings.ts` (`settings.json`), `i18n/fr_FR.json` (149 clés au 2026-11-07 ; les libellés de la vue de recherche et de sa barre ont un repli, `DEFAULT_STRINGS` dans `src/ui/searchView.ts`, quand la clé manque), `icon.png` et `icon.svg` (`scripts/gen-icon.mjs`).
 - **Section « Avancé »** : présente jusqu'à la version 0.2.0. Retirée de l'onglet de recherche en J8 (remplacée par « Ouvrir les paramètres ») ; ses réglages sont dans le panneau de paramètres.
 - **[SiYuan]** : la section « Avancé » affichait la clé brute quand `fr_FR.json` installé était ancien (corrigé en recopiant le fichier). Constat de la version 0.2.0, sans objet après J8.
 
@@ -159,6 +193,11 @@ Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 
 - **Fichiers** : `CHANGELOG.md`, `README.md` (français), `README_en_US.md`, `plugin.json`, `scripts/release.mjs`, `scripts/package.mjs`.
 - **Commits** : `4a83cb0` (préparation), tag `v0.2.0` sur ce commit, release GitHub publiée le 2026-11-05.
 - **Non fait** : `preview.png`, soumission au Marché (`siyuan-note/bazaar`) : aucune trace dans le dépôt.
+
+### Parité avec la recherche SiYuan (J10)
+- **Fichiers** : `src/search/resultOptions.ts` (filtres, huit tris, `sortDocs`, normalisation des options), `src/search/searchController.ts` (filtres avant re-classement ; tri seul sans relance), `src/search/searchSession.ts` (session en mémoire), `src/search/searchHistory.ts` (20 requêtes, dédoublonnées), `src/ui/searchToolbar.ts` (barre d'outils, menus Tri et Groupe, dialogue des filtres, liste des dossiers bornée), `src/ui/keyboardNav.ts` (fonctions pures du clavier), `src/ui/searchView.ts` (champ, cartes, historique, liste à plat de 60 cartes), `src/siyuan/nativeUi.ts` (adaptateur unique des menus et dialogues natifs), `src/siyuan/floatingSearch.ts` (fenêtre flottante), `src/searchTab.ts` (câblage ; `position: "right"` pour l'ouverture à droite), `src/settings.ts` (tri, regroupement, `openMode`, historique), `src/index.ts` (quatre commandes, réglage, transfert vers un onglet, `traceKeys`), `src/ui/pathLabel.ts`, `src/diagnostic/traceKeys.ts`, `src/indexer/loadPdf.ts` (`ensureWorkerSrc`).
+- **Tests** : `tests/unit/search/resultOptions*.test.ts`, `searchController.sort.test.ts`, `searchHistory.test.ts`, `searchSession.test.ts`, `tests/unit/ui/keyboardNav.test.ts`, `searchView.keyboard.test.ts`, `searchView.history.test.ts`, `searchView.group.test.ts`, `searchView.flatLimit.test.ts`, `searchView.floating.test.ts`, `searchToolbar.test.ts`, `tests/unit/siyuan/nativeUi.test.ts`, `floatingSearch.test.ts`, `floatingDialog.test.ts`, `tests/unit/searchTab.floating.test.ts`, `tests/unit/settings.test.ts`, `tests/unit/scripts/devSandbox.*.test.ts`, `tests/unit/diagnostic/traceKeys.test.ts`. Tests de vue en jsdom : ils ne voient ni le rendu ni la mise en page.
+- **Écarts volontaires avec la recherche SiYuan** : pas de pagination à 32 (liste plate à « Afficher plus », 60 cartes), pas de tri par nombre d'occurrences, pas de critères de recherche enregistrés, pas de suppression d'une seule requête de l'historique (le menu natif n'offre que « Supprimer tout l'historique »).
 
 ---
 
@@ -199,20 +238,20 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 
 | Dossier | Rôle |
 |---|---|
-| `src/index.ts` | Plugin : barre supérieure, onglet, panneau de paramètres (`Setting`, depuis J8), câblage réel. Seul fichier qui importe `siyuan` (API plugin). |
+| `src/index.ts` | Plugin : barre supérieure, onglet, commandes, panneau de paramètres (`Setting`, depuis J8), câblage réel. Avec `src/siyuan/nativeUi.ts`, seul fichier qui importe `siyuan` (API plugin) ; `nativeUi.ts` est le seul à importer `Menu` et `Dialog`. |
 | `src/searchTab.ts` | Assemblage de l'onglet de recherche. Tout est injecté, aucun accès direct au noyau ou à `window`. |
 | `src/core/` | Cœur pur : normalisation, codec `.dsx`, BM25, fusion d'index, extraction, manifeste, file, cadrage. Pas de DOM. |
-| `src/search/` | Logique de recherche sans DOM : index partagé, magasin, contrôleur, correspondances, proximité, vignettes (plan et cache). |
-| `src/siyuan/` | Adaptateur noyau : client HTTP (`kernelApi`), stockage des `.dsx` (`petalStore`), découverte, ouverture PDF, rendu PDF.js. |
+| `src/search/` | Logique de recherche sans DOM : index partagé, magasin, contrôleur, correspondances, proximité, vignettes (plan et cache), filtres et tris (`resultOptions`), session et historique (J10). |
+| `src/siyuan/` | Adaptateur noyau : client HTTP (`kernelApi`), stockage des `.dsx` (`petalStore`), découverte, ouverture PDF, rendu PDF.js, menus et dialogues natifs (`nativeUi`), fenêtre flottante (`floatingSearch`, J10). |
 | `src/indexer/` | Orchestrateur d'indexation injectable et chargeur PDF.js. |
-| `src/ui/` | DOM : vue de recherche, chargeur de vignettes, calque de surlignage, CSS. |
-| `src/diagnostic/` | Diagnostic M0 (spike technique), exécuté depuis l'interface. |
-| `tests/unit/` | 54 fichiers Vitest (`npm test`). Alias `siyuan` vers `tests/stubs/siyuan.ts`. |
+| `src/ui/` | DOM : vue de recherche, barre d'outils et dialogue des filtres, clavier (fonctions pures dans `keyboardNav`), chargeur de vignettes, calque de surlignage, CSS. |
+| `src/diagnostic/` | Diagnostic M0 (spike technique), exécuté depuis l'interface ; trace des touches (`traceKeys`, J10). |
+| `tests/unit/` | 77 fichiers Vitest (`npm test`). Alias `siyuan` vers `tests/stubs/siyuan.ts`. |
 | `tests/perf/` | Mesures hors `npm test` (`measure:*`). Lisent des données locales. |
 | `tests/fixtures/` | Jeux de référence : parité FTS5 (BM25, tokenisation) et classement DocSeeker (29 scénarios depuis J11). |
 | `tools/docseeker-ref/` | Harnais Rust qui appelle `search-core` de DocSeeker, utilisé par `gen:ranking-fixture`. |
-| `scripts/` | Paquet (`package.mjs`), release (`release.mjs`), générateurs de fixtures et d'icône. |
-| `i18n/` | `fr_FR.json` (82 clés). Seule langue. |
+| `scripts/` | Paquet (`package.mjs`), release (`release.mjs`), générateurs de fixtures et d'icône, banc d'essai SiYuan jetable (`dev-sandbox.mjs`, `lib/`, J10). |
+| `i18n/` | `fr_FR.json` (149 clés au 2026-11-07). Seule langue. |
 
 ### Frontière : adaptateur SiYuan / cœur pur
 
@@ -243,7 +282,7 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 - **Plusieurs onglets** : `openNewTab: true` dans `src/index.ts` (sinon SiYuan refocalise l'onglet à identifiant fixe).
 - **PDF.js 6.4.299** : pas de `destroy()` sur le `PDFDocumentProxy`, seulement sur `loadingTask` (`src/indexer/loadPdf.ts`, commentaire et test).
 - **Noms NFD (macOS)** : `HEAD /assets/…` répond 404 pour ces noms alors que `GET Range` répond 206. D'où le repli dans `kernelApi.headAsset`.
-- **Navigation aux flèches entre vignettes** : le code existe (`src/ui/searchView.ts`, gestionnaires `keydown`), fonctionne en jsdom, mais ne fonctionne pas dans SiYuan (constat rapporté par l'utilisateur ; cause non identifiée). Non revérifié ici.
+- **Navigation aux flèches entre vignettes (résolu en J10, essayé dans la webapp)** : le défaut venait de la conception, pas de SiYuan. ↓ allait à la carte voisine dans le DOM (une carte à droite, ou la première de la ligne suivante), pas à la carte du dessous. Les flèches atteignaient bien le plugin. Corrigé par une navigation géométrique (`src/ui/keyboardNav.ts`, `nextCardIndex`) et des touches supplémentaires. Non revérifié dans l'application de bureau.
 - **Ancien `i18n/fr_FR.json`** : une clé absente de `fr_FR.json` s'affiche brute (constat sur la section « Avancé », retirée en J8). Recopier le fichier à chaque build (`npm run package` puis copie).
 - **Test de durée** : `tests/unit/extract.test.ts` (ligne ~269) impose une durée inférieure à 20 s. Le rapport « intermittent sous charge » n'a pas été vérifié ici.
 - **Commandes enchaînées** : `npm test | grep … && git commit` ne s'arrête pas sur un test rouge. Lire le résultat avant de committer.
@@ -262,7 +301,7 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 2. **Clos en J11 (code, non validé dans SiYuan)** : la taille de page est stockée dans le `.dsx` v2 ; bonus de police et tri des pages par police sont en place. Écart restant : la taille est approchée par la hauteur des mots (voir « Dettes ouvertes par J11 »).
 3. **Clos en J11 (code)** : les dimensions de page sont stockées dans le `.dsx` v2 et utilisées par la proximité. Le repli A4 (`ASSUMED_PAGE_WIDTH_PT`, `ASSUMED_PAGE_HEIGHT_PT`) ne sert plus qu'aux index v1 et aux pages aberrantes. Test : fixture `page-letter`, `page-paysage`.
 4. **Pause et reprise absentes de l'interface (code mort).** `src/indexer/indexer.ts` expose `pause()` et `resume()`, `src/core/queue.ts` aussi, mais aucun bouton ne les appelle : seuls les tests appellent `indexer.pause()` et `indexer.resume()` (`tests/unit/indexer/indexer.test.ts`). Les clés `pause`, `resume`, `indexingPaused` ne sont plus dans `i18n/fr_FR.json` (retirées en J9). Le CHANGELOG 0.2.0 reconnaît désormais que la pause/reprise n'a pas d'interface (sa note indique l'annonce « à tort »). Décider : ajouter les boutons ou retirer le code (§6, étape 2).
-5. **Réglages partiels** : le panneau (J8, J9) gère Réindexer, Vider l'index, le diagnostic, le journal, l'interrupteur d'indexation automatique et sa fréquence (5, 15 ou 60 minutes), persistés dans `settings.json` (`src/settings.ts`). Manquent les dossiers surveillés et la taille des vignettes (cahier des charges F6).
+5. **Réglages partiels** : le panneau (J8, J9) gère Réindexer, Vider l'index, le diagnostic, le journal, l'interrupteur d'indexation automatique et sa fréquence (5, 15 ou 60 minutes), et depuis J10 le mode d'ouverture de la recherche (onglet ou fenêtre flottante), persistés dans `settings.json` (`src/settings.ts`). Manquent les dossiers surveillés et la taille des vignettes (cahier des charges F6).
 6. **Indexation dans le thread principal** : pas de Worker d'indexation. Le cahier demande que l'interface ne soit jamais bloquée. Non mesuré dans SiYuan.
 7. **Pas de grille virtualisée** : toutes les cartes du document sont dans le DOM (au plus 200 pages par document). Pas de file LIFO pour les vignettes (le plan la prévoyait).
 8. **Latence réelle du re-classement** (lecture HTTP des `.dsx`) : non mesurée, y compris pour une requête d'un seul mot (depuis J11). Ressenti positif en webapp de bureau, pas de chiffre.
@@ -282,13 +321,14 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 18. Un blob de boîtes corrompu n'est détecté qu'à la lecture de la page : des vignettes peuvent manquer, sans erreur globale.
 
 ### Documentation et process
-19. **`src/siyuan/openPdf.ts`** : l'en-tête dit « none of this is verified yet » et liste six points à valider. La fonctionnalité a été validée dans SiYuan ([SiYuan] section 2). **Mettre à jour cet en-tête.**
+19. **`src/siyuan/openPdf.ts`** : en-tête mis à jour (constat du 2026-11-07) : l'ouverture à la page est dite vérifiée dans SiYuan 3.8.9, et quatre points restent à valider, dont l'ouverture à droite (`position: "right"`, J10). Le point 1 de cette liste est à relire après la validation de bureau.
 20. **`CHANGELOG.md` 0.2.0** : la note de 0.2.0 reconnaît que pause/reprise n'a pas d'interface (point 4) ; la section « Non publié » n'annonce pas de pause. Rien à corriger avant la prochaine release sur ce point, sauf si la pause est ajoutée.
 21. **`release:check`** : échoue sur le tag existant. Normal après publication ; il faut incrémenter la version avant la release suivante.
 22. **`preview.png`** absent (requis pour le Marché).
 23. **Pas de CI** : aucun `.github/`. Les vérifications ne tournent que sur la machine du développeur.
 24. **Pas de lint** : aucun script `lint` ni ESLint, alors que le plan initial le prévoyait.
-25. **Couverture** : 98,62 % des lignes (mesure du 2026-11-06 ; instructions 97,42 %, branches 92,11 %, fonctions 96,24 %).
+25. **Couverture** : 98,81 % des lignes (mesure du 2026-11-07 ; instructions 97,68 %, branches 93,44 %, fonctions 96,67 %).
+26. **`npm test` et `npm run test:coverage` sortent en code 1 (R12)** : un test de `tests/unit/searchTab.floating.test.ts` (ligne 378, « calque en échec détecté ») crée `Promise.reject(...)` dans `mockResolvedValue` avant d'attacher le gestionnaire ; la rejection est signalée comme erreur non gérée. Les 3 115 tests passent. Constat du 2026-11-07, reproduit sur le fichier seul. À corriger par le test lui-même (création de la promesse à la demande), sans masquer l'erreur.
 
 ### Dettes ouvertes par J11 (classement phase 2, format v2, migration)
 - **Annulation non propagée dans le décodeur** : `src/core/codec/decode.ts` n'accepte pas d'`AbortSignal`. L'annulation n'est vérifiée qu'entre deux décodages (`proximityRanker.ts`). À corriger : passer le signal au décodeur.
@@ -302,25 +342,41 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 - **Pas de re-classement pendant l'indexation partielle** : choix. Le BM25 partiel est publié tel quel ; le re-classement a lieu à la fin du chargement.
 - **Validations manuelles SiYuan restantes** : migration d'une bibliothèque réelle ; recherche pendant la migration ; ordre des résultats sur une requête d'un mot ; latence perçue.
 
+### Dettes ouvertes par J10 (parité avec la recherche SiYuan)
+- **Rendu non vu** : thème sombre, largeur de 320 px, surlignage dans le PDF ouvert à droite. Pas de capture d'écran possible dans le cycle (fenêtre du navigateur intégré minimisée) ; à voir dans l'application de bureau.
+- **Ouverture à droite** : essayée dans la webapp (Ctrl/⌘/Alt+Entrée, Alt+clic) ; le surlignage dans le volet n'est pas contrôlé. `openPdf.ts` résout le panneau à partir de `panelElement` du Tab renvoyé par `openTab` ; si ce n'est pas exploitable, un avertissement est tracé.
+- **Latence du re-classement à un mot** : 28 à 199 ms mesurés sur 38 PDF réels du banc d'essai. Ce n'est pas une mesure sur une grosse bibliothèque.
+- **Annulation non propagée dans le décodeur** : même dette qu'en J11 (`src/core/codec/decode.ts`).
+- **Historique** : pas de suppression d'une seule requête (Maj+Suppr retiré) : le menu natif n'offre que « Supprimer tout l'historique ». Pas de critères de recherche enregistrés.
+- **Liste plate** : pas de pagination à 32 comme la recherche native (60 cartes puis « Afficher plus »). Pas de tri par nombre d'occurrences (le tri « Pages correspondantes » compte les pages). Liste de dossiers bornée à 500 entrées : au-delà, les dossiers ne sont pas proposés (un message indique combien sont masqués).
+- **Libellé natif** : SiYuan affiche « Collapse » en anglais ; le plugin affiche « Réduire ».
+- **Trace des touches** : le bouton « Tracer les touches » cible le **dernier** onglet de recherche visible (`src/index.ts`, `startKeyTrace` : `roots.at(-1)`), pas le premier (non vérifié dans l'interface : quel élément la fenêtre flottante occupe dans cet ordre).
+- **Raccourcis** : Alt+↓ peut être capté par macOS avant le plugin. Le chemin des commandes dans les paramètres de SiYuan (onglet « Raccourci ») n'est pas vérifié.
+- **Tactile** : non testé. **Lecteur d'écran** : non vérifié pendant J10.
+
 ---
 
 ## 6. Prochaines étapes priorisées
 
 Chaque étape a un critère de fin. L'ordre est une proposition.
 
+0. **Faire sortir `npm test` avec le code 0 (R12, §5 point 26).**
+   - Fin : `npm test` et `npm run test:coverage` sortent en code 0 sans erreur non gérée, sans masquer l'erreur ; le test fautif est corrigé et couvert.
+0 bis. **Valider J11 et J10 dans l'application de bureau et dans le `~/SiYuan` de l'utilisateur** (liste à cocher, §1 bis), après accord de l'utilisateur et sauvegarde.
+   - Fin : chaque case de la liste est cochée ou marquée en échec, avec date et lieu (bureau ou `~/SiYuan`) ; les échecs ouvrent des tâches.
 1. **Revalider dans SiYuan le cadrage multi-termes des vignettes** (`13b3c55`, non revalidé).
    - Fin : une requête à deux mots montre des vignettes cadrées sur la zone qui contient les deux mots, dans SiYuan 3.8.9, après un rebuild et une désactivation/réactivation du plugin.
 2. **Décider de la pause/reprise** : ajouter les deux boutons ou retirer le code mort (`pause()`/`resume()` dans `src/indexer/indexer.ts` et `src/core/queue.ts`, sans appelant hors tests).
    - Fin : un bouton « Pause » qui arrête la file, un bouton « Reprendre » qui la relance, testés (`tests/unit/indexer/indexer.test.ts`) et vérifiés dans SiYuan ; ou bien le code mort est retiré, avec les tests associés. Dans les deux cas, la note de 0.2.0 et la section « Non publié » du CHANGELOG décrivent le comportement réel.
-3. **Documents périmés** : mettre à jour l'en-tête de `src/siyuan/openPdf.ts` (il dit « none of this is verified yet » alors que la fonction est validée dans SiYuan).
+3. **Documents périmés** : fait pour `src/siyuan/openPdf.ts` (en-tête mis à jour le 2026-11-07, voir §5 point 19). Reste à relire après la validation de bureau.
    - Fin : aucun commentaire ne dit « non vérifié » pour une fonction validée. (`removeStaleTmp()` est câblé au démarrage depuis J9.)
 4. **Phase 2 du classement** : **code fait (J11), validation SiYuan à faire.** Taille de page dans le `.dsx` v2 (`DSX_FORMAT_VERSION = 2`), bonus de police (plafond 400, seuil 10 pt), tri des pages par police, migration automatique des index v1.
    - Fait : `tests/fixtures/docseeker-ranking.json` régénérée avec le moteur Rust (29 scénarios, dont 12 nouveaux) ; parité verte ; `npm test` et `npm run typecheck` verts (2026-11-06).
    - Reste : une migration de la bibliothèque réelle dans SiYuan passe sans erreur, avec constat daté dans cette section.
 5. **Lacunes d'appariement** : sous-chaîne (≥ 4 caractères), mot d'un caractère, expressions entre guillemets.
    - Fin : tests de parité ajoutés pour chaque cas, avec décision documentée dans le README (ce qui reste hors périmètre).
-6. **Navigation clavier dans SiYuan** : diagnostiquer pourquoi les flèches ne fonctionnent pas dans SiYuan (hypothèse non vérifiée : SiYuan capture les touches avant le plugin).
-   - Fin : les flèches changent le focus entre cartes dans SiYuan 3.8.9, ou le comportement de repli (Tab) est documenté.
+6. **Clavier dans l'application de bureau** : les flèches (défaut R6 résolu en J10, essayé dans la webapp), Alt+↓ et Ctrl/⌘+Entrée restent à vérifier sur l'application de bureau. Alt+↓ peut être capté par macOS.
+   - Fin : les touches de la liste à cocher sont vérifiées dans l'application de bureau, avec constat daté.
 7. **Mesure de latence sur serveur Docker** : temps de chargement des `.dsx` et du re-classement.
    - Fin : un chiffre (médiane, p95) pour une requête à deux mots sur le corpus de 47 PDF, publié dans ce fichier.
 8. **`preview.png` et soumission au Marché** (`siyuan-note/bazaar`).
@@ -339,11 +395,16 @@ Chaque étape a un critère de fin. L'ordre est une proposition.
 ```bash
 # Installation et vérifications (à lancer avant chaque commit)
 npm install
-npm test                       # 1 911 tests, 54 fichiers (Vitest, tests/unit)
+npm test                       # 3 115 tests, 77 fichiers (Vitest, tests/unit) ; code de sortie 1 tant que R12 n'est pas corrigé
 npm run typecheck              # tsc --noEmit (src), puis tsconfig.test.json
 npm run test:coverage          # couverture, seuil 80 % (src/**)
 npm run package                # vite build -> dist/index.js, puis package.zip
 npm run release:check          # vérifie une release SANS rien publier (tag, version, CHANGELOG, tests, zip)
+
+# Banc d'essai SiYuan jetable (J10) : noyau sur le port 6807, espace marqué, jamais ~/SiYuan
+npm run build && npm run sandbox -- start     # --dir D, --port P, --pdfs N (8 par défaut) ; ouvrir l'URL affichée
+npm run build && npm run sandbox -- install   # réinstalle le bundle, puis F5 dans le navigateur
+npm run sandbox -- status | stop | reset      # reset ne supprime que le dossier marqué .docseeker-sandbox
 
 # Mesures (hors npm test, lisent des données locales en lecture seule)
 npm run measure:memory         # mémoire de l'index décodé ; DSX_DIR, COPIES=20 pour extrapoler
@@ -379,7 +440,7 @@ node scripts/gen-fts5-tokens-fixture.mjs   # tokenisation de référence
 - **Skills** : `ecc:coding-standards`, `ecc:tdd-workflow`, `ecc:verification-loop` à chaque tâche de code.
 - **Commit seulement si** `npm run typecheck` et `npm test` sont verts.
 - **Push** : `git push origin main`. Si GitHub refuse la clé, ne pas contourner : signaler et pousser plus tard. Vérifier `git log origin/main..HEAD`.
-- **Identité git** : passée à la volée à la commande `git commit`, sans modifier la configuration globale. Les 34 commits existants portent la ligne `Co-Authored-By: Claude Sonnet 5.5`.
+- **Identité git** : passée à la volée à la commande `git commit`, sans modifier la configuration globale. Les 47 commits existants (au 2026-11-07) portent la ligne `Co-Authored-By: Claude Sonnet 5.5`.
 - **Données SiYuan** : ne jamais modifier sans demander.
 - **Documentation** : pas de fichiers de rapport créés à la volée. Ce fichier et `PLAN_IMPLEMENTATION.md` sont mis à jour à chaque jalon.
 

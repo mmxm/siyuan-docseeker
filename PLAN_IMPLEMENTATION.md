@@ -1,6 +1,6 @@
 # Plan d'implémentation — Plugin SiYuan « DocSeeker »
 
-> Statut au 2026-11-06 : **v0.2.0 publiée** (tag `v0.2.0`, release GitHub du 2026-11-05). **Phase 2 du classement (R4, jalon J11) terminée côté code, non commitée, validation manuelle dans SiYuan à faire** (voir §4).
+> Statut au 2026-11-07 : **v0.2.0 publiée** (tag `v0.2.0`, release GitHub du 2026-11-05). **Phase 2 du classement (R4, J11, commit `148ee09`) : terminée côté code, validation manuelle dans SiYuan à faire.** **Parité avec la recherche SiYuan (J10, commits `3321227` à `63021dd`) : terminée côté code, essayée dans la webapp de SiYuan 3.8.9 sur un espace de test, non validée dans l'application de bureau ni dans le `~/SiYuan` de l'utilisateur** (voir §2 et §4). `npm test` compte 3 115 tests verts, mais la commande sort en erreur (une promesse rejetée non gérée, voir §4 R12).
 > Ce document dit ce qui est fait, ce qui ne l'est pas, et pourquoi le réel diffère du plan initial du 2026-11-03.
 > Chaque statut a été vérifié dans le code, les tests, `git log` ou `gh`. Ce qui n'a pas pu l'être est marqué **non vérifié**.
 > Documents liés : `AVANCEMENT.md` (état détaillé, architecture, dette, commandes), `CAHIER_DES_CHARGES.md` (le quoi), `CLAUDE.md` (règles de travail), `CHANGELOG.md`.
@@ -29,18 +29,19 @@
 
 ```bash
 npm install            # non vérifié depuis zéro ; node_modules est présent sur la machine de référence
-npm test               # 1 911 tests attendus (54 fichiers), tous verts (vérifié le 2026-11-06)
-npm run typecheck      # sans erreur (vérifié)
+npm test               # 3 115 tests (77 fichiers) verts, mais code de sortie 1 : erreur non gérée (R12). Vérifié le 2026-11-07
+npm run typecheck      # sans erreur (vérifié le 2026-11-07)
 npm run package        # dist/index.js et package.zip (vérifié)
 ```
 
 Pour voir le plugin dans SiYuan : copier les fichiers listés dans `AVANCEMENT.md` section 7, désactiver puis réactiver le plugin, ouvrir l'icône de recherche de la barre supérieure, puis ouvrir les paramètres du plugin (bouton « Ouvrir les paramètres » de l'onglet, ou engrenage de DocSeeker) et lancer « Réindexer ». Ne pas modifier les données de SiYuan sans l'accord de l'utilisateur.
 
-### Trois premières tâches suggérées
+### Premières tâches suggérées
 
+0. **Faire sortir `npm test` avec le code 0.** Un test de `tests/unit/searchTab.floating.test.ts` (ligne 378) crée un `Promise.reject` avant d'y attacher de gestionnaire : Vitest le signale comme erreur non gérée (« Errors 1 error ») et sort en code 1, alors que les 3 115 tests passent. Fin : `npm test` sort en code 0, sans rien masquer.
 1. **Trancher la pause et la reprise.** `pause()` et `resume()` existent dans `src/indexer/indexer.ts` et `src/core/queue.ts`, mais aucun bouton ne les appelle (seuls les tests les appellent), et les clés i18n correspondantes ont été retirées en J9. Fin : soit deux boutons « Pause » et « Reprendre » dans le panneau de paramètres, testés et validés dans SiYuan, soit le code mort est retiré avec ses tests. La note de 0.2.0 et la section « Non publié » du CHANGELOG décrivent le comportement réel.
 2. **Revalider le cadrage multi-termes des vignettes dans SiYuan** (commit `13b3c55`, jamais validé à la main). Fin : constat daté dans `AVANCEMENT.md` section 2. Cette étape demande l'accord et la présence de l'utilisateur.
-3. **Valider J11 dans SiYuan** (migration des index v1, classement par taille de police) sur une bibliothèque réelle, après copie du bundle (non copié à ce jour). Fin : constat daté dans `AVANCEMENT.md` section 1 bis. Cette étape demande l'accord et la présence de l'utilisateur.
+3. **Valider J11 et J10 dans l'application de bureau et dans le `~/SiYuan` de l'utilisateur** (migration des index v1, classement par taille de police, filtres, tris, clavier, fenêtre flottante, menus natifs), après copie du bundle (non copié à ce jour). Fin : la liste à cocher de `AVANCEMENT.md` section 1 bis est cochée, avec date. Cette étape demande l'accord et la présence de l'utilisateur.
 
 ---
 
@@ -48,9 +49,9 @@ Pour voir le plugin dans SiYuan : copier les fichiers listés dans `AVANCEMENT.m
 
 Numérotation : M0 à M5 comme dans le plan initial. Le « jalon 6 » (re-classement par proximité) est ainsi nommé dans le commit `dcdb962`. La publication est notée M7 : le cahier des charges (§7) l'appelle « M6 ».
 
-Dates : les 34 commits sont du 2026-11-04 (22) ou du 2026-11-05 (12). Premier commit `cfa0773`.
+Dates : les 47 commits (au 2026-11-07) sont du 2026-11-04 (22), du 2026-11-05 (13), du 2026-11-06 (10) ou du 2026-11-07 (2). Premier commit `cfa0773`. Le détail de J7, J8, J9 et J11 est dans `AVANCEMENT.md` (§1 bis et §2) ; J10 figure dans le tableau ci-dessus.
 
-Après M7, les jalons de la feuille de route (`AVANCEMENT.md` §1 bis) sont J7 (recherche sur Entrée), J8 (panneau de paramètres), J9 (indexation automatique), J11 (classement phase 2, format `.dsx` v2) puis J10 (parité avec la recherche SiYuan). J11 est terminé côté code, non commité, et attend sa validation manuelle dans SiYuan.
+Après M7, les jalons de la feuille de route (`AVANCEMENT.md` §1 bis) sont J7 (recherche sur Entrée), J8 (panneau de paramètres), J9 (indexation automatique), J11 (classement phase 2, format `.dsx` v2) puis J10 (parité avec la recherche SiYuan). J11 (`148ee09`) et J10 (`3321227` à `63021dd`) sont terminés côté code et committés ; leur validation manuelle dans l'application de bureau reste à faire.
 
 | Jalon | Contenu réalisé | Commits clés (date) | Validation | Statut |
 |---|---|---|---|---|
@@ -62,6 +63,7 @@ Après M7, les jalons de la feuille de route (`AVANCEMENT.md` §1 bis) sont J7 (
 | **M5** Finitions | Index partagé au démarrage, pages dépliables, libération PDF.js, onglets multiples, mesures sur 47 PDF | `5119cf5`, `e2b78b0`, `aee4605`, `35f3255`, `81fcd90`, `d5946bf` (04–05/11) | SiYuan : onglets multiples et Plus/Replier validés (`35f3255`). Mesures faites sous Node | Partiel : pause et reprise absentes de l'interface (§3). Réglages (J8) et indexation automatique (J9) faits, non validés dans SiYuan |
 | **M6** Re-classement par proximité, phase 1 | Occurrences géométriques, bonus multi-mots, tri des 5 premières pages, fenêtres de 15 documents (jusqu'à 60), grâce de 300 ms, parité avec le moteur Rust | `959c71c`, `80a39d7`, `218becd` (05/11), validation `dcdb962` | SiYuan validé le 05/11 ; fixture de 17 scénarios générée par le vrai moteur Rust | Fait (phase 1) |
 | **M7** Publication 0.2.0 | README FR et EN, icône, CHANGELOG, `scripts/release.mjs` (`release:check`), tag et release GitHub | `4a83cb0` (05/11), tag `v0.2.0` sur ce commit | `gh release view v0.2.0` : release publiée, `package.zip` de 79 719 octets | Fait ; Marché à faire |
+| **J10** Parité avec la recherche SiYuan (après M7) | Étape 0 : banc d'essai `npm run sandbox`. 10b : filtres (dossier, nom, pages, date). 10c : tris, regroupement, mémorisation. 10e : clavier, historique, ouverture à droite, commandes sans raccourci. 10f : barre d'outils et menus natifs. 10d : fenêtre flottante, réglage onglet ou fenêtre | `3321227`, `93ad3c8`, `c8cc7b4`, `cb504ec`, `eecc374`, `63021dd` (06/11 et 07/11) | Essayé dans la webapp de SiYuan 3.8.9 sur un noyau jetable, avec 38 PDF de test copiés dans l'espace jetable. Non validé dans l'application de bureau ni dans `~/SiYuan`. Rendu visuel, thème sombre, 320 px, surlignage dans le PDF non vus. | Fait côté code ; validation à faire |
 
 ---
 
@@ -86,7 +88,7 @@ Après M7, les jalons de la feuille de route (`AVANCEMENT.md` §1 bis) sont J7 (
 | Ouverture et surlignage | Calque ou visionneuse propre (décision D1) | Calque dans le visualiseur natif, validé dans SiYuan. La visionneuse propre n'a pas été nécessaire. | — |
 | Mobile | Hors v1 | Hors v1. `plugin.json` déclare `desktop` et `browser-desktop`. | Décision. |
 | Classement | Temps 1 : bonus multi-mots et tri par mots distincts. Temps 2 : taille de police | Phase 1 faite (proximité géométrique ; page A4 supposée de 595 pt pour les index v1 et les pages aberrantes). Phase 2 faite en code (J11) : bonus de police (seuil 10, multiplicateur 25, plafond 400), tri des pages à 4 clés, taille de page stockée dans le `.dsx` v2. Non validée dans SiYuan. | Découpage en deux temps. |
-| Couverture | 80 % sur `src/core` | Seuil de 80 % sur `src/**` (`vitest.config.ts`). Mesure du 2026-11-06 : 98,62 % des lignes, 97,42 % des instructions, 92,11 % des branches, 96,24 % des fonctions. | Élargi. |
+| Couverture | 80 % sur `src/core` | Seuil de 80 % sur `src/**` (`vitest.config.ts`). Mesure du 2026-11-07 : 98,81 % des lignes, 97,68 % des instructions, 93,44 % des branches, 96,67 % des fonctions. | Élargi. |
 | Lint | `npm run lint` | Absent : aucun script `lint`, aucun ESLint dans `package.json` | Non réalisé. |
 | Marché et `preview.png` | M6 optionnel | Non fait | À faire (§4 R8). |
 
@@ -100,10 +102,11 @@ L'ordre et le contenu sont ceux de `AVANCEMENT.md` section 6. Un jalon est ferm�
 |---|---|---|
 | **R1** | Revalider dans SiYuan le cadrage multi-termes des vignettes (`13b3c55`), la réindexation à chaud, le centrage sur la zone, et plusieurs onglets après rebuild | Constat daté pour chaque point, dans `AVANCEMENT.md` §2. Une requête à deux mots montre des vignettes cadrées sur la zone qui contient les deux mots. |
 | **R2** | Pause et reprise dans l'interface, ou suppression du code mort. Mise en cohérence du CHANGELOG | Soit deux boutons « Pause » et « Reprendre » dans le panneau de paramètres, testés (`tests/unit/indexer/indexer.test.ts`) et validés dans SiYuan ; soit `pause()` et `resume()` retirés. Dans les deux cas, le CHANGELOG décrit le comportement réel. |
-| **R3** | Robustesse des écritures et documents périmés : en-tête de `src/siyuan/openPdf.ts` à jour (`removeStaleTmp()` est câblé au démarrage depuis J9) | Un `.bak` orphelin est restauré ou supprimé au démarrage, couvert par un test (fait en J9 : `tests/unit/index.test.ts`, `tests/unit/siyuan/petalStore.test.ts`). Aucun commentaire ne dit « non vérifié » pour une fonction validée : reste `openPdf.ts`. |
-| **R4** | Phase 2 du classement : taille de police dans le `.dsx`, bonus de taille (plafond 400, seuil 10 pt), tri des occurrences par police. Nouvelle version de format (`DSX_FORMAT_VERSION = 2`) et réindexation | **Code fait (J11), validation SiYuan à faire.** Fait : format v2 (tailles de page, plafond 20 000 pt, page aberrante repliée sur A4 avec avertissement), bonus de police, tri des pages à 4 clés, re-classement aussi pour un seul mot, migration automatique des index v1 (`indexVersion`, `EXTRACTOR_VERSION = docseeker-extract-2`). Fixture régénérée avec le moteur Rust (29 scénarios, les 17 anciens inchangés ; `KNOWN_PAGE_ORDER_GAPS` supprimé). Parité verte. **Reste** : réindexation de la bibliothèque réelle dans SiYuan (non faite) ; divergences connues : seules 5 pages par document sont mesurées (le Rust mesure tout le document), hauteurs de boîte PDF.js plus grandes d'environ 6 à 12 % que PyMuPDF (sans calibration, décision). |
+| **R3** | Robustesse des écritures et documents périmés : en-tête de `src/siyuan/openPdf.ts` à jour (`removeStaleTmp()` est câblé au démarrage depuis J9) | Un `.bak` orphelin est restauré ou supprimé au démarrage, couvert par un test (fait en J9 : `tests/unit/index.test.ts`, `tests/unit/siyuan/petalStore.test.ts`). Aucun commentaire ne dit « non vérifié » pour une fonction validée : `openPdf.ts` mis à jour le 2026-11-07 (points restants à valider listés dans l'en-tête). |
+| **R4** | Phase 2 du classement : taille de police dans le `.dsx`, bonus de taille (plafond 400, seuil 10 pt), tri des occurrences par police. Nouvelle version de format (`DSX_FORMAT_VERSION = 2`) et réindexation | **Code fait et committé (J11, `148ee09`), validation SiYuan à faire.** Fait : format v2 (tailles de page, plafond 20 000 pt, page aberrante repliée sur A4 avec avertissement), bonus de police, tri des pages à 4 clés, re-classement aussi pour un seul mot, migration automatique des index v1 (`indexVersion`, `EXTRACTOR_VERSION = docseeker-extract-2`). Fixture régénérée avec le moteur Rust (29 scénarios, les 17 anciens inchangés ; `KNOWN_PAGE_ORDER_GAPS` supprimé). Parité verte. **Reste** : réindexation de la bibliothèque réelle dans SiYuan (non faite) ; divergences connues : seules 5 pages par document sont mesurées (le Rust mesure tout le document), hauteurs de boîte PDF.js plus grandes d'environ 6 à 12 % que PyMuPDF (sans calibration, décision). |
 | **R5** | Lacunes d'appariement : sous-chaîne (≥ 4 caractères), mot d'un caractère, expressions entre guillemets | Un test de parité par cas. Chaque cas est traité ou documenté dans le README comme hors périmètre. |
-| **R6** | Navigation clavier dans SiYuan (flèches entre vignettes) | Les flèches déplacent le focus entre cartes dans SiYuan 3.8.9, ou le comportement de repli est documenté. |
+| **R6** | Navigation clavier dans SiYuan (flèches entre vignettes) | **Résolu côté code (J10, `cb504ec`) et essayé dans la webapp de SiYuan 3.8.9.** Cause : la flèche Bas allait à la carte voisine du DOM, pas à la carte du dessous ; les flèches atteignaient bien le plugin. Corrigé par une navigation géométrique (↑/↓ par ligne, ←/→, Début/Fin, Page précédente/suivante). Reste : constat dans l'application de bureau, et Alt+↓ peut être capté par macOS. |
+| **R12** | `npm test` sort en code 1 alors que tous les tests passent | Une promesse rejetée non gérée dans `tests/unit/searchTab.floating.test.ts` (test « calque en échec détecté », ligne 378 : `Promise.reject` créé avant l'attachement du gestionnaire). Constat du 2026-11-07 : Vitest « Errors 1 error », code de sortie 1, `npm run test:coverage` pareil. Fin : le test attache le gestionnaire avant le rejet (ou crée la promesse à la demande) ; `npm test` et `npm run test:coverage` sortent en code 0. |
 | **R7** | Mesure de latence sur serveur Docker (lecture des `.dsx`, re-classement) | Médiane et p95 pour une requête à deux mots sur le corpus de 47 PDF, publiées dans `AVANCEMENT.md`. |
 | **R8** | `preview.png` et soumission au Marché (`siyuan-note/bazaar`) | `preview.png` dans le dépôt, PR ouverte sur le dépôt Bazaar, lien noté dans `AVANCEMENT.md`. |
 | **R9** | Réglages restants : dossiers surveillés, taille des vignettes. (Faits : indexation automatique et sa fréquence, vider l'index, J8 et J9) | Chaque réglage restant est persisté dans `settings.json`, testé et visible dans le panneau de paramètres. |

@@ -14,7 +14,15 @@
 - Format d'index `.dsx` version 2 (taille des pages). Les index créés par la version précédente sont mis à jour automatiquement, une fois, PDF par PDF : l'ancien index reste utilisable pendant la mise à jour (statut « Mise à jour de l'index »). Cette mise à jour relit donc chaque PDF une fois ; son coût sur une grosse bibliothèque n'est pas mesuré.
 - Une page aux dimensions aberrantes est ramenée au format A4 avec un avertissement dans le journal ; le PDF reste indexé.
 - Attention : un `.dsx` version 2 n'est pas lisible par la version 0.2.0 du plugin, à ne pas faire cohabiter sur le même dossier de SiYuan.
-- Classement de référence : fixture régénérée avec le moteur Rust de DocSeeker (29 scénarios).
+- Filtres des résultats (bouton « Filtres ») : dossier, avec ou sans sous-dossiers ; nom du document ; nombre de pages minimum et maximum ; date de modification. Les filtres ne sont pas conservés d'une session à l'autre.
+- Tri des résultats (menu « Plus », « Tri ») : pertinence, date de modification, nom, chemin, nombre de pages correspondantes.
+- Résultats regroupés par document, ou liste de pages à plat (60 pages, puis « Afficher plus »). Boutons « Élargir » et « Réduire » pour les documents. Le tri et le regroupement sont mémorisés.
+- Clavier dans les résultats : flèches haut et bas pour passer d'une vignette à l'autre, flèches gauche et droite, Début et Fin, Page précédente et Page suivante pour changer de document, Entrée pour ouvrir le PDF. Ctrl+Entrée (⌘+Entrée sur Mac), Alt+Entrée ou Alt+clic ouvre le PDF à droite. Échap revient au champ de recherche sans le vider.
+- Historique des 20 dernières recherches : Alt+↓ dans le champ, ou l'icône à droite du champ. Il peut être vidé.
+- La barre d'outils et les menus de la recherche sont ceux de SiYuan (icônes, menus, dialogue des filtres). Une croix dans le champ efface la recherche.
+- Fenêtre flottante, au choix dans les paramètres (« Ouverture de la recherche ») ; l'onglet reste le réglage par défaut. La fenêtre a la même taille que la recherche de SiYuan. Ouvrir un PDF la ferme ; à la réouverture, la dernière recherche est relancée avec ses options. Un bouton permet d'ouvrir la recherche dans un nouvel onglet.
+- Trois nouvelles commandes SiYuan : « Rechercher dans les PDF (fenêtre flottante) », « Rechercher dans les PDF (onglet) » et « Aller au champ de recherche PDF ». Aucune n'a de raccourci par défaut : un raccourci se choisit dans les paramètres de SiYuan.
+- Quand le tri n'est pas celui de la pertinence, le statut indique « Pages classées par proximité et taille de police ».
 
 ## 0.2.0 — 2026-11-05
 

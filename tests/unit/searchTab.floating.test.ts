@@ -375,7 +375,14 @@ describe("ouverture d'un PDF depuis la fenêtre flottante", () => {
     const f = floatingDeps();
     const notify = vi.fn();
     const h = harness({ floating: f, notify });
-    h.openPdfAtPage.mockResolvedValue({ dispose: vi.fn(), ready: Promise.reject(new Error("ready KO")) });
+    // `ready` est lu à la demande : une promesse rejetée créée dès le montage du mock serait signalée par
+    // Vitest comme rejet non géré (le code de production n'y attache son gestionnaire qu'après `await`).
+    h.openPdfAtPage.mockResolvedValue({
+      dispose: vi.fn(),
+      get ready() {
+        return Promise.reject(new Error("ready KO"));
+      },
+    });
     const tab = mountSearchTab(h.host, h.deps);
     await flush();
     await submitQuery(h.host, "chat");
