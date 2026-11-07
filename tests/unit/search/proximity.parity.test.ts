@@ -57,7 +57,7 @@ const fixture = JSON.parse(
 
 type Matching = { match: (token: string) => boolean; indexOf: (token: string) => number; termCount: number };
 
-/** Notre appariement : égalité, préfixe pour le dernier mot (queryMatch.ts) ; termes = mots distincts. */
+/** Notre appariement : égalité, préfixe (dernier mot), sous-chaîne dès 3 caractères (queryMatch.ts, termMatch.ts) ; termes = mots distincts. */
 function ourMatching(query: string): Matching {
   return {
     match: makeTermMatcher(query),
@@ -85,7 +85,7 @@ function rustMatching(terms: readonly string[]): Matching {
  * rejouent le pipeline avec l'appariement Rust (pour valider quand même groupOccurrences & co.), et la divergence
  * d'appariement elle-même est caractérisée plus bas (KNOWN_GAPS).
  */
-const RUST_MATCHING_SCENARIOS = new Set(["mot-un-caractere", "prefixe-accents-sous-chaine"]);
+const RUST_MATCHING_SCENARIOS = new Set(["mot-un-caractere"]);
 /** Scénarios non rejouables : phrases entre guillemets, non gérées par notre appariement. */
 const SKIPPED_SCENARIOS = new Set(["phrase-et-mot"]);
 const toBox = (w: FxWord): WordBox => ({ x: w.x, y: w.y, width: w.width, height: w.height });
@@ -319,12 +319,14 @@ describe("known gaps with the Rust engine", () => {
     expect(sc.expected.results[0]?.relevanceScore).toBe(455);
   });
 
-  it("prefixe-accents-sous-chaine: we require equality for non-last words, so 'eleves' does not match 'eleve'", () => {
+  it("prefixe-accents-sous-chaine: l'ecart avec le Rust est comble (sous-chaine desormais appariee)", () => {
     const sc = byName("prefixe-accents-sous-chaine");
-    const accents = analyse(sc.documents[0] as FxDoc, ourMatching(sc.query));
-    expect(accents.multiBonus).toBe(0);
-    const substring = analyse(sc.documents[1] as FxDoc, ourMatching(sc.query));
-    expect(substring.multiBonus).toBe(0); // 'souscontrat' (sous-chaîne) non apparié ; Rust : +5000
+    const ours = ourMatching(sc.query);
+    const rust = rustMatching(sc.terms);
+    for (const doc of sc.documents) {
+      expect(analyse(doc, ours).multiBonus, doc.title).toBe(analyse(doc, rust).multiBonus);
+    }
+    expect(analyse(sc.documents[1] as FxDoc, ours).multiBonus).toBe(5000); // 'souscontrat'
   });
 
   it("phrase-et-mot: quoted phrases are plain words for us, so the disordered doc B wrongly gets the bonus", () => {

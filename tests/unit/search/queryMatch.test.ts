@@ -1,20 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { buildIndex, postingsOf, vocabulary } from "../../../src/core/bm25";
-import { isSearchable, makeTermIndexer, makeTermMatcher, titleBonuses } from "../../../src/search/queryMatch";
+import { buildIndex, searchPages } from "../../../src/core/bm25";
+import { isSearchable, makeTermIndexer, makeTermIndexesOf, makeTermMatcher, titleBonuses } from "../../../src/search/queryMatch";
 
 describe("makeTermIndexer", () => {
   it("renvoie l'index du mot de la requete (mots distincts, ordre d'apparition), -1 sinon", () => {
     const indexOf = makeTermIndexer("Classification BPCO");
     expect(indexOf("classification")).toBe(0);
     expect(indexOf("bpco")).toBe(1);
-    expect(indexOf("classifications")).toBe(-1);
+    expect(indexOf("classifications")).toBe(0); // contient « classification »
     expect(indexOf("autre")).toBe(-1);
   });
 
-  it("le dernier mot est un prefixe, les autres des mots entiers", () => {
+  it("le dernier mot est un prefixe, les autres des mots entiers ou des sous-chaines (3 car. minimum)", () => {
     const indexOf = makeTermIndexer("plan rech");
-    expect(indexOf("planete")).toBe(-1);
+    expect(indexOf("planete")).toBe(0); // contient « plan » (sous-chaine)
     expect(indexOf("recherche")).toBe(1);
+    expect(indexOf("replan")).toBe(0);
+    expect(makeTermIndexer("pl rech")("replan")).toBe(-1); // « pl » : sous le seuil, mot entier exigé
+    expect(makeTermIndexer("pl rech")("planete")).toBe(-1); // et pas de prefixe hors dernier mot
   });
 
   it("deduplique les mots repetes et reste coherent avec makeTermMatcher", () => {
@@ -23,6 +26,12 @@ describe("makeTermIndexer", () => {
     expect(indexOf("plan")).toBe(0);
     expect(indexOf("recherche")).toBe(1);
     for (const t of ["plan", "planete", "rech", "recherche", "x"]) expect(indexOf(t) >= 0).toBe(match(t));
+  });
+
+  it("un terme qui satisfait deux mots de la requete : le meilleur mot, et la liste complete ailleurs", () => {
+    expect(makeTermIndexer("abc bcd")("abcd")).toBe(0);
+    expect(makeTermIndexesOf("abc bcd")("abcd")).toEqual([0, 1]);
+    expect(makeTermMatcher("abc bcd")("abcd")).toBe(true);
   });
 
   it("requete sans jeton : -1", () => {
@@ -38,11 +47,21 @@ describe("makeTermMatcher", () => {
     expect(match("cherche")).toBe(false);
   });
 
-  it("egalite pour les mots entiers, prefixe pour le dernier seulement", () => {
+  it("mot entier ou sous-chaine pour les mots non finaux, prefixe ou sous-chaine pour le dernier", () => {
     const match = makeTermMatcher("plan rech");
     expect(match("plan")).toBe(true);
-    expect(match("planete")).toBe(false);
+    expect(match("planete")).toBe(true); // contient « plan »
+    expect(match("pl")).toBe(false);
+    expect(makeTermMatcher("pl rech")("planete")).toBe(false); // sous le seuil : mot entier exigé
+    expect(match("replan")).toBe(true);
     expect(match("recherche")).toBe(true);
+    expect(match("prerecherche")).toBe(true);
+  });
+
+  it("sous-chaine : « pco » retient « bpco » ; sous le seuil, « pc » ne retient pas « bpco »", () => {
+    expect(makeTermMatcher("pco")("bpco")).toBe(true);
+    expect(makeTermMatcher("pc")("bpco")).toBe(false);
+    expect(makeTermMatcher("pc")("pcr")).toBe(true);
   });
 
   it("normalise casse et accents", () => {
@@ -56,21 +75,13 @@ describe("makeTermMatcher", () => {
     expect(makeTermMatcher(" -- ")("a")).toBe(false);
   });
 
-  it("est coherent avec collectPostings (via searchPages sur un index reel)", () => {
-    const index = buildIndex([
-      { docId: "a", page: 1, text: "plan planete planning recherche rechercher" },
-      { docId: "b", page: 1, text: "Été etendu ete plan" },
-    ]);
-    for (const query of ["plan", "plan rech", "ete", "zzz", "rechercher plan", "planete"]) {
+  it("est coherent avec searchPages (index reel) : mot unique", () => {
+    const words = ["plan", "planete", "planning", "recherche", "rechercher", "ete", "etendu", "complete", "pl", "te"];
+    for (const query of ["plan", "pl", "ete", "te", "zzz", "planete", "cher"]) {
       const match = makeTermMatcher(query);
-      const tokens = query.toLowerCase().split(" ");
-      const last = tokens[tokens.length - 1] as string;
-      for (const term of vocabulary(index)) {
-        const isLast = term.startsWith(last);
-        const isWhole = tokens.slice(0, -1).includes(term);
-        const hasPostings = postingsOf(index, term).length > 0;
-        expect(hasPostings).toBe(true);
-        expect(match(term), `${query} / ${term}`).toBe(isLast || isWhole);
+      for (const term of words) {
+        const found = searchPages(buildIndex([{ docId: "x", page: 1, text: term }]), query).length > 0;
+        expect(match(term), `${query} / ${term}`).toBe(found);
       }
     }
   });

@@ -484,7 +484,8 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     let issue: string | undefined;
     try {
       const match = await pageMatches.getPageMatches(docId, page, query, mine.signal);
-      const kept = match.ordinals.filter((ordinal) => match.boxes[ordinal] !== undefined);
+      // Un ordinal peut figurer plusieurs fois (un mot de page satisfaisant plusieurs mots de la requête) : un seul rectangle.
+      const kept = [...new Set(match.ordinals)].filter((ordinal) => match.boxes[ordinal] !== undefined);
       const boxes = kept.map((ordinal) => match.boxes[ordinal] as FractionBox);
       focusIndex = await findFocusIndex(doc.path, page, match, kept, mine.signal);
       // Les boîtes sont déjà des fractions de page : une page de 1 x 1 donne directement des pourcentages.

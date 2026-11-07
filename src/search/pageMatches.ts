@@ -5,7 +5,7 @@
  */
 import { decodePageMatches, decodePagesMatches, type PageMatch } from "../core/codec/decode";
 import { tokenize } from "../core/normalize";
-import { makeTermIndexer, makeTermMatcher } from "./queryMatch";
+import { makeTermIndexesOf, makeTermMatcher } from "./queryMatch";
 
 export interface PageMatchServiceOptions {
   readonly readDsx: (docId: string) => Promise<Uint8Array>;
@@ -139,7 +139,7 @@ export function createPageMatchService(options: PageMatchServiceOptions): PageMa
   function compute(docId: string, page: number, query: string, key: string): Promise<PageMatch> {
     const generation = generationOf(docId);
     const promise = loadFile(docId)
-      .then((bytes) => decode(bytes, page, makeTermMatcher(query), undefined, makeTermIndexer(query)))
+      .then((bytes) => decode(bytes, page, makeTermMatcher(query), undefined, makeTermIndexesOf(query)))
       .then((match) => {
         if (generationOf(docId) === generation) storeResult(key, match);
         return match;
@@ -154,7 +154,7 @@ export function createPageMatchService(options: PageMatchServiceOptions): PageMa
   /** Un décodage pour toutes les pages demandées ; chaque page est enregistrée comme appel en vol (sans cache). */
   function computeMany(docId: string, pages: readonly number[], query: string, normalized: string): Map<number, Promise<PageMatch>> {
     const batch = loadFile(docId).then((bytes) =>
-      decodePages(bytes, pages, makeTermMatcher(query), undefined, makeTermIndexer(query)),
+      decodePages(bytes, pages, makeTermMatcher(query), undefined, makeTermIndexesOf(query)),
     );
     const out = new Map<number, Promise<PageMatch>>();
     for (const page of pages) {

@@ -475,6 +475,12 @@ function compactSink(): PostingSink<CompactPostings> {
   };
 }
 
+/** Index du ou des mots de la requête qu'un terme satisfait (-1 ou liste vide : aucun). */
+export type TermIndexer = (term: string) => number | readonly number[];
+
+const asIndexList = (indexes: number | readonly number[]): readonly number[] =>
+  typeof indexes === "number" ? [indexes] : indexes;
+
 interface PageOrdinals {
   readonly ordinals: number[];
   readonly termIndexes: number[] | undefined;
@@ -484,37 +490,43 @@ interface PageOrdinals {
 function pagesMatchSink(
   pageNumbers: ReadonlySet<number>,
   wanted: (term: string) => boolean,
-  termIndexOf?: (term: string) => number,
+  termIndexOf?: TermIndexer,
 ): PostingSink<ReadonlyMap<number, PageOrdinals>> {
   const byPage = new Map<number, { ordinals: number[]; termIndexes: number[] | undefined }>();
   for (const page of pageNumbers) byPage.set(page, { ordinals: [], termIndexes: termIndexOf ? [] : undefined });
   let termWanted = false;
-  let termIndex = -1;
+  let termIndexes: readonly number[] = [];
   return {
     keepOrdinals: (page) => termWanted && pageNumbers.has(page),
     begin: () => undefined,
     beginTerm(term) {
       termWanted = wanted(term);
-      termIndex = termWanted && termIndexOf ? termIndexOf(term) : -1;
+      termIndexes = termWanted && termIndexOf ? asIndexList(termIndexOf(term)) : [];
     },
     posting(page, _termFrequency, wordOrdinals) {
       const target = byPage.get(page);
       if (!wordOrdinals || !target) return;
       for (const o of wordOrdinals) {
-        target.ordinals.push(o);
-        target.termIndexes?.push(termIndex);
+        for (const termIndex of termIndexes) {
+          target.ordinals.push(o);
+          target.termIndexes?.push(termIndex);
+        }
+        // Sans indexeur de termes : un ordinal par mot, sans index.
+        if (!target.termIndexes) target.ordinals.push(o);
       }
     },
     endTerm: () => undefined,
     finish: () => {
       const result = new Map<number, PageOrdinals>();
       for (const [page, { ordinals, termIndexes }] of byPage) {
-        // Tri par ordinal (puis index de terme) ; un ordinal partagé ne garde que son premier index.
+        // Tri par ordinal (puis index de mot) ; un couple (ordinal, mot) identique n'est gardé qu'une fois.
+        // Un ordinal peut figurer plusieurs fois, avec des mots de requête différents.
         const order = ordinals.map((_, i) => i).sort((x, y) => ordinals[x]! - ordinals[y]! || (termIndexes ? termIndexes[x]! - termIndexes[y]! : 0));
         const outOrdinals: number[] = [];
         const outTerms: number[] = [];
         for (const i of order) {
-          if (outOrdinals[outOrdinals.length - 1] === ordinals[i]) continue;
+          const sameOrdinal = outOrdinals[outOrdinals.length - 1] === ordinals[i];
+          if (sameOrdinal && (!termIndexes || outTerms[outTerms.length - 1] === termIndexes[i])) continue;
           outOrdinals.push(ordinals[i]!);
           if (termIndexes) outTerms.push(termIndexes[i]!);
         }
@@ -725,7 +737,8 @@ export interface PageMatch {
   /** Taille de la page en points (repli A4 pour un fichier v1, qui n'en stocke pas). */
   readonly pageSize: PageSize;
   /**
-   * Index du mot de la requête satisfait par chaque ordinal (parallèle à `ordinals`).
+   * Index du mot de la requête satisfait par chaque ordinal (parallèle à `ordinals`) ; un ordinal que plusieurs
+   * mots de la requête partagent figure autant de fois que de mots.
    * Absent quand aucun indexeur de termes n'est fourni.
    */
   readonly termIndexes?: readonly number[];
@@ -747,7 +760,7 @@ export async function decodePagesMatches(
   pages: readonly number[],
   wanted: (term: string) => boolean,
   limits?: BudgetLimits,
-  termIndexOf?: (term: string) => number,
+  termIndexOf?: TermIndexer,
 ): Promise<ReadonlyMap<number, PageMatch>> {
   const { pageCount } = parseHeader(bytes);
   for (const page of pages) assertPageInRange(page, pageCount);
@@ -786,7 +799,7 @@ export async function decodePageMatches(
   pageNumber: number,
   wanted: (term: string) => boolean,
   limits?: BudgetLimits,
-  termIndexOf?: (term: string) => number,
+  termIndexOf?: TermIndexer,
 ): Promise<PageMatch> {
   const matches = await decodePagesMatches(bytes, [pageNumber], wanted, limits, termIndexOf);
   return matches.get(pageNumber) as PageMatch;

@@ -100,7 +100,9 @@ export function groupOccurrences(
     if (!current) throw new RangeError(`Ordinal ${ordinal} outside the ${boxes.length} boxes`);
     const term = termIndexes[i] as number;
     const group = groups[groups.length - 1];
-    if (group && isAdjacent(group.last, current, pageSize.widthPt)) {
+    if (group && group.ordinals[group.ordinals.length - 1] === ordinal) {
+      group.terms.add(term); // même mot de page satisfaisant un autre mot de la requête
+    } else if (group && isAdjacent(group.last, current, pageSize.widthPt)) {
       group.terms.add(term);
       group.ordinals.push(ordinal);
       group.last = current;

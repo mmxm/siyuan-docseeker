@@ -77,11 +77,8 @@ describe("decodePageMatches", () => {
     const bytes = await encodeIndex(makeIndex());
     const indexOf = (t: string): number => (t === "alpha" ? 0 : t === "beta" ? 1 : -1);
     const result = await decodePageMatches(bytes, 1, (t) => indexOf(t) >= 0, undefined, indexOf);
-    expect(result.ordinals).toEqual([0, 4, 5]);
-    expect(result.termIndexes).toHaveLength(3);
-    expect(result.termIndexes?.[0]).toBe(0); // ordinal 0 : alpha
-    expect(result.termIndexes?.[2]).toBe(1); // ordinal 5 : beta
-    expect([0, 1]).toContain(result.termIndexes?.[1]); // ordinal 4 partage entre alpha et beta
+    expect(result.ordinals).toEqual([0, 4, 4, 5]);
+    expect(result.termIndexes).toEqual([0, 0, 1, 1]); // ordinal 4 partage : un couple (ordinal, mot) par mot
   });
 
   it("omits termIndexes without a term indexer", async () => {

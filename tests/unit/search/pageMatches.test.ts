@@ -47,8 +47,8 @@ describe("createPageMatchService", () => {
   it("passe aussi un indexeur de termes a decode", async () => {
     const seen: number[] = [];
     const readDsx = vi.fn(async () => new Uint8Array(1));
-    const decode = vi.fn(async (_b: Uint8Array, _p: number, _w: unknown, _l: unknown, indexOf?: (t: string) => number) => {
-      seen.push(indexOf?.("classification") ?? -2, indexOf?.("bpco") ?? -2);
+    const decode = vi.fn(async (_b: Uint8Array, _p: number, _w: unknown, _l: unknown, indexesOf?: (t: string) => readonly number[]) => {
+      seen.push(...(indexesOf?.("classification") ?? [-2]), ...(indexesOf?.("bpco") ?? [-2]));
       return { boxes: [], ordinals: [], pageSize: { widthPt: 595, heightPt: 842 } } as PageMatch;
     });
     const service = createPageMatchService({ readDsx, decode: decode as never });

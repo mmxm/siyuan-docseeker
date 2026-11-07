@@ -12,6 +12,7 @@ import {
   type PageInput,
 } from "../../src/core/bm25";
 import { tokenize } from "../../src/core/normalize";
+import { MATCH_WEIGHT, MatchClass, classifyTerm, queryWordRules, type QueryWordRule } from "../../src/core/termMatch";
 
 const PERF_PAGES = 60_000; // 20 000 passait meme en O(df^2) (~0,5 s) ; 60 000 = 4,2 s mesurees avant correction
 const PERF_BUDGET_MS = 2_500;
@@ -45,12 +46,13 @@ function naiveSearch(pages: readonly PageInput[], query: string): readonly PageH
   if (terms.length === 0 || pages.length === 0) return [];
   const tokenized = pages.map((p) => ({ p, tokens: tokenize(p.text) }));
   const avg = tokenized.reduce((s, t) => s + t.tokens.length, 0) / pages.length;
-  const tfOf = (tokens: readonly string[], term: string, prefix: boolean): number =>
-    tokens.filter((t) => (prefix ? t.startsWith(term) : t === term)).length;
-  const dfs = terms.map((term, i) => tokenized.filter((t) => tfOf(t.tokens, term, i === terms.length - 1) > 0).length);
+  const rules = queryWordRules(terms);
+  const tfOf = (tokens: readonly string[], rule: QueryWordRule): number =>
+    tokens.reduce((sum, t) => sum + MATCH_WEIGHT[classifyTerm(t, rule)], 0);
+  const dfs = rules.map((rule) => tokenized.filter((t) => tfOf(t.tokens, rule) > 0).length);
   const hits: PageHit[] = [];
   for (const { p, tokens } of tokenized) {
-    const tfs = terms.map((term, i) => tfOf(tokens, term, i === terms.length - 1));
+    const tfs = rules.map((rule) => tfOf(tokens, rule));
     if (tfs.some((tf) => tf === 0)) continue;
     const score = tfs.reduce(
       (sum, tf, i) =>
@@ -89,7 +91,7 @@ describe("collectPostings optimise : resultat identique a un calcul naif", () =>
     );
   });
 
-  it("gros index aleatoire (5 000 pages) : prefixe et exact", () => {
+  it("gros index aleatoire (5 000 pages) : exact, prefixe et sous-chaine", () => {
     const vocab = Array.from({ length: 300 }, (_, i) => `t${i.toString(36)}`);
     const pages: PageInput[] = Array.from({ length: 5_000 }, (_, i) => ({
       docId: `d${i % 40}`,
@@ -205,13 +207,16 @@ describe("proprietes du classement", () => {
     );
   });
 
-  it("ET : les resultats sont inclus dans ceux de chaque terme (exact) seul", () => {
+  it("ET : les resultats sont inclus dans ceux de chaque terme seul (mot non final : exact ou sous-chaine)", () => {
     fc.assert(
       fc.property(pagesArb, fc.constantFrom(...WORDS), fc.constantFrom(...WORDS), (pages, w1, w2) => {
         const index = buildIndex(pages);
         const both = new Set(searchPages(index, `${w1} ${w2}`).map(sortKey));
         const solo2 = new Set(searchPages(index, w2).map(sortKey));
-        const exact1 = new Set(pages.filter((p) => tokenize(p.text).includes(tokenize(w1)[0] ?? "")).map((p) => `${p.docId}/${p.page}`));
+        const [rule1] = queryWordRules(tokenize(w1));
+        const matches1 = (p: PageInput): boolean =>
+          rule1 !== undefined && tokenize(p.text).some((t) => classifyTerm(t, { ...rule1, allowPrefix: false }) !== MatchClass.None);
+        const exact1 = new Set(pages.filter(matches1).map((p) => `${p.docId}/${p.page}`));
         for (const key of both) {
           expect(solo2.has(key)).toBe(true);
           expect(exact1.has(key)).toBe(true);

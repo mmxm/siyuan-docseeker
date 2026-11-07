@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MATCH_WEIGHT, MatchClass } from "../../src/core/termMatch";
 import {
   BM25_B,
   BM25_K1,
@@ -146,13 +147,20 @@ describe("searchPages", () => {
   });
 
   it("fusionne tf et df des tokens couverts par le prefixe (plancher idf)", () => {
-    // 'ch*' : chat(A1:2,B1:1) chien(A1:1,C1:1) cheval(C2:1) -> A1 tf=3 ; df=4 pages -> idf=1e-6
+    // 'ch*' : chat(A1:2,B1:1) chien(A1:1,C1:1) cheval(C2:1), tous des prefixes -> A1 tf=3 * poids prefixe ;
+    // df=4 pages -> idf=1e-6
     const hit = searchPages(index, "ch").find((h) => h.docId === "A");
-    expect(hit?.score).toBeCloseTo((1e-6 * 3 * 2.2) / (3 + K), 12);
+    const tf = 3 * MATCH_WEIGHT[MatchClass.Prefix];
+    expect(hit?.score).toBeCloseTo((1e-6 * tf * 2.2) / (tf + K), 12);
   });
 
-  it("n'applique pas le prefixe aux mots non finaux en mode exact", () => {
-    expect(searchPages(index, "cha chien")).toEqual([]);
+  it("n'applique pas le prefixe aux mots non finaux (3 caracteres : sous-chaine seulement)", () => {
+    // 'cha' est une sous-chaine de 'chat' (seuil 3) : A1 contient chat et chien, donc trouvee ; mais pas par prefixe
+    expect(searchPages(index, "cha chien").map((h) => h.docId)).toEqual(["A"]);
+    // 'hat' n'est pas un prefixe : seule la sous-chaine le relie a 'chat'
+    expect(searchPages(index, "hat chien").map((h) => h.docId)).toEqual(["A"]);
+    // sous le seuil ('ch', 2 caracteres) : mot entier exigé
+    expect(searchPages(index, "ch chien")).toEqual([]);
   });
 
   it("ignore accents et casse dans la requete", () => {

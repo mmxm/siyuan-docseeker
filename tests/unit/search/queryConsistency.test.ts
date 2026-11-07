@@ -15,6 +15,10 @@ const QUERIES = [
   "b c", "c b", "7", "7 a", "œuvre ete", "OEUVRE ÉTÉ", "  patient,, --  obstr!! ", "x", "", " -- ", "le a une", "obstr obstr obstr",
 ];
 
+/** Règle écrite indépendamment de termMatch.ts : égalité, préfixe (dernier mot), sous-chaîne (3 car. minimum). */
+const acceptsTerm = (word: string, isLast: boolean, term: string): boolean =>
+  term === word || (isLast && term.startsWith(word)) || ([...word].length >= 3 && term.includes(word));
+
 describe("cohérence searchPages / makeTermMatcher", () => {
   const index = buildIndex(PAGES);
   const termsByPage = new Map<string, Set<string>>(PAGES.map((p) => [`${p.docId}#${p.page}`, new Set(tokenize(p.text))]));
@@ -27,32 +31,35 @@ describe("cohérence searchPages / makeTermMatcher", () => {
       const expected = new Set<string>();
       if (words.length > 0) {
         for (const [key, terms] of termsByPage) {
-          const ok = words.every((w, i) => [...terms].some((t) => (i === words.length - 1 ? t.startsWith(w) : t === w)));
+          const ok = words.every((w, i) => [...terms].some((t) => acceptsTerm(w, i === words.length - 1, t)));
           if (ok) expected.add(key);
         }
       }
       expect(found).toEqual(expected);
       // Toute page trouvée a au moins un terme retenu par le matcher (il y aura donc des boîtes à surligner).
       for (const key of found) expect([...(termsByPage.get(key) ?? [])].some(matcher), key).toBe(true);
-      // Le matcher ne retient rien qui ne serait pas un mot de la requête (égalité) ou un préfixe du dernier.
+      // Chaque mot requis est retenu par le matcher sur au moins un terme de la page.
       for (const key of found) {
-        for (const w of words.slice(0, -1)) {
-          expect([...(termsByPage.get(key) ?? [])].some((t) => t === w && matcher(t)), `${key} ${w}`).toBe(true);
+        for (const w of words) {
+          expect([...(termsByPage.get(key) ?? [])].some((t) => t.includes(w) && matcher(t)), `${key} ${w}`).toBe(true);
         }
       }
     });
   }
 
-  it("un mot précoce n'est pas un préfixe, ni dans la recherche ni dans le matcher", () => {
-    expect(searchPages(index, "pat obstr")).toHaveLength(0);
-    const matcher = makeTermMatcher("pat obstr");
-    expect(matcher("patient")).toBe(false);
-    expect(matcher("obstructive")).toBe(true);
+  it("un mot précoce n'est pas un préfixe mais accepte la sous-chaîne, dans la recherche comme dans le matcher", () => {
+    // 'pat' (3 car.) est une sous-chaîne de 'patient' : trouvé ; sous le seuil il faudrait le mot entier.
+    expect(searchPages(index, "pat obstr").length).toBeGreaterThan(0);
+    expect(searchPages(index, "pa obstr")).toHaveLength(0);
+    expect(makeTermMatcher("pat obstr")("patient")).toBe(true);
+    expect(makeTermMatcher("pa obstr")("patient")).toBe(false);
+    expect(makeTermMatcher("pa obstr")("obstructive")).toBe(true);
   });
 
-  it("requête dupliquée : égalité pour le premier, préfixe pour le second, matcher aligné", () => {
+  it("requête dupliquée : le mot final accepte le préfixe, le matcher est aligné", () => {
     const keys = searchPages(index, "patient patient").map((h) => `${h.docId}#${h.page}`).sort();
-    expect(keys).toEqual(["d1#1", "d1#2", "d2#1", "d2#2"].filter((k) => termsByPage.get(k)?.has("patient")).sort());
+    // d1#2 ne contient que « patients » : trouvé par sous-chaîne (premier mot) ET par préfixe (dernier mot).
+    expect(keys).toEqual(["d1#1", "d1#2", "d2#1", "d2#2"]);
     expect(makeTermMatcher("patient patient")("patients")).toBe(true);
   });
 

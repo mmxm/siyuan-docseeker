@@ -7,6 +7,7 @@
  */
 import { MAX_PAGES } from "./codec/format";
 import { tokenize } from "./normalize";
+import { MATCH_WEIGHT, MatchClass, classifyTerm, queryWordRules, type QueryWordRule } from "./termMatch";
 
 export const BM25_K1 = 1.2;
 export const BM25_B = 0.75;
@@ -365,10 +366,10 @@ export function postingsOf(index: Bm25Index, term: string): readonly Posting[] {
   return out;
 }
 
-/** tf cumule par page, par segment, et nombre de pages distinctes (= df FTS5 du terme ou du prefixe). */
+/** tf (pondéré par classe) cumulé par page, par segment, et nombre de pages distinctes (= df du mot). */
 interface TermMatches {
   readonly size: number;
-  /** idf du terme (ou du préfixe), calculé une fois : ne dépend que de N et de `size`. */
+  /** idf du mot de la requête (df = pages appariées, toutes classes), calculé une fois : ne dépend que de N et de `size`. */
   readonly idf: number;
   /** Même longueur que index.segments ; undefined si le segment ne contient aucune page correspondante. */
   readonly tfBySegment: readonly (ReadonlyMap<number, number> | undefined)[];
@@ -386,25 +387,34 @@ function lowerBound(sorted: readonly string[], prefix: string): number {
   return lo;
 }
 
-/** Cumule dans `tfByPage` les postings du segment pour le terme (ou tous les termes de ce préfixe). */
-function accumulateSegment(segment: DocumentSegment, term: string, asPrefix: boolean, tfByPage: Map<number, number>): void {
-  const first = lowerBound(segment.terms, term);
+/**
+ * Cumule dans `tfByPage` les postings du segment pour les termes qui correspondent à la règle, tf pondéré par la
+ * classe de correspondance. Sans sous-chaîne, les correspondances forment un intervalle contigu des termes triés
+ * (exact, puis préfixe) : dichotomie puis arrêt au premier terme hors règle. Avec sous-chaîne, parcours linéaire.
+ */
+function accumulateSegment(segment: DocumentSegment, rule: QueryWordRule, tfByPage: Map<number, number>): void {
+  const scanAll = rule.allowSubstring;
+  const first = scanAll ? 0 : lowerBound(segment.terms, rule.word);
   for (let t = first; t < segment.terms.length; t++) {
-    const candidate = segment.terms[t] as string;
-    if (asPrefix ? !candidate.startsWith(term) : candidate !== term) break;
+    const matchClass = classifyTerm(segment.terms[t] as string, rule);
+    if (matchClass === MatchClass.None) {
+      if (scanAll) continue;
+      break;
+    }
+    const weight = MATCH_WEIGHT[matchClass];
     for (let i = segment.offsets[t] as number; i < (segment.offsets[t + 1] as number); i++) {
       const page = segment.pages[i] as number;
-      tfByPage.set(page, (tfByPage.get(page) ?? 0) + (segment.termFrequencies[i] as number));
+      tfByPage.set(page, (tfByPage.get(page) ?? 0) + weight * (segment.termFrequencies[i] as number));
     }
   }
 }
 
-/** Postings d'un terme (ou de tous les termes ayant ce prefixe), tf sommes par page. */
-function collectPostings(index: Bm25Index, term: string, asPrefix: boolean): TermMatches {
+/** Postings pondérés d'un mot de la requête (tf sommé par page) ; df = pages ayant au moins un terme apparié. */
+function collectPostings(index: Bm25Index, rule: QueryWordRule): TermMatches {
   let size = 0;
   const tfBySegment = index.segments.map((segment) => {
     const tfByPage = new Map<number, number>();
-    accumulateSegment(segment, term, asPrefix, tfByPage);
+    accumulateSegment(segment, rule, tfByPage);
     size += tfByPage.size;
     return tfByPage.size === 0 ? undefined : tfByPage;
   });
@@ -439,11 +449,14 @@ function scorePage(index: Bm25Index, perTerm: readonly TermMatches[], segmentInd
   return score;
 }
 
-/** Recherche ET multi-mots ; le prefixe ne s'applique qu'au dernier mot. */
+/**
+ * Recherche ET multi-mots. Chaque mot accepte l'exact, la sous-chaîne (3 caractères minimum) et, pour le dernier
+ * seulement, le préfixe (voir termMatch.ts). Le classement exact > préfixe > sous-chaîne vient de la pondération du tf.
+ */
 export function searchPages(index: Bm25Index, query: string): readonly PageHit[] {
   const terms = tokenize(query);
   if (terms.length === 0 || index.pageCount === 0) return [];
-  const perTerm = terms.map((term, i) => collectPostings(index, term, i === terms.length - 1));
+  const perTerm = queryWordRules(terms).map((rule) => collectPostings(index, rule));
   const [first, ...rest] = perTerm;
   if (!first) return [];
   const hits: PageHit[] = [];
