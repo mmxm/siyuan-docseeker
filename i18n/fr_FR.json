@@ -135,5 +135,17 @@
   "traceKeysDone": "Trace terminée : voir les lignes sous le bouton",
   "traceKeysNoTab": "Aucun onglet de recherche ouvert : ouvrez-en un puis recommencez",
   "traceKeysFailed": "Trace impossible : voir le journal",
-  "traceKeysNoKey": "Aucune touche reçue en 30 secondes : cliquez dans l'onglet de recherche visible puis recommencez"
+  "traceKeysNoKey": "Aucune touche reçue en 30 secondes : cliquez dans l'onglet de recherche visible puis recommencez",
+  "floatingTitle": "Recherche dans les PDF",
+  "openInNewTab": "Ouvrir dans un nouvel onglet",
+  "openMode": "Ouverture de la recherche",
+  "openModeDesc": "Choisit où s'ouvre la recherche dans les PDF : dans un onglet, ou dans une fenêtre flottante comme la recherche de SiYuan.",
+  "openModeTab": "Onglet",
+  "openModeDialog": "Fenêtre flottante",
+  "commandOpenSearchFloating": "Rechercher dans les PDF (fenêtre flottante)",
+  "commandOpenSearchTab": "Rechercher dans les PDF (onglet)",
+  "highlightUnavailable": "Surlignage indisponible : le PDF est ouvert sans calque (voir le journal dans les paramètres)",
+  "floatingOpenFailed": "Impossible d'ouvrir la fenêtre de recherche (voir le journal dans les paramètres)",
+  "openTabFailed": "Impossible d'ouvrir l'onglet de recherche (voir le journal dans les paramètres)",
+  "transferTabFailed": "Impossible d'ouvrir la recherche dans un onglet : la fenêtre reste ouverte (voir le journal dans les paramètres)"
 }

@@ -18,6 +18,9 @@ const NEW_KEYS = [
   "pathSpecify", "includeChildren", "moreMenu", "sortMenu", "groupMenu", "groupNone", "removePath", "clearField",
   "dialogCancel", "dialogConfirm",
   "historyClear", "historyEmpty", "historyIcon", "commandOpenSearch", "commandFocusSearch",
+  "openInNewTab", "floatingTitle", "openMode", "openModeDesc", "openModeTab", "openModeDialog",
+  "commandOpenSearchFloating", "commandOpenSearchTab",
+  "highlightUnavailable", "floatingOpenFailed", "openTabFailed", "transferTabFailed",
   "traceKeys", "traceKeysRunning", "traceKeysDone", "traceKeysNoTab", "traceKeysFailed", "traceKeysNoKey",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
@@ -35,7 +38,7 @@ describe("i18n/fr_FR.json", () => {
     const sources = ["src/ui/settingsPanel.ts", "src/index.ts", "src/searchTab.ts"].map(read).join("\n");
     const keys = new Set([...sources.matchAll(/\bt\("([A-Za-z]+)"\)/g)].map((m) => m[1]!));
     // Clés construites dynamiquement : titre et `<clé>Desc` de chaque item du panneau.
-    for (const key of ["autoIndex", "autoIndexInterval", "reindex", "clearIndex", "diagnostic", "warnLog"]) {
+    for (const key of ["openMode", "autoIndex", "autoIndexInterval", "reindex", "clearIndex", "diagnostic", "warnLog"]) {
       keys.add(key);
       keys.add(`${key}Desc`);
     }
@@ -46,6 +49,14 @@ describe("i18n/fr_FR.json", () => {
     for (const key of NEW_KEYS) keys.add(key);
     const missing = [...keys].filter((k) => typeof fr[k] !== "string");
     expect(missing).toEqual([]);
+  });
+
+  it("les textes des notifications d'erreur (toasts) sont du texte brut : ni <, ni > ni &, SiYuan les insérant comme HTML", () => {
+    for (const key of ["highlightUnavailable", "floatingOpenFailed", "openTabFailed", "transferTabFailed"]) {
+      expect(fr[key], key).toBeTypeOf("string");
+      expect(fr[key]!.length, key).toBeGreaterThan(0);
+      expect(fr[key], key).not.toMatch(/[<>&]/);
+    }
   });
 
   it("n'a plus de clé de l'ancienne section Avancé et pas d'usage de « fichier(s) »", () => {
@@ -59,7 +70,7 @@ describe("i18n/fr_FR.json", () => {
   });
 
   it("les titres et descriptions du panneau ne contiennent pas de balise ni d'entité (SiYuan les insère comme HTML)", () => {
-    for (const key of ["autoIndex", "autoIndexInterval", "reindex", "clearIndex", "diagnostic", "warnLog"]) {
+    for (const key of ["openMode", "autoIndex", "autoIndexInterval", "reindex", "clearIndex", "diagnostic", "warnLog"]) {
       for (const k of [key, `${key}Desc`]) expect(fr[k], k).not.toMatch(/[<>&]/);
     }
   });
@@ -249,3 +260,31 @@ describe("i18n/fr_FR.json", () => {
     expect(fr.foldersMoreMany).toBe("… {n} autres dossiers");
   });
 });
+
+describe("libellés de la fenêtre flottante (J10 10d)", () => {
+  it("libellés exacts demandés, ceux de la recherche native pour « Ouvrir dans un nouvel onglet »", () => {
+    expect(fr.floatingTitle).toBe("Recherche dans les PDF");
+    expect(fr.openInNewTab).toBe("Ouvrir dans un nouvel onglet");
+    expect(fr.openMode).toBe("Ouverture de la recherche");
+    expect(fr.openModeTab).toBe("Onglet");
+    expect(fr.openModeDialog).toBe("Fenêtre flottante");
+    expect(fr.commandOpenSearchFloating).toBe("Rechercher dans les PDF (fenêtre flottante)");
+    expect(fr.commandOpenSearchTab).toBe("Rechercher dans les PDF (onglet)");
+  });
+
+  it("la description du réglage est non vide et sans < > &", () => {
+    expect(fr.openModeDesc?.trim()).toBeTruthy();
+    expect(fr.openModeDesc).not.toMatch(/[<>&]/);
+  });
+
+  it("aucune des clés de cette étape ne contient < > & (le titre et les libellés passent par innerHTML dans SiYuan)", () => {
+    const keys = ["floatingTitle", "openInNewTab", "openMode", "openModeDesc", "openModeTab", "openModeDialog", "commandOpenSearchFloating", "commandOpenSearchTab"];
+    for (const k of keys) expect(fr[k], k).toMatch(/^[^<>&]+$/);
+  });
+
+  it("DEFAULT_STRINGS de la vue dit la même chose que fr_FR.json pour « Ouvrir dans un nouvel onglet »", async () => {
+    const { DEFAULT_STRINGS } = await import("../../src/ui/searchView");
+    expect(DEFAULT_STRINGS["openInNewTab"]).toBe(fr.openInNewTab);
+  });
+});
+

@@ -43,7 +43,7 @@ export function createNativeFakes() {
       },
     };
     menus.push(menu);
-    return { close: () => menu.close() };
+    return { close: () => menu.close(), isOpen: () => !menu.closed };
   });
   const openDialog = vi.fn((options: NativeDialogOptions): DialogHandle => {
     const container = document.createElement("div");

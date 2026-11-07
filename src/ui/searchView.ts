@@ -54,6 +54,8 @@ export interface SearchViewDeps {
   onOpenSettings?(): void;
   getDocMeta(docId: string): { pdfSize: number; pdfModifiedMs: number } | undefined;
   readonly t?: (key: string) => string;
+  /** Trace d'un échec qui ne doit pas casser la vue (ouverture ou fermeture d'un menu natif). */
+  readonly onWarn?: (message: string, error?: unknown) => void;
   /** Activité d'indexation (indicateur discret sous le champ de recherche, avis « des résultats peuvent manquer »). */
   readonly indexActivity?: {
     getSnapshot(): IndexActivitySnapshot;
@@ -69,6 +71,8 @@ export interface SearchViewDeps {
   };
   /** Regroupement par document au montage (défaut : oui). État de VUE : changer de mode ne relance aucune recherche. */
   readonly initialGroupByDocument?: boolean;
+  /** Mode fenêtre flottante : Échap sur un champ vide ferme la fenêtre ; bouton « Ouvrir dans un nouvel onglet ». */
+  readonly floating?: { requestClose(): void; openInTab(): void };
   /** Appelé à chaque changement de regroupement choisi dans le menu « Plus » (pour le mémoriser). */
   readonly onGroupByDocumentChange?: (groupByDocument: boolean) => void;
 }
@@ -79,6 +83,8 @@ export interface SearchView {
   focusInput(): boolean;
   /** Change le regroupement sans notifier `onGroupByDocumentChange` (réglage mémorisé lu après le montage). */
   setGroupByDocument(groupByDocument: boolean): void;
+  /** Restaure une requête déjà soumise (session de la fenêtre flottante) : remplit le champ et relance la recherche, sans toucher à l'historique. */
+  restoreQuery(query: string): void;
   /** Resynchronise la barre d'outils (tri, filtres) avec les options courantes, sans attendre un rendu de résultats. */
   refreshOptions(): void;
 }
@@ -185,6 +191,7 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   clearField: "Effacer",
   dialogCancel: "Annuler",
   dialogConfirm: "Confirmer",
+  openInNewTab: "Ouvrir dans un nouvel onglet",
 };
 
 const fmt = (template: string, vars: Readonly<Record<string, string | number>>): string =>
@@ -813,8 +820,30 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     if (query.trim() !== "") historyDeps?.add(query);
   };
 
-  /** Menu d'historique ouvert par la vue : fermé au dispose. Le focus est rendu par l'adaptateur (à l'élément ouvrant : le champ). */
+  /**
+   * Menu d'historique ouvert par la vue : fermé au dispose. Le focus est rendu par l'adaptateur (à l'élément ouvrant : le champ).
+   * « Ouvert » se lit sur le HANDLE (`isOpen()`), jamais sur un drapeau levé avant l'ouverture : si `openMenu` lève, ou si le menu ne
+   * s'est pas ouvert (même identifiant déjà ouvert = bascule, aucun `onClose` à venir), Échap ne doit pas rester piégé en mode flottant.
+   */
   let historyMenu: MenuHandle | undefined;
+  const historyMenuOpen = (): boolean => {
+    try {
+      return historyMenu?.isOpen() === true;
+    } catch (error) {
+      deps.onWarn?.("État du menu d'historique inconnu", error);
+      return false;
+    }
+  };
+  /** Ferme le menu d'historique ouvert ; un échec est tracé, et l'état retombe dans tous les cas. */
+  const closeHistoryMenu = (): void => {
+    const menu = historyMenu;
+    historyMenu = undefined;
+    try {
+      menu?.close();
+    } catch (error) {
+      deps.onWarn?.("Fermeture du menu d'historique en échec", error);
+    }
+  };
   /** Ouvre le menu d'historique ; faux s'il n'y a pas d'historique branché. L'historique est relu à chaque ouverture. */
   const openHistoryMenu = (): boolean => {
     if (disposed || !historyDeps || !openMenu) return false;
@@ -842,7 +871,20 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
             },
           ];
     const r = searchBox.getBoundingClientRect();
-    historyMenu = openMenu(items, { x: r.left, y: r.bottom, w: r.width, h: r.height }, undefined, MENU_ID_HISTORY);
+    // Rouvrir le même identifiant ferme l'ancien menu (son `onClose` efface le handle) et n'en ouvre pas (son handle est alors inactif).
+    let opened: MenuHandle | undefined;
+    let closedAlready = false;
+    try {
+      opened = openMenu(items, { x: r.left, y: r.bottom, w: r.width, h: r.height }, () => {
+        closedAlready = true; // peut venir avant le retour de openMenu
+        if (historyMenu === opened) historyMenu = undefined;
+      }, MENU_ID_HISTORY);
+    } catch (error) {
+      historyMenu = undefined;
+      deps.onWarn?.("Ouverture du menu d'historique impossible", error);
+      return false;
+    }
+    historyMenu = closedAlready ? undefined : opened;
     return true;
   };
   historyButton?.setAttribute("data-menu", "true"); // exclusion native du gestionnaire tactile de SiYuan
@@ -871,6 +913,19 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         break;
       case "clear":
         e.preventDefault();
+        if (deps.floating) {
+          // Dans la fenêtre flottante, SiYuan ferme le dernier dialogue sur tout Échap qui atteint `window` : la touche est
+          // consommée ici, une couche à la fois (champ plein : vidé ; champ vide : fermeture demandée).
+          e.stopPropagation();
+          if (historyMenuOpen()) {
+            closeHistoryMenu(); // le menu ouvert au-dessus passe en premier (comme dans SiYuan)
+            break;
+          }
+          if (input.value === "") {
+            deps.floating.requestClose();
+            break;
+          }
+        }
         input.value = "";
         syncClear();
         deps.controller.submit("");
@@ -937,6 +992,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       openCard(card, action.alternate);
     } else if (action.type === "backToInput") {
       e.preventDefault();
+      if (deps.floating) e.stopPropagation(); // consommé ici : SiYuan ne ferme pas la fenêtre par-dessus
       input.focus(); // sans vider la requête
     } else if (action.type === "move") {
       const every = allCards();
@@ -992,6 +1048,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       t: (key, vars) => tr(key, vars),
       openMenu,
       openDialog,
+      ...(deps.floating ? { openInTab: () => deps.floating?.openInTab() } : {}),
       getGroupByDocument: () => groupByDocument,
       setGroupByDocument: (next) => {
         if (disposed || next === groupByDocument) return;
@@ -1111,6 +1168,12 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       applyGroupChrome();
       render();
     },
+    restoreQuery(query) {
+      if (disposed) return;
+      input.value = query;
+      syncClear();
+      deps.controller.submit(query); // relance seulement : la requête est déjà dans l'historique
+    },
     refreshOptions() {
       if (!disposed) toolbar?.refresh();
     },
@@ -1122,7 +1185,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       toolbar?.dispose();
       clearList();
       root.remove();
-      historyMenu?.close(); // après le retrait : l'adaptateur ne rend alors le focus à aucun élément détaché
+      closeHistoryMenu(); // après le retrait : l'adaptateur ne rend alors le focus à aucun élément détaché
     },
   };
 }

@@ -637,6 +637,20 @@ describe("openMenu : handle et focus (le closeCB de SiYuan passe AVANT le vidage
     expect(lastMenu().opened).toBe(true);
   });
 
+  it("handle.isOpen() : vrai à l'ouverture, faux après close(), après remplacement par un autre menu, et pour un menu jamais ouvert (bascule)", () => {
+    const a = openMenu([{ label: "A" }], { x: 0, y: 0 }, undefined, "docseeker-more");
+    expect(a.isOpen()).toBe(true);
+    a.close();
+    expect(a.isOpen()).toBe(false);
+    const b = openMenu([{ label: "B" }], { x: 0, y: 0 }, undefined, "docseeker-more");
+    const replacer = openMenu([{ label: "C" }], { x: 0, y: 0 }, undefined, "docseeker-path");
+    expect(b.isOpen()).toBe(false);
+    expect(replacer.isOpen()).toBe(true);
+    const toggled = openMenu([{ label: "D" }], { x: 0, y: 0 }, undefined, "docseeker-path");
+    expect(toggled.isOpen()).toBe(false); // ne s'est jamais ouvert : son onClose ne viendra jamais
+    expect(replacer.isOpen()).toBe(false); // et le menu précédent a été refermé par la bascule
+  });
+
   it("choisir un item sans toucher au focus : le focus revient à l'élément qui avait le focus à l'ouverture", () => {
     const btn = opener();
     openMenu([{ label: "A", click: vi.fn() }, { label: "B" }], { x: 0, y: 0 });

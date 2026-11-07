@@ -52,6 +52,10 @@ const STRINGS: Record<string, string> = {
   diagnosticRunning: "Diagnostic en cours…",
   diagnosticDone: "Diagnostic terminé",
   diagnosticFailed: "Diagnostic en échec",
+  openMode: "Ouverture de la recherche",
+  openModeDesc: "Choisit où s'ouvre la recherche dans les PDF.",
+  openModeTab: "Onglet",
+  openModeDialog: "Fenêtre flottante",
 };
 
 interface Harness {
@@ -1012,5 +1016,87 @@ describe("settingsPanel : trace des touches (R6)", () => {
     const status = traceStatus(panel.diagnostic);
     expect(status.hasAttribute("aria-live")).toBe(false);
     expect(status.getAttribute("role")).toBeNull();
+  });
+});
+
+describe("settingsPanel : ouverture de la recherche (openMode, J10 10d)", () => {
+  const selectOf = (panel: ReturnType<typeof createSettingsPanel>): HTMLSelectElement =>
+    panel.openMode.querySelector<HTMLSelectElement>("select.b3-select")!;
+
+  it("liste à deux choix « Onglet » / « Fenêtre flottante » (valeurs tab / dialog), nom accessible, « Onglet » par défaut", () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ["tab", "Onglet"],
+      ["dialog", "Fenêtre flottante"],
+    ]);
+    expect(select.value).toBe("tab");
+    expect(select.getAttribute("aria-label")).toBe("Ouverture de la recherche");
+    expect(select.disabled).toBe(false);
+    panel.dispose();
+  });
+
+  it("la description est reliée à la liste par aria-describedby (nœud masqué, texte brut)", () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    const desc = panel.openMode.querySelector<HTMLElement>(`#${select.getAttribute("aria-describedby")}`)!;
+    expect(desc.textContent).toBe("Choisit où s'ouvre la recherche dans les PDF.");
+    expect(desc.hidden).toBe(true);
+    panel.dispose();
+  });
+
+  it("reflète le réglage chargé (fenêtre flottante)", async () => {
+    await h.settings.update({ openMode: "dialog" });
+    const panel = createSettingsPanel(h.deps);
+    expect(selectOf(panel).value).toBe("dialog");
+    panel.dispose();
+  });
+
+  it("changer le choix applique tout de suite et enregistre l'objet complet", async () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    select.value = "dialog";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+    expect(h.settings.get().openMode).toBe("dialog");
+    expect(h.save).toHaveBeenCalledWith(expect.objectContaining({ openMode: "dialog" }));
+    expect(h.warn).not.toHaveBeenCalled();
+    panel.dispose();
+  });
+
+  it("un changement fait ailleurs (autre panneau) met la liste à jour", async () => {
+    const panel = createSettingsPanel(h.deps);
+    await h.settings.update({ openMode: "dialog" });
+    expect(selectOf(panel).value).toBe("dialog");
+    panel.dispose();
+  });
+
+  it("échec d'enregistrement : journalisé, message visible et région d'état annoncée, la valeur reste appliquée", async () => {
+    h.save.mockRejectedValue(new Error("disque plein"));
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    select.value = "dialog";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+    expect(h.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "disque plein" }));
+    expect(h.showMessage).toHaveBeenCalledWith(STRINGS.settingsSaveFailed, expect.any(Number), "error");
+    expect(panel.openMode.querySelector('[role="status"]')!.textContent).toBe(STRINGS.settingsSaveFailed);
+    panel.dispose();
+  });
+
+  it("dispose désabonne la liste des réglages", async () => {
+    const panel = createSettingsPanel(h.deps);
+    const select = selectOf(panel);
+    panel.dispose();
+    await h.settings.update({ openMode: "dialog" });
+    expect(select.value).toBe("tab");
+  });
+
+  it("deux panneaux n'utilisent pas les mêmes identifiants de description", () => {
+    const a = createSettingsPanel(h.deps);
+    const b = createSettingsPanel(h.deps);
+    expect(selectOf(a).getAttribute("aria-describedby")).not.toBe(selectOf(b).getAttribute("aria-describedby"));
+    a.dispose();
+    b.dispose();
   });
 });

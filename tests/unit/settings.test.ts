@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, FREQUENCY_MINUTES, SETTINGS_FILE, createSettings, normalizeSettings } from "../../src/settings";
 
 /** Valeurs par défaut des champs de présentation (tri et regroupement), ajoutés après les deux premiers réglages. */
-const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] } as const;
+const EXTRA = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" } as const;
 
 describe("normalizeSettings", () => {
   it("défauts : indexation automatique activée, 5 minutes", () => {
@@ -290,7 +290,7 @@ describe("réglages de présentation : tri et regroupement", () => {
     await store.update({ sort: { key: "modified", direction: "desc" } });
     expect(store.get().sort).toEqual({ key: "modified", direction: "desc" });
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true, history: [] });
+    expect(save).toHaveBeenCalledWith({ autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" });
   });
 
   it("update({ groupByDocument }) : applique, notifie, enregistre", async () => {
@@ -368,7 +368,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     gate.resolve(STORED);
     await pending;
     expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], sort: { key: "modified", direction: "desc" } });
+    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], openMode: "tab", sort: { key: "modified", direction: "desc" } });
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60, groupByDocument: false });
   });
 
@@ -380,7 +380,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     const p2 = store.update({ sort: { key: "path", direction: "asc" } });
     gate.resolve(STORED);
     await Promise.all([p1, p2]);
-    expect(save).toHaveBeenLastCalledWith({ ...STORED, history: [], groupByDocument: true, sort: { key: "path", direction: "asc" } });
+    expect(save).toHaveBeenLastCalledWith({ ...STORED, history: [], openMode: "tab", groupByDocument: true, sort: { key: "path", direction: "asc" } });
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60 });
   });
 
@@ -388,7 +388,7 @@ describe("createSettings : chargement unique et mise à jour avant la fin du cha
     const save = vi.fn(async (_v: unknown) => undefined);
     const store = createSettings({ load: async () => STORED, save, onWarn: vi.fn() });
     await store.update({ groupByDocument: true });
-    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], groupByDocument: true });
+    expect(save).toHaveBeenCalledWith({ ...STORED, history: [], openMode: "tab", groupByDocument: true });
   });
 
   it("une fois chargé, update() applique et notifie toujours de façon synchrone (pas d'attente inutile)", async () => {
@@ -498,5 +498,87 @@ describe("historique des requêtes (history)", () => {
     await store.ready;
     await expect(store.update({ history: ["x"] })).rejects.toThrow("disque");
     expect(store.get().history).toEqual(["x"]);
+  });
+});
+
+describe("mode d'ouverture de la recherche (openMode, J10 10d)", () => {
+  it("défaut : onglet", () => {
+    expect(DEFAULT_SETTINGS.openMode).toBe("tab");
+  });
+  it("ancien fichier sans le champ : « tab » SANS avertissement", () => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ autoIndex: true, intervalMinutes: 5, sort: "relevance:desc", groupByDocument: true, history: [] }, warn).openMode).toBe("tab");
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it.each(["tab", "dialog"] as const)("valeur valide « %s » conservée sans avertissement", (openMode) => {
+    const warn = vi.fn();
+    expect(normalizeSettings({ openMode }, warn).openMode).toBe(openMode);
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it.each([["texte inconnu", "floating"], ["casse", "Dialog"], ["nombre", 1], ["nul", null], ["booléen", true], ["objet", {}], ["chaîne vide", ""]])(
+    "valeur invalide (%s) : « tab » ET avertissement",
+    (_name, openMode) => {
+      const warn = vi.fn();
+      expect(normalizeSettings({ openMode }, warn).openMode).toBe("tab");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/ouverture/i);
+    },
+  );
+  it("une valeur invalide ne change pas les autres champs", () => {
+    expect(normalizeSettings({ openMode: "zzz", autoIndex: false, intervalMinutes: 15 }, vi.fn())).toMatchObject({ autoIndex: false, intervalMinutes: 15, openMode: "tab" });
+  });
+  it("lecture d'un ancien fichier : ready se résout, rien n'est réécrit, aucun avertissement", async () => {
+    const warn = vi.fn();
+    const save = vi.fn(async () => undefined);
+    const store = createSettings({ load: async () => ({ autoIndex: false, intervalMinutes: 15 }), save, onWarn: warn });
+    await store.ready;
+    expect(store.get().openMode).toBe("tab");
+    expect(save).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it("valeur invalide dans le fichier : avertissement et réécriture avec la valeur valide", async () => {
+    const warn = vi.fn();
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const store = createSettings({ load: async () => ({ openMode: "fenetre" }), save, onWarn: warn });
+    await store.ready;
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ openMode: "tab" }));
+  });
+  it("update({ openMode }) : applique, notifie, enregistre l'objet complet", async () => {
+    const save = vi.fn(async (_v: unknown) => undefined);
+    const store = createSettings({ load: async () => undefined, save, onWarn: vi.fn() });
+    await store.ready;
+    const listener = vi.fn();
+    store.subscribe(listener);
+    await store.update({ openMode: "dialog" });
+    expect(store.get().openMode).toBe("dialog");
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, openMode: "dialog" });
+  });
+  it("update({ openMode }) identique : aucune écriture ni notification", async () => {
+    const save = vi.fn(async () => undefined);
+    const store = createSettings({ load: async () => ({ openMode: "dialog" }), save, onWarn: vi.fn() });
+    await store.ready;
+    const listener = vi.fn();
+    store.subscribe(listener);
+    await store.update({ openMode: "dialog" });
+    expect(save).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+  });
+  it("update({ openMode }) invalide : défaut, avertissement, aucune écriture", async () => {
+    const warn = vi.fn();
+    const save = vi.fn(async () => undefined);
+    const store = createSettings({ load: async () => undefined, save, onWarn: warn });
+    await store.ready;
+    await store.update({ openMode: "x" as never });
+    expect(store.get().openMode).toBe("tab");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("changer openMode ne touche ni l'indexation automatique ni la fréquence (abonné aux réglages)", async () => {
+    const store = createSettings({ load: async () => ({ autoIndex: false, intervalMinutes: 60 }), save: async () => undefined, onWarn: vi.fn() });
+    await store.ready;
+    await store.update({ openMode: "dialog" });
+    expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60, openMode: "dialog" });
   });
 });

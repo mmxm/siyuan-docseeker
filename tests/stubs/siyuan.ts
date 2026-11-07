@@ -25,6 +25,35 @@ export class Setting {
 /** Élément DOM du stub : absent dans l'environnement `node` (les tests qui n'ont pas de DOM n'en ont pas besoin). */
 const hasDom = (): boolean => typeof document !== "undefined";
 
+/** `window.siyuan.zIndex` : compteur commun aux dialogues et aux menus (chaque ouverture passe au-dessus de tout). */
+export const siyuanState = { zIndex: 100 };
+const zOf = (el: Element | null | undefined): number => {
+  const z = Number((el as HTMLElement | null | undefined)?.style?.zIndex);
+  return Number.isFinite(z) ? z : 0;
+};
+
+/**
+ * Gestionnaire global de SiYuan 3.8.9 (`window.addEventListener("keydown", ...)`, lu dans main.c73ef160...js), partie Échap :
+ * un menu ouvert AU-DESSUS du premier dialogue est fermé (rien d'autre) ; sinon le DERNIER dialogue est détruit. Il est installé
+ * AVANT l'écouteur propre au menu (même cible, ordre d'enregistrement) : le menu fermé ici ignore ensuite sa propre frappe.
+ * Un `stopPropagation()` fait dans le dialogue empêche donc cette fermeture globale.
+ */
+let globalKeysOn: Window | undefined;
+function installGlobalKeys(): void {
+  if (!hasDom() || globalKeysOn === window) return;
+  globalKeysOn = window;
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.isComposing) return;
+    const menu = Menu.current;
+    const first = Dialog.stack[0];
+    if (menu?.opened && !(first && zOf(first.element.querySelector(".b3-dialog")) > zOf(menu.element))) {
+      menu.close();
+      return;
+    }
+    Dialog.stack.at(-1)?.destroy();
+  });
+}
+
 export interface StubMenuItem {
   label?: string;
   type?: string;
@@ -79,6 +108,7 @@ export class Menu {
       Menu.singleton = el;
     }
     if (!el.isConnected) document.body.appendChild(el);
+    installGlobalKeys();
     return el;
   }
   readonly items: StubMenuItem[] = [];
@@ -207,6 +237,7 @@ export class Menu {
     Menu.current = this;
     if (!hasDom()) return;
     this.element = Menu.ensureElement();
+    this.element.style.zIndex = String(++siyuanState.zIndex); // comme `this.element.style.zIndex=(++window.siyuan.zIndex)` du bundle
     const list = this.element.lastElementChild as HTMLElement;
     list.innerHTML = "";
     for (const item of this.items) list.append(this.renderItem(item));
@@ -246,16 +277,38 @@ export interface StubDialogOptions {
   title?: string;
   content: string;
   width?: string;
-  destroyCallback?: () => void;
+  height?: string;
+  positionId?: string;
+  hideCloseIcon?: boolean;
+  disableClose?: boolean;
+  destroyCallback?: (options?: Record<string, unknown>) => void;
 }
 
-/** Enregistre ses options ; l'élément reproduit le squelette de SiYuan (le contenu est inséré comme HTML). */
+const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
+
+/**
+ * Imite le `Dialog` de SiYuan 3.8.9 (lu dans main.c73ef160...js, classe du module 34200) :
+ * - `window.siyuan.dialogs` (`Dialog.stack`) ; chaque dialogue a `z-index: ++window.siyuan.zIndex` (un menu ou un dialogue ouvert
+ *   ensuite passe donc au-dessus) ; `div.b3-dialog > .b3-dialog__scrim + .b3-dialog__container[role=dialog][aria-modal]` ;
+ * - le conteneur reçoit le focus à la création ; le focus précédent est mémorisé ;
+ * - clic sur le voile : `destroy()` (sauf `disableClose`) ; `trapFocus` (Tab, capture sur le document) : seul le dernier dialogue piège ;
+ * - `destroy(options)` : ignoré si déjà en cours ; retire `trapFocus` ; après un délai (`destroyDelayMs`, `setTimeout` de SiYuan),
+ *   ferme un menu ouvert AU-DESSUS du dialogue, retire l'élément, appelle `destroyCallback(options)`, retire le dialogue de la
+ *   pile puis rend le focus à l'élément précédent si le focus était dans le dialogue (ou sur BODY) et est maintenant sur BODY.
+ *   L'option (`{ focus: "false" }`) n'est transmise QU'au `destroyCallback` : `destroy` de 3.8.9 ne la lit jamais, le focus précédent
+ *   est donc rendu même avec `focus: "false"` (seul le code appelé par `destroyCallback` peut s'en abstenir) ;
+ * - `positionId`, `height`, `hideCloseIcon` sont lus (le titre et le contenu sont insérés comme HTML).
+ */
 export class Dialog {
   static instances: Dialog[] = [];
+  /** `window.siyuan.dialogs` : dialogues vivants, le dernier est au-dessus. */
+  static stack: Dialog[] = [];
   static reset(): void {
     for (const d of Dialog.instances) d.element?.remove();
     Dialog.instances = [];
+    Dialog.stack = [];
     Dialog.destroyDelayMs = undefined;
+    siyuanState.zIndex = 100;
   }
   /** Délai (ms) avant `destroyCallback`, comme le setTimeout de SiYuan ; `undefined` : synchrone (par défaut dans les tests). */
   static destroyDelayMs: number | undefined = undefined;
@@ -263,22 +316,69 @@ export class Dialog {
   /** Nombre d'appels à `destroy()` qui ont réellement détruit (SiYuan ignore les suivants : `this.destroying`). */
   destroyCount = 0;
   destroyCalls = 0;
+  /** Argument du `destroy()` qui a réellement détruit (le premier) ; `undefined` s'il n'a pas reçu d'argument. */
+  lastDestroyOptions: Record<string, unknown> | undefined;
   private destroying = false;
+  private previousFocus: HTMLElement | undefined;
+  private readonly trapFocus = (e: KeyboardEvent): void => {
+    if (e.key !== "Tab" || this.destroying || Dialog.stack.at(-1) !== this) return;
+    const container = this.element.querySelector<HTMLElement>(".b3-dialog__container")!;
+    const items = [...container.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0 && !el.matches(":disabled") && !el.closest("[hidden]"));
+    const active = document.activeElement as HTMLElement | null;
+    const edge = e.shiftKey ? items[0] : items.at(-1);
+    if (items.length === 0 || !active || !container.contains(active) || active === container || active === edge) {
+      e.preventDefault();
+      e.stopPropagation();
+      (items.length > 0 ? (e.shiftKey ? items.at(-1) : items[0]) : container)!.focus();
+    }
+  };
   constructor(public readonly options: StubDialogOptions) {
     Dialog.instances.push(this);
     if (!hasDom()) return;
+    installGlobalKeys();
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) this.previousFocus = active;
+    Dialog.stack.push(this);
     this.element = document.createElement("div");
-    this.element.innerHTML = `<div class="b3-dialog__container"><div class="b3-dialog__header">${options.title ?? ""}</div><div class="b3-dialog__body">${options.content}</div></div>`;
+    const closeHidden = options.disableClose === true || options.hideCloseIcon === true;
+    this.element.innerHTML =
+      `<div class="b3-dialog" style="z-index: ${++siyuanState.zIndex};">` +
+      '<div class="b3-dialog__scrim"></div>' +
+      `<div role="dialog" aria-modal="true" tabindex="-1" class="b3-dialog__container" style="width:${options.width ?? "auto"};height:${options.height ?? "auto"}">` +
+      `<svg class="b3-dialog__close${closeHidden ? " fn__none" : ""}"><use xlink:href="#iconCloseRound"></use></svg>` +
+      `<div class="resize__move b3-dialog__header${options.title ? "" : " fn__none"}">${options.title ?? ""}</div>` +
+      `<div class="b3-dialog__body">${options.content}</div></div></div>`;
+    this.element.querySelector(".b3-dialog__scrim")!.addEventListener("click", (e) => {
+      if (options.disableClose !== true) this.destroy();
+      e.preventDefault();
+      e.stopPropagation();
+    });
     document.body.appendChild(this.element);
+    document.addEventListener("keydown", this.trapFocus, true);
+    this.element.querySelector<HTMLElement>(".b3-dialog__container")!.focus();
   }
-  destroy(): void {
+  destroy(options?: Record<string, unknown>): void {
     this.destroyCalls += 1;
     if (this.destroying) return;
     this.destroying = true;
     this.destroyCount += 1;
+    this.lastDestroyOptions = options;
+    if (hasDom()) document.removeEventListener("keydown", this.trapFocus, true);
+    const menu = Menu.current;
+    const menuAbove = menu?.opened === true && zOf(menu.element) > zOf(this.element?.querySelector(".b3-dialog"));
     const finish = (): void => {
+      const active = hasDom() ? document.activeElement : null;
+      const focusWasHere = active === document.body || this.element?.contains(active) === true;
+      if (menuAbove && Menu.current === menu) menu.close();
       this.element?.remove();
-      this.options.destroyCallback?.();
+      try {
+        this.options.destroyCallback?.(options);
+      } finally {
+        Dialog.stack = Dialog.stack.filter((d) => d !== this);
+        const top = Dialog.stack.at(-1);
+        const back = this.previousFocus;
+        if (hasDom() && focusWasHere && document.activeElement === document.body && back?.isConnected && (!top || top.element.contains(back))) back.focus();
+      }
     };
     if (Dialog.destroyDelayMs === undefined) finish();
     else setTimeout(finish, Dialog.destroyDelayMs);

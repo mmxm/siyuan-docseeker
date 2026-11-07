@@ -40,6 +40,8 @@ export interface SearchToolbarDeps {
   t(key: string, vars?: Readonly<Record<string, string | number>>): string;
   openMenu: OpenMenu;
   openDialog: OpenDialog;
+  /** Fenêtre flottante seulement : bouton « Ouvrir dans un nouvel onglet » (absent : pas de bouton). */
+  openInTab?: () => void;
   getGroupByDocument(): boolean;
   setGroupByDocument(next: boolean): void;
   /** « Élargir » / « Réduire » : état et actions de la liste de résultats. */
@@ -149,6 +151,12 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
   const expandBtn = makeButton("iconExpand", t("expandAll"));
   const collapseBtn = makeButton("iconContract", t("collapseAll"));
   row.append(counter, pathLabel, removeBtn, grow, includeBtn, pathBtn, space(), moreBtn, filtersBtn, space(), expandBtn, collapseBtn);
+  const openInTab = deps.openInTab;
+  let openInTabBtn: HTMLButtonElement | undefined;
+  if (openInTab) {
+    openInTabBtn = makeButton("iconLayoutRight", t("openInNewTab"));
+    row.append(space(), openInTabBtn);
+  }
   host.appendChild(row);
 
   const options = (): SearchOptions => deps.getOptions();
@@ -458,6 +466,7 @@ export function mountSearchToolbar(host: HTMLElement, deps: SearchToolbarDeps): 
     if (includeBtn.getAttribute("aria-disabled") === "true") return;
     applyFilters({ ...currentFilters(), includeSubfolders: !currentFilters().includeSubfolders });
   });
+  if (openInTabBtn && openInTab) on(openInTabBtn, openInTab);
   on(expandBtn, () => {
     if (expandBtn.getAttribute("aria-disabled") === "true") return;
     deps.expansion.expandAll();

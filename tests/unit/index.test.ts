@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
     focusInput: ReturnType<typeof vi.fn>;
     onWarn: (m: string, e?: unknown) => void;
     onOpenSettings?: (() => void) | undefined;
+    host: HTMLElement;
   }[],
   listeners: new Set<(e: unknown) => void>(),
   settings: [] as {
@@ -35,6 +36,22 @@ const h = vi.hoisted(() => ({
   loadData: vi.fn(),
   saveData: vi.fn(),
   failCreate: false,
+  mountError: undefined as Error | undefined,
+  floatingDisposeError: undefined as Error | undefined,
+  openFloating: vi.fn(),
+  floatingDialogs: [] as {
+    options: { title: string; build(c: HTMLElement): void; onDestroyed?(info: { focus: boolean }): void; onClosing?(info: { focus: boolean }): void };
+    container: HTMLElement;
+    closeCalls: ({ focus?: boolean } | undefined)[];
+    destroyed: boolean;
+    vanished: boolean;
+    /** SiYuan lance la destruction (Échap global, voile, croix) : `onClosing` tout de suite ; destruction réelle ensuite (immédiate sauf `floatingDeferred`). */
+    beginDestroy(info?: { focus: boolean }): void;
+    destroy(info?: { focus: boolean }): void;
+    /** SiYuan retire l'élément sans jamais appeler `destroyCallback`. */
+    vanish(): void;
+  }[],
+  floatingDeferred: false,
   queue: null as null | { pending: string[]; running: string[]; completed: string[]; failed: unknown[] },
   mountDeps: [] as {
     indexActivity?: { getSnapshot(): unknown; subscribe(l: () => void): () => void };
@@ -63,6 +80,15 @@ vi.mock("siyuan", () => ({
       autoIndexIntervalDesc: "Desc freq",
       commandOpenSearch: "Rechercher dans les PDF",
       commandFocusSearch: "Aller au champ de recherche PDF",
+      commandOpenSearchFloating: "Rechercher dans les PDF (fenêtre flottante)",
+      commandOpenSearchTab: "Rechercher dans les PDF (onglet)",
+      openMode: "Ouverture de la recherche",
+      openModeDesc: "Desc ouverture",
+      floatingTitle: "Recherche dans les PDF",
+      floatingOpenFailed: "Impossible d'ouvrir la fenêtre de recherche",
+      openTabFailed: "Impossible d'ouvrir l'onglet de recherche",
+      transferTabFailed: "Impossible d'ouvrir la recherche dans un onglet : la fenêtre reste ouverte",
+      highlightUnavailable: "Surlignage indisponible",
     };
     setting: unknown;
     loadData = h.loadData;
@@ -106,6 +132,7 @@ vi.mock("../../src/indexer/autoSync", async (orig) => {
   };
 });
 vi.mock("../../src/siyuan/kernelApi", () => ({ createKernelApi: () => ({}) }));
+vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.fn(), openFloatingDialog: (o: unknown) => h.openFloating(o) }));
 vi.mock("../../src/siyuan/petalStore", () => ({ createPetalStore: () => ({ clear: h.clear, removeStaleTmp: h.stale }) }));
 vi.mock("../../src/siyuan/discovery", () => ({ discoverPdfs: vi.fn() }));
 vi.mock("../../src/indexer/loadPdf", () => ({ createLoadPdf: () => vi.fn() }));
@@ -132,16 +159,36 @@ vi.mock("../../src/search/sharedIndex", () => ({
     return { start: h.sharedStart, dispose: h.sharedDispose, getError: h.getError, refreshNow: h.refresh };
   },
 }));
+vi.mock("../../src/siyuan/floatingSearch", async (orig) => {
+  const actual = await orig<typeof import("../../src/siyuan/floatingSearch")>();
+  return {
+    ...actual,
+    createFloatingSearch: (deps: Parameters<typeof actual.createFloatingSearch>[0]) => {
+      const real = actual.createFloatingSearch(deps);
+      return {
+        ...real,
+        dispose() {
+          if (h.floatingDisposeError) {
+            real.dispose();
+            throw h.floatingDisposeError;
+          }
+          real.dispose();
+        },
+      };
+    },
+  };
+});
 vi.mock("../../src/searchTab", async (orig) => {
   const actual = await orig<typeof import("../../src/searchTab")>();
   return {
     ...actual,
     mountSearchTab: (
-      _host: HTMLElement,
+      host: HTMLElement,
       deps: { onWarn: (m: string, e?: unknown) => void; onOpenSettings?: () => void; indexActivity?: never },
     ) => {
+      if (h.mountError) throw h.mountError;
       h.mountDeps.push(deps);
-      const m = { dispose: vi.fn(), focusInput: vi.fn(() => true), onWarn: deps.onWarn, onOpenSettings: deps.onOpenSettings };
+      const m = { dispose: vi.fn(), focusInput: vi.fn(() => true), onWarn: deps.onWarn, onOpenSettings: deps.onOpenSettings, host };
       h.mounts.push(m);
       return m;
     },
@@ -157,7 +204,7 @@ afterEach(() => {
   for (const p of plugins.splice(0)) p.onunload();
 });
 
-type TabModel = { element: HTMLElement };
+type TabModel = { element: HTMLElement; data?: unknown };
 function setup() {
   const plugin = new (DocSeekerPlugin as unknown as new () => unknown)() as {
     onload(): void;
@@ -167,9 +214,12 @@ function setup() {
     topBar: { callback: () => void };
   };
   plugin.onload();
-  /** Rend un onglet dans `element` (nouveau par défaut), attaché au document comme un vrai onglet SiYuan. */
-  const render = (element: HTMLElement = document.createElement("div")): TabModel => {
-    const model = { element };
+  /**
+   * Rend un onglet dans `element` (nouveau par défaut), attaché au document comme un vrai onglet SiYuan. `data` : le `custom.data` que
+   * SiYuan transmet à `init` (`this.data` de Custom, lu dans le bundle 3.8.9 : celui passé à `openTab({ custom: { data } })`).
+   */
+  const render = (element: HTMLElement = document.createElement("div"), data?: unknown): TabModel => {
+    const model: TabModel = { element, data };
     if (!element.isConnected) document.body.append(element);
     plugin.tab.init.call(model, model);
     return model;
@@ -181,10 +231,10 @@ function setup() {
 function openPanel() {
   const setting = h.settings[0]!;
   const els = setting.items.map((item) => item.createActionElement?.() ?? item.actionElement!);
-  const [autoIndex, autoIndexInterval, reindex, clear, diagnostic, log] = els as HTMLElement[] as [
-    HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement,
+  const [openMode, autoIndex, autoIndexInterval, reindex, clear, diagnostic, log] = els as HTMLElement[] as [
+    HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement,
   ];
-  return { setting, autoIndex, autoIndexInterval, reindex, clear, diagnostic, log, close: () => setting.options.destroyCallback?.() };
+  return { setting, openMode, autoIndex, autoIndexInterval, reindex, clear, diagnostic, log, close: () => setting.options.destroyCallback?.() };
 }
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -211,7 +261,50 @@ beforeEach(() => {
   h.isRunning = false;
   h.queue = null;
   h.failCreate = false;
+  h.mountError = undefined;
+  h.floatingDisposeError = undefined;
   h.mountDeps.length = 0;
+  h.floatingDialogs.length = 0;
+  h.floatingDeferred = false;
+  h.openFloating.mockReset().mockImplementation((options: (typeof h.floatingDialogs)[number]["options"]) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let pendingFocus = true;
+    let begun = false;
+    const dialog: (typeof h.floatingDialogs)[number] = {
+      options,
+      container,
+      closeCalls: [],
+      destroyed: false,
+      vanished: false,
+      beginDestroy(info) {
+        if (begun) return;
+        begun = true;
+        options.onClosing?.(info ?? { focus: pendingFocus });
+        if (!h.floatingDeferred) dialog.destroy(info);
+      },
+      destroy(info) {
+        if (dialog.destroyed) return;
+        dialog.destroyed = true;
+        container.remove();
+        options.onDestroyed?.(info ?? { focus: pendingFocus });
+      },
+      vanish() {
+        dialog.vanished = true;
+        container.remove();
+      },
+    };
+    h.floatingDialogs.push(dialog);
+    options.build(container);
+    return {
+      close: (o?: { focus?: boolean }) => {
+        dialog.closeCalls.push(o);
+        if (dialog.closeCalls.length === 1) pendingFocus = o?.focus !== false;
+        dialog.beginDestroy();
+      },
+      isOpen: () => !dialog.destroyed && !dialog.vanished,
+    };
+  });
   h.reset.mockReset();
   h.stale.mockReset().mockResolvedValue({ handled: [], failed: [] });
   h.loadData.mockReset().mockResolvedValue("");
@@ -308,11 +401,12 @@ describe("DocSeekerPlugin", () => {
 });
 
 describe("panneau de paramètres", () => {
-  it("onload assigne this.setting avec six éléments (titre + description + action), sans réglage mort", () => {
+  it("onload assigne this.setting avec sept éléments (titre + description + action), sans réglage mort", () => {
     const s = setup();
     expect(h.settings).toHaveLength(1);
     expect((s.plugin as unknown as { setting: unknown }).setting).toBe(h.settings[0]);
     expect(h.settings[0]!.items.map((i) => [i.title, i.description])).toEqual([
+      ["Ouverture de la recherche", "Desc ouverture"],
       ["Indexation automatique", "Desc auto"],
       ["Fréquence de vérification", "Desc freq"],
       ["Réindexer", "Desc réindexer"],
@@ -326,8 +420,8 @@ describe("panneau de paramètres", () => {
   it("chaque item utilise direction « row » : SiYuan place alors l'action sous le titre, en pleine largeur (fn__block)", () => {
     setup();
     const items = h.settings[0]!.items as { direction?: string }[];
-    expect(items).toHaveLength(6);
-    expect(items.map((i) => i.direction)).toEqual(["row", "row", "row", "row", "row", "row"]);
+    expect(items).toHaveLength(7);
+    expect(items.map((i) => i.direction)).toEqual(["row", "row", "row", "row", "row", "row", "row"]);
   });
 
   it("n'abonne rien avant l'ouverture du panneau", () => {
@@ -534,6 +628,7 @@ describe("ouverture de plusieurs onglets de recherche", () => {
     plugin.onload();
     plugin.topBar.callback();
     plugin.topBar.callback();
+    await flush(); // le réglage d'ouverture est lu avant de choisir (settings.ready)
     expect(mocked).toHaveBeenCalledTimes(2);
     for (const [options] of mocked.mock.calls) expect(options.openNewTab).toBe(true);
   });
@@ -551,7 +646,7 @@ describe("indexation automatique", () => {
   const settle = async (ms: number): Promise<void> => {
     await vi.advanceTimersByTimeAsync(ms);
   };
-  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] } as const;
+  const PRESENTATION = { sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" } as const;
   const startPlugin = async (stored: unknown = "") => {
     h.loadData.mockResolvedValue(stored);
     const s = setup();
@@ -669,8 +764,7 @@ describe("indexation automatique", () => {
   it.each([["keydown"], ["pointerdown"], ["wheel"]])(
     "une activité de l'utilisateur (%s) met l'indexeur en pause pendant 3 s (shouldYield) et retarde la passe",
     async (type) => {
-      const s = await startPlugin();
-      void s;
+      await startPlugin();
       expect(h.indexerDeps?.shouldYield?.()).toBe(false);
       document.dispatchEvent(new Event(type));
       expect(h.indexerDeps?.shouldYield?.()).toBe(true);
@@ -826,7 +920,7 @@ describe("indexation automatique", () => {
     expect(tabSettings.get().groupByDocument).toBe(false);
     await tabSettings.update({ sort: { key: "modified", direction: "desc" } });
     expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
-      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false, history: [],
+      autoIndex: true, intervalMinutes: 5, sort: { key: "modified", direction: "desc" }, groupByDocument: false, history: [], openMode: "tab",
     });
   });
 
@@ -846,7 +940,7 @@ describe("indexation automatique", () => {
     const pending = h.mountDeps[0]!.settings!.update({ groupByDocument: false });
     await pending;
     expect(h.saveData).toHaveBeenLastCalledWith("settings.json", {
-      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false, history: [],
+      autoIndex: false, intervalMinutes: 60, sort: { key: "name", direction: "asc" }, groupByDocument: false, history: [], openMode: "tab",
     });
   });
 
@@ -897,12 +991,14 @@ describe("commandes (J10 10e)", () => {
     vi.restoreAllMocks();
   });
 
-  it("enregistre openSearch et focusSearch, sans raccourci par défaut, avec leurs libellés", () => {
+  it("enregistre openSearch, openSearchFloating, openSearchTab et focusSearch, sans raccourci par défaut, avec leurs libellés", () => {
     setup();
-    expect(h.commands.map((c) => c.langKey).sort()).toEqual(["focusSearch", "openSearch"]);
+    expect(h.commands.map((c) => c.langKey).sort()).toEqual(["focusSearch", "openSearch", "openSearchFloating", "openSearchTab"]);
     for (const c of h.commands) expect(c.hotkey).toBe("");
     expect(command("openSearch")!.langText).toBe("Rechercher dans les PDF");
     expect(command("focusSearch")!.langText).toBe("Aller au champ de recherche PDF");
+    expect(command("openSearchFloating")!.langText).toBe("Rechercher dans les PDF (fenêtre flottante)");
+    expect(command("openSearchTab")!.langText).toBe("Rechercher dans les PDF (onglet)");
   });
 
   it("openSearch ouvre toujours un nouvel onglet", async () => {
@@ -911,6 +1007,7 @@ describe("commandes (J10 10e)", () => {
     mocked.mockReset();
     setup();
     command("openSearch")!.callback!();
+    await flush();
     expect(mocked).toHaveBeenCalledTimes(1);
     expect(mocked.mock.calls[0]![0]).toMatchObject({ openNewTab: true, custom: { id: "docseekerdocseeker" } });
   });
@@ -1195,5 +1292,773 @@ describe("trace des touches dans le panneau (R6)", () => {
     const panel = openPanel();
     traceButton(panel.diagnostic).click();
     expect(panel.diagnostic.querySelector(".docseeker-trace-status")!.textContent).toBe("traceKeysNoTab");
+  });
+});
+
+describe("fenêtre flottante ou onglet (J10 10d)", () => {
+  type FloatingDeps = {
+    floating?: { onPdfOpened(overlay?: { dispose(): void }): void; onOpenInTab(): void; onCloseRequest(): void };
+    session?: { initial: { query: string; options: unknown } | undefined; save(state: { query: string; options: unknown }): void };
+  };
+  const command = (key: string) => h.commands.find((c) => c.langKey === key)!;
+  const deps = (index = -1): FloatingDeps => h.mountDeps.at(index) as unknown as FloatingDeps;
+  const dialog = () => h.floatingDialogs.at(-1)!;
+  const STATE = { query: "chat", options: { sort: { key: "name", direction: "asc" }, filters: { folder: "assets/", includeSubfolders: true, nameContains: "" } } };
+  const openTabMock = async () => {
+    const { openTab } = await import("siyuan");
+    return vi.mocked(openTab).mockReset().mockResolvedValue(undefined as never);
+  };
+  const startWith = async (stored: unknown = "") => {
+    h.loadData.mockResolvedValue(stored);
+    const s = setup();
+    await flush();
+    return s;
+  };
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe("choix du mode", () => {
+    it("openSearchFloating ouvre TOUJOURS la fenêtre flottante, même si le réglage dit « onglet »", async () => {
+      const openTab = await openTabMock();
+      await startWith({ openMode: "tab" });
+      command("openSearchFloating").callback!();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(h.floatingDialogs[0]!.options.title).toBe("Recherche dans les PDF");
+      expect(openTab).not.toHaveBeenCalled();
+    });
+
+    it("openSearchTab ouvre TOUJOURS un nouvel onglet, même si le réglage dit « fenêtre flottante »", async () => {
+      const openTab = await openTabMock();
+      await startWith({ openMode: "dialog" });
+      command("openSearchTab").callback!();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(openTab).mock.calls[0]![0]).toMatchObject({ openNewTab: true, custom: { id: "docseekerdocseeker" } });
+      expect(h.openFloating).not.toHaveBeenCalled();
+    });
+
+    it("openSearch suit le réglage : onglet par défaut (ancien fichier, ou pas de fichier)", async () => {
+      const openTab = await openTabMock();
+      await startWith("");
+      command("openSearch").callback!();
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(h.openFloating).not.toHaveBeenCalled();
+    });
+
+    it("openSearch suit le réglage : « fenêtre flottante » ouvre le dialogue, pas d'onglet", async () => {
+      const openTab = await openTabMock();
+      await startWith({ openMode: "dialog" });
+      command("openSearch").callback!();
+      await flush();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(openTab).not.toHaveBeenCalled();
+    });
+
+    it("l'icône de la barre supérieure suit le réglage, dans un sens comme dans l'autre", async () => {
+      const openTab = await openTabMock();
+      const s = await startWith({ openMode: "dialog" });
+      s.plugin.topBar.callback();
+      await flush();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(openTab).not.toHaveBeenCalled();
+      await (s.plugin as unknown as { settings: { update(p: unknown): Promise<void> } }).settings.update({ openMode: "tab" });
+      s.plugin.topBar.callback();
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+    });
+
+    it("choisir « Fenêtre flottante » dans le panneau est enregistré et change aussitôt l'ouverture", async () => {
+      const openTab = await openTabMock();
+      await startWith("");
+      const panel = openPanel();
+      const select = panel.openMode.querySelector<HTMLSelectElement>("select")!;
+      select.value = "dialog";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await flush();
+      expect(h.saveData).toHaveBeenCalledWith("settings.json", expect.objectContaining({ openMode: "dialog" }));
+      command("openSearch").callback!();
+      await flush();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(openTab).not.toHaveBeenCalled();
+      panel.close();
+    });
+
+    it("changer le mode ne perturbe pas l'indexation automatique (aucune synchronisation, minuterie intacte)", async () => {
+      vi.useFakeTimers();
+      h.loadData.mockResolvedValue("");
+      const s = setup();
+      s.plugin.onLayoutReady();
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(h.start).toHaveBeenCalledTimes(1);
+      await (s.plugin as unknown as { settings: { update(p: unknown): Promise<void> } }).settings.update({ openMode: "dialog" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.start).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(h.start).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+
+    it("un réglage invalide donne l'onglet, avec un avertissement dans le journal", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      await startWith({ openMode: "zzz" });
+      command("openSearch").callback!();
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ouverture/i), undefined);
+    });
+  });
+
+  describe("une seule fenêtre", () => {
+    it("une deuxième ouverture ne crée pas de second dialogue : elle refocalise le champ", async () => {
+      const openTab = await openTabMock();
+      await startWith();
+      command("openSearchFloating").callback!();
+      command("openSearchFloating").callback!();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(h.mounts).toHaveLength(1);
+      expect(h.mounts[0]!.focusInput).toHaveBeenCalledTimes(2); // focus initial + refocalisation de la 2e ouverture, exactement
+      command("openSearch").callback!(); // mode onglet par défaut : ouvre un onglet, jamais un second dialogue, sans toucher au champ flottant
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(h.mounts[0]!.focusInput).toHaveBeenCalledTimes(2);
+    });
+
+    it("le dialogue monte la même vue que l'onglet, dans son conteneur, avec les mêmes dépendances (index partagé unique)", async () => {
+      await startWith();
+      command("openSearchFloating").callback!();
+      expect(h.mountDeps).toHaveLength(1);
+      expect(h.sharedCreated).toBe(1);
+      expect(deps().floating).toEqual({ onPdfOpened: expect.any(Function), onOpenInTab: expect.any(Function), onCloseRequest: expect.any(Function) });
+      expect(h.mounts[0]!.host).toBe(h.floatingDialogs[0]!.container); // la vue est montée DANS le conteneur du dialogue
+    });
+
+    it("un onglet normal n'a ni mode flottant ni session", async () => {
+      const s = await startWith();
+      s.render();
+      expect(deps().floating).toBeUndefined();
+      expect(deps().session).toBeUndefined();
+    });
+
+    it("un onglet ET une fenêtre peuvent coexister : deux montages, un seul index partagé", async () => {
+      const s = await startWith();
+      s.render();
+      command("openSearchFloating").callback!();
+      expect(h.mounts).toHaveLength(2);
+      expect(h.sharedCreated).toBe(1);
+      s.plugin.onunload();
+      expect(h.mounts.every((m) => m.dispose.mock.calls.length === 1)).toBe(true);
+    });
+  });
+
+  describe("focusSearch", () => {
+    it("fenêtre ouverte : focalise son champ, sans ouvrir ni onglet ni seconde fenêtre", async () => {
+      const openTab = await openTabMock();
+      await startWith();
+      command("openSearchFloating").callback!();
+      h.mounts[0]!.focusInput.mockClear();
+      command("focusSearch").callback!();
+      await flush();
+      expect(h.mounts[0]!.focusInput).toHaveBeenCalledTimes(1);
+      expect(openTab).not.toHaveBeenCalled();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+    });
+
+    it("fenêtre fermée : comportement d'avant (ouvre/ramène l'onglet)", async () => {
+      const openTab = await openTabMock();
+      await startWith({ openMode: "dialog" });
+      command("focusSearch").callback!();
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(h.openFloating).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("fermeture de la fenêtre", () => {
+    it("ouvrir un PDF ferme la fenêtre SANS rendre le focus (focus: false)", async () => {
+      await startWith();
+      command("openSearchFloating").callback!();
+      deps().floating!.onPdfOpened();
+      expect(dialog().closeCalls).toEqual([{ focus: false }]);
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("Échap sur un champ vide ferme la fenêtre en rendant le focus", async () => {
+      await startWith();
+      command("openSearchFloating").callback!();
+      deps().floating!.onCloseRequest();
+      expect(dialog().closeCalls).toEqual([undefined]);
+    });
+
+    it("onunload détruit la fenêtre et libère sa vue ; plus rien ne s'ouvre ensuite", async () => {
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      s.plugin.onunload();
+      expect(dialog().destroyed).toBe(true);
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1);
+      command("openSearchFloating").callback!();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+    });
+
+    it("onunload avec destruction différée de SiYuan : la vue est libérée tout de suite, une seule fois", async () => {
+      h.floatingDeferred = true;
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      s.plugin.onunload();
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1);
+      dialog().destroy();
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("session et transfert vers un onglet (jeton dans custom.data, relu par init : indépendant de l'ordre)", () => {
+    // SiYuan 3.8.9 (bundle main.c73ef160...js) : `openTab({ custom: { id, data } })` crée l'onglet ; son callback appelle
+    // `plugin.models[id]({ tab, data: custom.data })` -> `new Custom({ ..., data })` dont le constructeur fait `this.data = data` puis
+    // `this.init(this)` : `init` est appelé de façon SYNCHRONE pendant `openTab` quand l'onglet est créé tout de suite, et reçoit
+    // `custom.data` dans `this.data`. `model.data` est aussi ce que la mise en page enregistre (`Object.assign({}, model.data)`).
+    const sentData = async (index = -1): Promise<unknown> => {
+      const { openTab } = await import("siyuan");
+      return (vi.mocked(openTab).mock.calls.at(index)![0] as unknown as { custom: { data?: unknown } }).custom.data;
+    };
+    const openFloatingWithSession = async () => {
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      deps().session!.save(STATE);
+      return s;
+    };
+
+    it("la session mémorisée par la fenêtre est restituée à la réouverture", async () => {
+      await startWith();
+      command("openSearchFloating").callback!();
+      expect(deps().session!.initial).toBeUndefined();
+      deps().session!.save(STATE);
+      deps().floating!.onCloseRequest();
+      command("openSearchFloating").callback!();
+      expect(deps().session!.initial).toEqual(STATE);
+    });
+
+    it("« Ouvrir dans un nouvel onglet » : ouvre un nouvel onglet avec un jeton dans custom.data, PUIS ferme la fenêtre ; init reçoit la session", async () => {
+      const openTab = await openTabMock();
+      let resolveOpen: () => void = () => undefined;
+      openTab.mockImplementation((() => new Promise<void>((resolve) => (resolveOpen = resolve))) as never);
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(openTab).mock.calls[0]![0]).toMatchObject({ openNewTab: true, custom: { id: "docseekerdocseeker" } });
+      const data = await sentData();
+      expect(data).toEqual(expect.any(Object));
+      expect(JSON.parse(JSON.stringify(data))).toEqual(data); // sérialisable : SiYuan l'enregistre dans la mise en page
+      expect(dialog().closeCalls).toHaveLength(0); // pas fermée tant que l'onglet n'est pas ouvert
+      s.render(undefined, data); // SiYuan crée l'onglet : init reçoit custom.data
+      expect(deps().session!.initial).toEqual(STATE);
+      expect(deps().floating).toBeUndefined(); // c'est bien un onglet, pas un second dialogue
+      resolveOpen();
+      await flush();
+      expect(dialog().closeCalls).toEqual([{ focus: false }]);
+    });
+
+    it("init APRÈS la résolution d'openTab : la session n'est pas perdue (le jeton survit à la résolution)", async () => {
+      const openTab = await openTabMock();
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      await flush(); // openTab est résolu, la fenêtre est fermée, init n'a pas encore été appelé
+      expect(dialog().closeCalls).toEqual([{ focus: false }]);
+      s.render(undefined, await sentData());
+      expect(deps().session!.initial).toEqual(STATE);
+      expect(deps().floating).toBeUndefined();
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+
+    it("le jeton n'est consommé que par UN onglet : un second init avec les mêmes données repart de zéro", async () => {
+      await openTabMock();
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      const data = await sentData();
+      s.render(undefined, data);
+      s.render(undefined, data);
+      expect(deps(-2).session!.initial).toEqual(STATE);
+      expect(deps(-1).session).toBeUndefined();
+    });
+
+    it("init consomme le jeton et le retire de model.data (il ne reste pas dans la mise en page enregistrée par SiYuan)", async () => {
+      await openTabMock();
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      const model = s.render(undefined, await sentData());
+      expect(model.data).toBeUndefined();
+    });
+
+    it("l'init d'un AUTRE onglet pendant l'attente ne vole pas la session : seul l'onglet portant le jeton la reçoit, quel que soit l'ordre", async () => {
+      const openTab = await openTabMock();
+      let resolveOpen: () => void = () => undefined;
+      openTab.mockImplementation((() => new Promise<void>((resolve) => (resolveOpen = resolve))) as never);
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      const data = await sentData();
+      s.render(); // un autre onglet (restauré, ou ouvert par l'utilisateur) : ni données ni session
+      expect(deps().session).toBeUndefined();
+      s.render(undefined, { autre: "donnée" }); // données étrangères : aucune session non plus
+      expect(deps().session).toBeUndefined();
+      s.render(undefined, data);
+      expect(deps().session!.initial).toEqual(STATE);
+      resolveOpen();
+      await flush();
+      s.render(); // et un onglet de plus après la résolution : rien
+      expect(deps().session).toBeUndefined();
+    });
+
+    it("deux transferts successifs reçoivent chacun leur propre session (jetons distincts)", async () => {
+      await openTabMock();
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      deps().session!.save(STATE);
+      deps().floating!.onOpenInTab();
+      await flush();
+      const first = await sentData();
+      const other = { ...STATE, query: "chien" };
+      command("openSearchFloating").callback!();
+      deps().session!.save(other);
+      deps().floating!.onOpenInTab();
+      await flush();
+      const second = await sentData();
+      expect(second).not.toEqual(first);
+      s.render(undefined, second);
+      expect(deps().session!.initial).toEqual(other);
+      s.render(undefined, first);
+      expect(deps().session!.initial).toEqual(STATE);
+    });
+
+    it("double clic sur « Ouvrir dans un nouvel onglet » pendant le transfert : UN seul onglet, UNE seule fermeture", async () => {
+      const openTab = await openTabMock();
+      let resolveOpen: () => void = () => undefined;
+      openTab.mockImplementation((() => new Promise<void>((resolve) => (resolveOpen = resolve))) as never);
+      await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      deps().floating!.onOpenInTab();
+      deps().floating!.onOpenInTab();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      resolveOpen();
+      await flush();
+      expect(dialog().closeCalls).toHaveLength(1);
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+
+    it("transfert demandé alors que la fenêtre est déjà en cours de fermeture (destruction différée) : ignoré, aucun onglet", async () => {
+      h.floatingDeferred = true;
+      const openTab = await openTabMock();
+      await openFloatingWithSession();
+      const requestTransfer = deps().floating!.onOpenInTab;
+      dialog().beginDestroy(); // Échap global : la fenêtre est condamnée
+      requestTransfer();
+      await flush();
+      expect(openTab).not.toHaveBeenCalled();
+    });
+
+    it("l'ouverture de l'onglet échoue : la fenêtre RESTE ouverte, erreur VISIBLE (toast) et tracée, rien n'est transféré ensuite, un nouvel essai est possible", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      openTab.mockRejectedValue(new Error("openTab KO"));
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      await flush();
+      expect(dialog().closeCalls).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "openTab KO" }));
+      expect(h.showMessage).toHaveBeenCalledTimes(1);
+      expect(h.showMessage).toHaveBeenCalledWith("Impossible d'ouvrir la recherche dans un onglet : la fenêtre reste ouverte", expect.any(Number), "error");
+      expect(h.showMessage.mock.calls[0]![0]).not.toMatch(/[<>&]/);
+      s.render(undefined, await sentData()); // le jeton a été nettoyé : un init tardif ne reçoit rien
+      expect(deps().session).toBeUndefined();
+      openTab.mockResolvedValue(undefined as never);
+      deps(-2).floating!.onOpenInTab(); // le verrou est levé : on peut réessayer
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(2);
+    });
+
+    it("openTab qui lève de façon SYNCHRONE pendant le transfert : même traitement (fenêtre ouverte, toast, trace)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      openTab.mockImplementation((() => {
+        throw new Error("sync KO");
+      }) as never);
+      await openFloatingWithSession();
+      expect(() => deps().floating!.onOpenInTab()).not.toThrow();
+      await flush();
+      expect(dialog().closeCalls).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "sync KO" }));
+      expect(h.showMessage).toHaveBeenCalledWith(expect.any(String), expect.any(Number), "error");
+    });
+
+    it("jamais consommé (openTab ne résout jamais) : au bout du délai, le jeton est nettoyé et l'incident tracé ; le verrou est levé", async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      openTab.mockImplementation((() => new Promise<void>(() => undefined)) as never);
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      const data = await sentData();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/jamais|expir|non consomm/i), undefined);
+      s.render(undefined, data);
+      expect(deps().session).toBeUndefined(); // un init tardif ne reçoit rien
+      expect(dialog().closeCalls).toHaveLength(0); // la fenêtre n'a jamais été fermée : openTab n'a jamais répondu
+      const floatingDeps = h.mountDeps.find((d) => (d as FloatingDeps).floating) as unknown as FloatingDeps;
+      floatingDeps.floating!.onOpenInTab(); // le verrou est levé : un nouvel essai part
+      expect(openTab).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+
+    it("openTab résolu mais init jamais appelé : le jeton est nettoyé après le délai, avec une trace (pas de session fantôme)", async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      await openTabMock();
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      const data = await sentData();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/jamais|expir|non consomm/i), undefined);
+      s.render(undefined, data);
+      expect(deps().session).toBeUndefined();
+      vi.useRealTimers();
+    });
+
+    it("jeton consommé à temps : aucune trace ni minuterie qui traîne", async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      await openTabMock();
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      s.render(undefined, await sentData());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(warn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.useRealTimers();
+    });
+
+    it("sans session mémorisée (rien de soumis), le transfert ouvre un onglet vide sans jeton", async () => {
+      await openTabMock();
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      deps().floating!.onOpenInTab();
+      const data = await sentData();
+      s.render(undefined, data);
+      expect(deps().session).toBeUndefined();
+    });
+
+    it("le transfert ne rend pas le focus à l'élément ouvrant (l'onglet le prend)", async () => {
+      await openTabMock();
+      await startWith();
+      command("openSearchFloating").callback!();
+      deps().floating!.onOpenInTab();
+      await flush();
+      expect(dialog().closeCalls).toEqual([{ focus: false }]);
+    });
+
+    it("plugin déchargé pendant l'ouverture de l'onglet : aucune fermeture tardive, aucune erreur, jeton oublié", async () => {
+      const openTab = await openTabMock();
+      let release: () => void = () => undefined;
+      openTab.mockImplementation((() => new Promise<void>((r) => (release = r))) as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const s = await openFloatingWithSession();
+      deps().floating!.onOpenInTab();
+      const data = await sentData();
+      s.plugin.onunload();
+      release();
+      await flush();
+      expect(warn).not.toHaveBeenCalled();
+      expect(dialog().closeCalls).toHaveLength(1); // celle d'onunload seulement
+      s.render(undefined, data); // init après le déchargement : rien ne se monte
+      expect(h.mountDeps).toHaveLength(1);
+    });
+
+    it("transfert demandé après le déchargement : rien ne s'ouvre", async () => {
+      const openTab = await openTabMock();
+      const s = await openFloatingWithSession();
+      const requestTransfer = deps().floating!.onOpenInTab;
+      s.plugin.onunload();
+      requestTransfer();
+      await flush();
+      expect(openTab).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("erreurs d'ouverture (visibles : toast d'erreur en plus du journal)", () => {
+    const toasts = () => h.showMessage.mock.calls.map((c) => c as unknown[]);
+
+    it("openSearchTab dont openTab échoue : tracé ET toast d'erreur (texte i18n sans < > &), jamais une promesse rejetée non gérée", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      openTab.mockRejectedValue(new Error("openTab <KO> & co"));
+      await startWith();
+      command("openSearchTab").callback!();
+      await flush();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "openTab <KO> & co" }));
+      expect(toasts()).toEqual([["Impossible d'ouvrir l'onglet de recherche", expect.any(Number), "error"]]);
+      expect(String(toasts()[0]![0])).not.toMatch(/[<>&]/); // le détail technique reste dans le journal
+    });
+
+    it("openTab qui lève de façon synchrone : tracé, toast, sans exception", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      openTab.mockImplementation((() => {
+        throw new Error("sync KO");
+      }) as never);
+      await startWith();
+      expect(() => command("openSearchTab").callback!()).not.toThrow();
+      await flush();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "sync KO" }));
+      expect(toasts()).toHaveLength(1);
+    });
+
+    it("ouverture réussie d'un onglet : aucun toast", async () => {
+      await openTabMock();
+      await startWith();
+      command("openSearchTab").callback!();
+      await flush();
+      expect(h.showMessage).not.toHaveBeenCalled();
+    });
+
+    it("la fenêtre flottante ne peut pas s'ouvrir (montage en échec) : tracé ET toast d'erreur", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      await startWith();
+      h.mountError = new Error("montage KO");
+      command("openSearchFloating").callback!();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "montage KO" }));
+      expect(toasts()).toEqual([["Impossible d'ouvrir la fenêtre de recherche", expect.any(Number), "error"]]);
+    });
+
+    it("showMessage qui lève : l'échec de la notification est tracé, jamais propagé", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      openTab.mockRejectedValue(new Error("openTab KO"));
+      h.showMessage.mockImplementationOnce(() => {
+        throw new Error("toast KO");
+      });
+      await startWith();
+      command("openSearchTab").callback!();
+      await flush();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "toast KO" }));
+    });
+
+    it("un surlignage raté après la fermeture de la fenêtre : la vue reçoit un notify qui affiche un toast d'erreur", async () => {
+      await startWith();
+      command("openSearchFloating").callback!();
+      (h.mountDeps.at(-1) as unknown as { notify(message: string): void }).notify("Surlignage indisponible");
+      expect(toasts()).toEqual([["Surlignage indisponible", expect.any(Number), "error"]]);
+    });
+
+    it("openSearchTab après le déchargement : rien ne s'ouvre, aucun toast", async () => {
+      const openTab = await openTabMock();
+      const s = await startWith();
+      s.plugin.onunload();
+      command("openSearchTab").callback!();
+      await flush();
+      expect(openTab).not.toHaveBeenCalled();
+      expect(h.showMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("réglage « Ouverture de la recherche » lu avant le clic (settings.ready)", () => {
+    it("clic AVANT la fin de la lecture des réglages : l'ouverture attend, puis suit le réglage lu (« fenêtre flottante »), au lieu de prendre l'onglet par défaut", async () => {
+      const openTab = await openTabMock();
+      let resolveLoad: (value: unknown) => void = () => undefined;
+      h.loadData.mockReturnValue(new Promise((r) => (resolveLoad = r)));
+      setup();
+      command("openSearch").callback!();
+      await flush();
+      expect(openTab).not.toHaveBeenCalled();
+      expect(h.openFloating).not.toHaveBeenCalled();
+      resolveLoad({ openMode: "dialog" });
+      await flush();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(openTab).not.toHaveBeenCalled();
+    });
+
+    it("lecture des réglages en échec : repli sur l'onglet, avec une trace", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      h.loadData.mockRejectedValue(new Error("lecture KO"));
+      setup();
+      command("openSearch").callback!();
+      await flush();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(h.openFloating).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it("plugin déchargé pendant l'attente des réglages : rien ne s'ouvre", async () => {
+      const openTab = await openTabMock();
+      let resolveLoad: (value: unknown) => void = () => undefined;
+      h.loadData.mockReturnValue(new Promise((r) => (resolveLoad = r)));
+      const s = setup();
+      command("openSearch").callback!();
+      s.plugin.onunload();
+      resolveLoad({ openMode: "dialog" });
+      await flush();
+      expect(openTab).not.toHaveBeenCalled();
+      expect(h.openFloating).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("destruction lancée par SiYuan (Échap global, voile, croix) : commandes pendant le délai de destruction", () => {
+    it("openSearchFloating pendant la destruction : la nouvelle fenêtre s'ouvre une fois l'ancienne détruite (l'action n'est pas perdue)", async () => {
+      h.floatingDeferred = true;
+      await startWith();
+      command("openSearchFloating").callback!();
+      dialog().beginDestroy();
+      command("openSearchFloating").callback!();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      dialog().destroy();
+      expect(h.openFloating).toHaveBeenCalledTimes(2);
+      expect(h.mounts).toHaveLength(2);
+    });
+
+    it("focusSearch pendant la destruction (aucun onglet) : la commande ne focalise pas le dialogue condamné, elle ouvre un onglet", async () => {
+      h.floatingDeferred = true;
+      const openTab = await openTabMock();
+      await startWith();
+      command("openSearchFloating").callback!();
+      h.mounts[0]!.focusInput.mockClear();
+      dialog().beginDestroy();
+      command("focusSearch").callback!();
+      await flush();
+      expect(h.mounts[0]!.focusInput).not.toHaveBeenCalled();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(openTab).mock.calls[0]![0]).toMatchObject({ openNewTab: true });
+    });
+
+    it("onglet ET fenêtre ouverts, fenêtre en cours de fermeture : focusSearch ramène l'ONGLET (openTab sans nouvel onglet) et focalise son champ", async () => {
+      vi.useFakeTimers();
+      h.floatingDeferred = true;
+      const openTab = await openTabMock();
+      const s = await startWith();
+      s.render();
+      command("openSearchFloating").callback!();
+      h.mounts[0]!.focusInput.mockClear();
+      h.mounts[1]!.focusInput.mockClear();
+      dialog().beginDestroy();
+      command("focusSearch").callback!();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(h.mounts[1]!.focusInput).not.toHaveBeenCalled(); // la fenêtre condamnée n'est pas touchée
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(openTab).mock.calls[0]![0]).not.toHaveProperty("openNewTab"); // SiYuan ramène l'onglet existant
+      expect(h.mounts[0]!.focusInput).toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it("dialogue retiré par SiYuan sans destroyCallback : openSearchFloating ouvre une vraie nouvelle fenêtre", async () => {
+      await startWith();
+      command("openSearchFloating").callback!();
+      dialog().vanish();
+      command("openSearchFloating").callback!();
+      expect(h.openFloating).toHaveBeenCalledTimes(2);
+      expect(h.mounts).toHaveLength(2);
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("focusSearch, fenêtre ouverte mais focus refusé (focusInput faux alors que isOpen vrai) : avertissement, ni onglet ni seconde fenêtre", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const openTab = await openTabMock();
+      await startWith();
+      command("openSearchFloating").callback!();
+      h.mounts[0]!.focusInput.mockReturnValue(false);
+      command("focusSearch").callback!();
+      await flush();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Champ de recherche non focalisé"), undefined);
+      expect(openTab).not.toHaveBeenCalled();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+    });
+
+    it("focusSearch, fenêtre ouverte dont focusInput lève : tracé, sans exception", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      await startWith();
+      command("openSearchFloating").callback!();
+      h.mounts[0]!.focusInput.mockImplementation(() => {
+        throw new Error("vue détruite");
+      });
+      expect(() => command("focusSearch").callback!()).not.toThrow();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("champ de recherche"), expect.objectContaining({ message: "vue détruite" }));
+    });
+  });
+
+  describe("calque de surlignage de la fenêtre flottante : libéré par le plugin", () => {
+    const overlay = () => ({ dispose: vi.fn() });
+
+    it("le calque reçu à l'ouverture d'un PDF est gardé, puis libéré au déchargement du plugin", async () => {
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      const a = overlay();
+      deps().floating!.onPdfOpened(a as never);
+      expect(a.dispose).not.toHaveBeenCalled(); // pas libéré par la fermeture de la fenêtre : il appartient au visualiseur
+      s.plugin.onunload();
+      expect(a.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("un nouveau calque remplace (et libère) le précédent ; seul le dernier est libéré au déchargement", async () => {
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      const a = overlay();
+      deps().floating!.onPdfOpened(a as never);
+      command("openSearchFloating").callback!();
+      const b = overlay();
+      deps().floating!.onPdfOpened(b as never);
+      expect(a.dispose).toHaveBeenCalledTimes(1);
+      expect(b.dispose).not.toHaveBeenCalled();
+      s.plugin.onunload();
+      expect(a.dispose).toHaveBeenCalledTimes(1);
+      expect(b.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("un dispose de calque qui lève au déchargement : tracé, le reste du déchargement s'exécute quand même", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const s = await startWith();
+      s.render();
+      command("openSearchFloating").callback!();
+      deps().floating!.onPdfOpened({
+        dispose: () => {
+          throw new Error("calque KO");
+        },
+      });
+      s.plugin.onunload();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "calque KO" }));
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1); // l'onglet a bien été libéré
+    });
+
+    it("calque reçu APRÈS le déchargement (ouverture de PDF terminée tard) : libéré tout de suite", async () => {
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      const onPdfOpened = deps().floating!.onPdfOpened;
+      s.plugin.onunload();
+      const late = overlay();
+      onPdfOpened(late as never);
+      expect(late.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("le dernier calque n'est pas libéré deux fois (déchargement répété)", async () => {
+      const s = await startWith();
+      command("openSearchFloating").callback!();
+      const a = overlay();
+      deps().floating!.onPdfOpened(a as never);
+      s.plugin.onunload();
+      s.plugin.onunload();
+      expect(a.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("robustesse du déchargement", () => {
+    it("floating.dispose() qui lève : tracé, et la mise à zéro de la session, des onglets et de la barre a quand même lieu", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const s = await startWith();
+      s.render();
+      command("openSearchFloating").callback!();
+      deps().session!.save(STATE);
+      h.floatingDisposeError = new Error("dispose KO");
+      expect(() => s.plugin.onunload()).not.toThrow();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "dispose KO" }));
+      expect(h.mounts[0]!.dispose).toHaveBeenCalledTimes(1); // l'onglet
+      expect((s.plugin as unknown as { session: { get(): unknown } }).session.get()).toBeUndefined();
+    });
   });
 });

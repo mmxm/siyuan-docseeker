@@ -1734,7 +1734,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
   /** Réglages chargés, dont `get()` reflète les `update()` (comme le vrai magasin). */
   function liveSettings(history: string[] = []) {
     let state = {
-      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history,
+      autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history, openMode: "tab",
     } as DocSeekerSettings;
     const update = vi.fn(async (patch: Partial<DocSeekerSettings>) => {
       state = { ...state, ...patch };
@@ -1818,7 +1818,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
       throw new Error("disque plein");
     });
     const settings = {
-      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] }) as DocSeekerSettings,
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" }) as DocSeekerSettings,
       update,
     };
     return { settings, update };
@@ -1857,7 +1857,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
       if (fail) throw new Error("disque plein");
     });
     const settings = {
-      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] }) as DocSeekerSettings,
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" }) as DocSeekerSettings,
       update,
     };
     const tab = mountSearchTab(h.host, withSettings(h, settings));
@@ -1874,7 +1874,7 @@ describe("mountSearchTab : historique des requêtes (J10 10e)", () => {
   it("update qui lève de façon synchrone : onWarn, pas d'exception", async () => {
     const h = harness();
     const settings = {
-      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [] }) as DocSeekerSettings,
+      get: () => ({ autoIndex: true, intervalMinutes: 5, sort: { key: "relevance", direction: "desc" }, groupByDocument: true, history: [], openMode: "tab" }) as DocSeekerSettings,
       update: () => {
         throw new Error("sync");
       },

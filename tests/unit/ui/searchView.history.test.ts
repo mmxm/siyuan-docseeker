@@ -283,10 +283,19 @@ describe("menu d'historique : ouverture", () => {
     expect(document.activeElement).toBe(input());
   });
 
-  it("le focus n'est plus géré par la vue : openMenu est appelé sans onClose (l'adaptateur le rend à l'élément ouvrant)", () => {
+  it("le focus n'est pas géré par la vue : le rappel de fermeture ne le déplace pas (l'adaptateur le rend à l'élément ouvrant)", () => {
     mount(fakeHistory(["a"]));
     historyIcon()!.click();
-    expect(fakes.openMenu.mock.calls[0]![2]).toBeUndefined();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    const onClose = fakes.openMenu.mock.calls[0]![2];
+    expect(typeof onClose).toBe("function"); // le rappel existe vraiment (un `?.()` sur undefined ne prouverait rien)
+    onClose!();
+    expect(document.activeElement).toBe(elsewhere);
+    // ... et le rappel a bien baissé l'état « menu ouvert » : le menu est considéré fermé (une réouverture ne passe pas par un handle périmé)
+    historyIcon()!.click();
+    expect(fakes.openMenu).toHaveBeenCalledTimes(2);
   });
 
   it("le clic sur l'icône place d'abord le focus dans le champ : c'est lui que le menu retrouvera à sa fermeture", () => {

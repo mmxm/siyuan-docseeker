@@ -8,6 +8,10 @@ import { DEFAULT_SORT, isRecord, sortFromValue, type SortSpec } from "./search/r
  */
 export const SETTINGS_FILE = "settings.json";
 export const FREQUENCY_MINUTES = [5, 15, 60] as const;
+/** Où s'ouvre la recherche : dans un onglet, ou dans une fenêtre flottante comme la recherche native de SiYuan. */
+export const OPEN_MODES = ["tab", "dialog"] as const;
+export type OpenMode = (typeof OPEN_MODES)[number];
+const isOpenMode = (value: unknown): value is OpenMode => (OPEN_MODES as readonly unknown[]).includes(value);
 
 export interface DocSeekerSettings {
   readonly autoIndex: boolean;
@@ -18,6 +22,8 @@ export interface DocSeekerSettings {
   readonly groupByDocument: boolean;
   /** Requêtes soumises, la plus récente en tête (20 au plus). */
   readonly history: readonly string[];
+  /** Ouverture de la recherche par l'icône de la barre et la commande « Rechercher dans les PDF ». */
+  readonly openMode: OpenMode;
 }
 
 export const DEFAULT_SETTINGS: DocSeekerSettings = {
@@ -26,6 +32,7 @@ export const DEFAULT_SETTINGS: DocSeekerSettings = {
   sort: DEFAULT_SORT,
   groupByDocument: true,
   history: [],
+  openMode: "tab",
 };
 
 type Warn = (message: string, error?: unknown) => void;
@@ -37,7 +44,7 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
     onWarn("Réglages illisibles : valeurs par défaut utilisées (indexation automatique activée, vérification toutes les 5 minutes)");
     return DEFAULT_SETTINGS;
   }
-  const { autoIndex, intervalMinutes, sort, groupByDocument, history } = raw;
+  const { autoIndex, intervalMinutes, sort, groupByDocument, history, openMode } = raw;
   let nextAuto = DEFAULT_SETTINGS.autoIndex;
   if (autoIndex !== undefined) {
     if (typeof autoIndex === "boolean") nextAuto = autoIndex;
@@ -72,12 +79,19 @@ export function normalizeSettings(raw: unknown, onWarn: Warn): DocSeekerSettings
   // Champ absent (ancien fichier) : liste vide sans avertissement ; sinon toute correction est signalée.
   const nextHistory = normalizeHistory(history);
   if (!nextHistory.valid) onWarn("Réglage « historique des requêtes » invalide ou corrigé : entrées valides conservées");
+  // Champ absent (ancien fichier) : onglet sans avertissement ; toute autre valeur que les deux modes est signalée.
+  let nextOpenMode = DEFAULT_SETTINGS.openMode;
+  if (openMode !== undefined) {
+    if (isOpenMode(openMode)) nextOpenMode = openMode;
+    else onWarn("Réglage « ouverture de la recherche » invalide : défaut utilisé (onglet)");
+  }
   return {
     autoIndex: nextAuto,
     intervalMinutes: nextInterval,
     sort: nextSort,
     groupByDocument: nextGroup,
     history: nextHistory.history,
+    openMode: nextOpenMode,
   };
 }
 

@@ -11,6 +11,7 @@ import { createProximityRanker } from "./search/proximityRanker";
 import { DEFAULT_OPTIONS, isProposedSort, listFolders } from "./search/resultOptions";
 import { createSearchController } from "./search/searchController";
 import { addToHistory, clearHistory } from "./search/searchHistory";
+import type { SearchSessionState } from "./search/searchSession";
 import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
@@ -43,6 +44,11 @@ export interface SearchTabDeps {
   readonly loadDocument: (path: string, signal?: AbortSignal) => Promise<RenderableDocument>;
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly onWarn: (message: string, error?: unknown) => void;
+  /**
+   * Message d'erreur VISIBLE (toast) pour un incident survenu quand la fenêtre flottante n'est plus là pour l'afficher (surlignage
+   * raté après l'ouverture du PDF). Texte brut, sans `<`, `>` ni `&` (SiYuan l'insère comme HTML). Le journal reçoit toujours l'incident.
+   */
+  readonly notify?: (message: string) => void;
   /** Activité d'indexation pour l'indicateur discret (fournie par le plugin ; l'onglet ne voit pas l'indexeur). */
   readonly indexActivity?: {
     getSnapshot(): IndexActivitySnapshot;
@@ -52,6 +58,27 @@ export interface SearchTabDeps {
   /** Décodeur multi-pages du re-classement ; absent avec un `decodePageMatches` injecté : repli page par page. */
   readonly decodePagesMatches?: typeof realDecodePagesMatches;
   readonly openPdfAtPage?: typeof realOpenPdfAtPage;
+  /**
+   * Session de recherche (fenêtre flottante, ou onglet ouvert par « Ouvrir dans un nouvel onglet ») : `initial` est restaurée au
+   * montage (options appliquées ; requête, si elle existe, RELANCÉE sans toucher à l'historique ; le tri de la session l'emporte
+   * sur celui des réglages), `save` est appelée à chaque soumission et à chaque changement d'options. Rien n'est persisté.
+   */
+  readonly session?: {
+    readonly initial: SearchSessionState | undefined;
+    save(state: SearchSessionState): void;
+  };
+  /**
+   * Mode fenêtre flottante. `onPdfOpened` : le PDF est ouvert (openPdfAtPage terminé) ; le plugin ferme alors la fenêtre, et le
+   * calque de surlignage, désormais propre au visualiseur, n'est plus libéré par la vue (sinon la fermeture l'avorterait).
+   * Jamais appelé si l'ouverture échoue (la fenêtre reste ouverte, l'erreur est affichée et tracée).
+   * `onOpenInTab` : bouton « Ouvrir dans un nouvel onglet ». `onCloseRequest` : Échap sur un champ vide.
+   */
+  readonly floating?: {
+    /** `overlay` : le calque de surlignage, désormais propre au visualiseur ; le plugin le garde pour le libérer au déchargement. */
+    onPdfOpened(overlay: { dispose(): void }): void;
+    onOpenInTab(): void;
+    onCloseRequest(): void;
+  };
   readonly observerFactory?: (
     cb: (entries: { target: Element; isIntersecting: boolean }[]) => void,
   ) => ThumbnailObserver;
@@ -156,12 +183,37 @@ export function createWarnLog(
   };
 }
 
+/**
+ * Si l'assemblage échoue en cours de route (montage de la vue, abonnements), tout ce qui a déjà été créé est libéré dans l'ordre
+ * inverse : ni abonnement, ni minuterie, ni élément orphelin (la fenêtre flottante n'a alors aucune vue à libérer).
+ */
 export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTab {
+  const cleanups: Array<() => void> = [];
+  try {
+    return assembleSearchTab(host, deps, cleanups);
+  } catch (error) {
+    for (const cleanup of cleanups.reverse()) {
+      try {
+        cleanup();
+      } catch (cleanupError) {
+        deps.onWarn("Libération partielle de l'onglet de recherche en échec", cleanupError);
+      }
+    }
+    throw error;
+  }
+}
+
+function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Array<() => void>): SearchTab {
   const { onWarn } = deps;
   const schedule = deps.schedule ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
   const clear = deps.clear ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const openPdf = deps.openPdfAtPage ?? realOpenPdfAtPage;
   let disposed = false;
+  let openController: AbortController | null = null;
+  cleanups.push(() => {
+    disposed = true;
+    openController?.abort();
+  });
 
   const searchStore = deps.sharedIndex.store;
   const saved = deps.settings?.get();
@@ -250,11 +302,32 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     rerank: ranker,
     ...(saved ? { initialOptions: { ...DEFAULT_OPTIONS, sort: saved.sort } } : {}),
   });
+  cleanups.push(() => controller.dispose());
+  // Session : dernière requête soumise (jamais ce qui est seulement tapé) ; les options sont relues dans le contrôleur.
+  let lastQuery = deps.session?.initial?.query ?? "";
+  const saveSession = (): void => {
+    const session = deps.session;
+    if (!session || disposed) return;
+    try {
+      session.save({ query: lastQuery, options: controller.getOptions() });
+    } catch (error) {
+      onWarn("Session de recherche non mémorisée", error);
+    }
+  };
+  /** Rappel du plugin déclenché par un geste de l'utilisateur : un échec est tracé, jamais propagé au DOM. */
+  const callFloating = (what: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (error) {
+      onWarn(`${what} en échec`, error);
+    }
+  };
   const renderer = createPdfRenderer({
     loadDocument: deps.loadDocument,
     createCanvas: deps.createCanvas,
     onWarn,
   });
+  cleanups.push(() => renderer.dispose());
   const cache: ThumbnailCache =
     deps.cache ??
     new IndexedDbThumbnailCache({
@@ -273,6 +346,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     docVersion: THUMBNAIL_DOC_VERSION,
     onWarn,
   });
+  cleanups.push(() => loader.dispose());
 
   const statusRegion = (className: string): HTMLElement => {
     const el = host.ownerDocument.createElement("div");
@@ -284,6 +358,10 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
   // Deux régions distinctes : l'erreur d'index partagée (dérivée de l'état courant) et les messages d'action.
   const errorEl = statusRegion(ERROR_CLASS);
   const messageEl = statusRegion(MESSAGE_CLASS);
+  cleanups.push(() => {
+    errorEl.remove();
+    messageEl.remove();
+  });
   const showMessage = (text: string): void => {
     if (!disposed) messageEl.textContent = text;
   };
@@ -302,7 +380,6 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     }, FLASH_MESSAGE_MS);
   }
 
-  let openController: AbortController | null = null;
   let lastOpened: { dispose(): void } | null = null;
 
   // Attente bornée : getPageSize passe par la file partagée du renderer (peut charger tout le PDF).
@@ -356,6 +433,8 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     const mine = new AbortController();
     openController = mine;
     const stale = (): boolean => disposed || mine.signal.aborted;
+    /** Fenêtre flottante fermée (et non remplacée par une ouverture plus récente) : l'interruption est tracée, jamais silencieuse. */
+    const closedWindow = (): boolean => deps.floating !== undefined && disposed && openController === mine;
     showMessage("");
     const doc = searchStore.getDoc(docId);
     if (!doc) {
@@ -373,11 +452,17 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
       // Les boîtes sont déjà des fractions de page : une page de 1 x 1 donne directement des pourcentages.
       rects = wordBoxesToPageRects(boxes, 1, 1).map((rect) => rectToPercentStyle(rect, 1, 1));
     } catch (error) {
-      if (stale()) return;
+      if (stale()) {
+        if (closedWindow()) onWarn("Ouverture du PDF abandonnée : la fenêtre de recherche a été fermée");
+        return;
+      }
       onWarn("Surlignage indisponible : la page s'ouvre sans calque", error);
       issue = `${HIGHLIGHT_UNAVAILABLE} : ${messageOf(error)}.`;
     }
-    if (stale()) return;
+    if (stale()) {
+      if (closedWindow()) onWarn("Ouverture du PDF abandonnée : la fenêtre de recherche a été fermée"); // rien ne s'est ouvert
+      return;
+    }
     let handle: Awaited<ReturnType<typeof openPdf>>;
     try {
       handle = await openPdf({
@@ -391,31 +476,75 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
         onWarn: (message) => onWarn(message),
       });
     } catch (error) {
-      if (stale()) return;
+      if (stale() && !closedWindow()) return;
       onWarn("Ouverture du PDF impossible", error);
       showMessage(`Impossible d'ouvrir ce PDF (${messageOf(error)}).`);
       return;
     }
-    if (stale()) {
+    // Remplacée par une ouverture plus récente, ou onglet fermé : le calque est libéré. Une FENÊTRE flottante fermée pendant l'ouverture
+    // (Échap) ne l'abandonne pas : le PDF s'est ouvert, son calque va au plugin et un échec de surlignage est signalé.
+    if (openController !== mine || (disposed && !deps.floating)) {
       handle.dispose();
       return;
     }
-    lastOpened?.dispose();
-    lastOpened = handle;
-    if (issue) showMessage(issue);
+    // Faux tant que la fenêtre flottante est encore là pour afficher un message (onPdfOpened a échoué : elle reste ouverte).
+    let windowGone = false;
+    if (deps.floating) {
+      // Le calque passe au visualiseur (il se libère seul quand la page disparaît, ou quand une ouverture plus récente le remplace) :
+      // le garder ici le ferait avorter par le `dispose()` de la vue, que la fermeture de la fenêtre va déclencher. Le plugin le garde.
+      callFloating("Fermeture de la recherche flottante", () => {
+        deps.floating?.onPdfOpened(handle);
+        windowGone = true;
+      });
+    } else {
+      lastOpened?.dispose();
+      lastOpened = handle;
+    }
+    const gone = (): boolean => windowGone || (deps.floating !== undefined && disposed);
+    let notified = false;
+    /** La fenêtre n'est plus là : un toast (texte i18n fixe) en plus du journal. */
+    const notifyLost = (): void => {
+      if (notified || !deps.notify) return;
+      notified = true;
+      try {
+        deps.notify(deps.t?.("highlightUnavailable") ?? HIGHLIGHT_UNAVAILABLE);
+      } catch (error) {
+        onWarn("Notification d'erreur impossible", error);
+      }
+    };
+    if (issue) {
+      if (gone()) notifyLost(); // déjà tracé plus haut (onWarn)
+      else showMessage(issue);
+    }
     let report: Awaited<typeof handle.ready> | undefined;
     try {
       report = await handle.ready;
     } catch (error) {
       onWarn("État du surlignage inconnu", error);
+      if (gone()) notifyLost();
+    }
+    const problem = report ? describeHighlightProblem(report) : undefined;
+    if (gone()) {
+      // La fenêtre est fermée ou se ferme : plus d'endroit où afficher le message, donc le journal et un toast (sauf si l'incident a déjà été tracé).
+      if (problem) {
+        if (issue === undefined) onWarn(problem);
+        notifyLost();
+      }
+      return;
     }
     if (stale() || !report) return;
-    const problem = describeHighlightProblem(report);
     if (problem) showMessage(issue ?? problem);
   };
 
   const view = mountSearchView(host, {
-    controller,
+    controller: {
+      submit: (query) => {
+        controller.submit(query);
+        lastQuery = query;
+        saveSession();
+      },
+      getViewModel: () => controller.getViewModel(),
+    },
     subscribe: (listener) => {
       controllerListeners.add(listener);
       return () => controllerListeners.delete(listener);
@@ -431,6 +560,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     },
     openMenu: deps.openMenu,
     openDialog: deps.openDialog,
+    onWarn,
     ...(deps.onOpenSettings ? { onOpenSettings: deps.onOpenSettings } : {}),
     getDocMeta: (docId) => {
       const info = searchStore.getDoc(docId);
@@ -450,6 +580,7 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
             sortTouched = true;
             if (isProposedSort(after)) persist("tri des résultats", { sort: after }); // hors choix du sélecteur : session seulement
           }
+          saveSession();
         }
       },
       getFolders: () => listFolders(searchStore.listDocs()),
@@ -461,8 +592,32 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     },
     ...(deps.indexActivity ? { indexActivity: deps.indexActivity, schedule, clear } : {}),
     ...(deps.t ? { t: deps.t } : {}),
+    ...(deps.floating
+      ? {
+          floating: {
+            requestClose: () => callFloating("Fermeture de la recherche flottante", () => deps.floating?.onCloseRequest()),
+            openInTab: () => callFloating("Ouverture dans un nouvel onglet", () => deps.floating?.onOpenInTab()),
+          },
+        }
+      : {}),
   });
+  cleanups.push(() => view.dispose());
   host.append(errorEl, messageEl);
+
+  // Session à restaurer : options d'abord, puis la requête soumise (relancée, hors historique).
+  const initialSession = deps.session?.initial;
+  if (initialSession) {
+    try {
+      controller.setOptions(initialSession.options);
+      // Posé seulement une fois les options appliquées : le tri de la session l'emporte alors sur celui des réglages, même lus plus
+      // tard ; si la restauration échoue, rien n'a été appliqué et le tri des réglages reste celui qui s'applique.
+      sortTouched = true;
+      view.refreshOptions();
+      if (initialSession.query !== "") view.restoreQuery(initialSession.query);
+    } catch (error) {
+      onWarn("Restauration de la session de recherche en échec", error);
+    }
+  }
 
   // Réglages lus après le montage : on applique le tri et le regroupement mémorisés, sauf ceux que l'utilisateur a changés.
   const pendingSettings = deps.settings;
@@ -519,7 +674,9 @@ export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTa
     }
     controller.invalidate(); // relance le re-classement avec des mesures fraîches
   });
+  cleanups.push(unsubscribeInvalidate);
   const unsubscribeStatus = deps.sharedIndex.onStatus(syncSharedError);
+  cleanups.push(unsubscribeStatus);
   syncSharedError();
 
   return {

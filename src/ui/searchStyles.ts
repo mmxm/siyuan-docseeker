@@ -28,6 +28,7 @@ export const SEARCH_CSS = `
 .docseeker-icons .search__path[hidden] { display: none; }
 .docseeker-path-text { direction: ltr; unicode-bidi: bidi-override; }
 .docseeker-filter-field input { width: 100%; box-sizing: border-box; min-height: 32px; }
+.docseeker-floating-body { box-sizing: border-box; padding: 8px 16px 16px; }
 .docseeker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
 .docseeker-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; padding: 4px 0 8px; align-items: end; }
 .docseeker-filter-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

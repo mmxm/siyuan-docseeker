@@ -87,6 +87,7 @@ export interface SettingsPanelDeps {
 }
 
 export interface SettingsPanel {
+  readonly openMode: HTMLElement;
   readonly autoIndex: HTMLElement;
   readonly autoIndexInterval: HTMLElement;
   readonly reindex: HTMLElement;
@@ -462,35 +463,52 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
     option.textContent = t(`freq${minutes}`);
     intervalSelect.append(option);
   }
+  // Ouverture de la recherche : onglet ou fenêtre flottante (comme la recherche native de SiYuan).
+  const openModeSelect = doc.createElement("select");
+  openModeSelect.className = "b3-select fn__flex-center";
+  openModeSelect.setAttribute("aria-label", t("openMode"));
+  const openModeDesc = describedNode(`${uid}-open-mode-desc`);
+  openModeDesc.textContent = t("openModeDesc");
+  openModeSelect.setAttribute("aria-describedby", openModeDesc.id);
+  for (const [value, key] of [["tab", "openModeTab"], ["dialog", "openModeDialog"]] as const) {
+    const option = doc.createElement("option");
+    option.value = value;
+    option.textContent = t(key);
+    openModeSelect.append(option);
+  }
+  const openModeStatus = textBlock({ live: true, label: t("indexStatusLabel") });
   // Erreur d'enregistrement : région locale annoncée (le toast de SiYuan ne l'est pas de façon fiable).
   const settingsStatus = textBlock({ live: true, label: t("indexStatusLabel") });
   const syncSettings = (): void => {
     const current = deps.settings.get();
     switchInput.checked = current.autoIndex;
     intervalSelect.value = String(current.intervalMinutes);
+    openModeSelect.value = current.openMode;
     intervalSelect.disabled = !current.autoIndex;
     const base = t("autoIndexIntervalDesc");
     intervalDesc.textContent = current.autoIndex ? base : `${base} ${t("autoIndexIntervalDisabledHint")}`;
   };
   syncSettings();
   const unsubscribeSettings = deps.settings.subscribe(syncSettings);
-  const applySetting = (patch: Partial<DocSeekerSettings>): void => {
+  const applySetting = (patch: Partial<DocSeekerSettings>, status: HTMLElement = settingsStatus): void => {
     deps.settings.update(patch).then(
       () => {
-        settingsStatus.textContent = "";
+        status.textContent = "";
       },
       (error: unknown) => {
         warnLog.warn("Enregistrement des réglages en échec", error);
-        settingsStatus.textContent = t("settingsSaveFailed");
+        status.textContent = t("settingsSaveFailed");
         deps.showMessage(t("settingsSaveFailed"), MESSAGE_TIMEOUT_MS, "error");
       },
     );
   };
   switchInput.addEventListener("change", () => applySetting({ autoIndex: switchInput.checked }));
   intervalSelect.addEventListener("change", () => applySetting({ intervalMinutes: Number(intervalSelect.value) }));
+  openModeSelect.addEventListener("change", () => applySetting({ openMode: openModeSelect.value === "dialog" ? "dialog" : "tab" }, openModeStatus));
 
   let disposed = false;
   return {
+    openMode: container(openModeSelect, openModeDesc, openModeStatus),
     autoIndex: container(switchInput, switchDesc, settingsStatus),
     autoIndexInterval: container(intervalSelect, intervalDesc),
     reindex: container(indexButton, indexStatus, indexProgress),

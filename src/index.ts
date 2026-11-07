@@ -1,12 +1,14 @@
 import { Plugin, Setting, confirm, openTab, showMessage } from "siyuan";
-import { openDialog, openMenu } from "./siyuan/nativeUi";
+import { openDialog, openFloatingDialog, openMenu } from "./siyuan/nativeUi";
+import { createFloatingSearch, type FloatingMountOptions, type FloatingSearch } from "./siyuan/floatingSearch";
+import { createSearchSessionStore, type SearchSessionState } from "./search/searchSession";
 import { createKernelApi } from "./siyuan/kernelApi";
 import { traceKeys } from "./diagnostic/traceKeys";
 import { formatReport, runM0Diagnostic, type PdfjsLike } from "./diagnostic/m0";
 import { createAutoSync, type AutoSync, type AutoSyncConfig } from "./indexer/autoSync";
 import { createIndexActivity, type IndexActivity } from "./indexer/indexActivity";
 import { createIndexer, type Indexer } from "./indexer/indexer";
-import { SETTINGS_FILE, createSettings, type DocSeekerSettings, type SettingsStore } from "./settings";
+import { SETTINGS_FILE, createSettings, type DocSeekerSettings, type OpenMode, type SettingsStore } from "./settings";
 import { createLoadPdf, type PdfjsLoader } from "./indexer/loadPdf";
 import { discoverPdfs } from "./siyuan/discovery";
 import { createPetalStore, type PetalStore } from "./siyuan/petalStore";
@@ -25,16 +27,36 @@ const PETAL_ROOT = "/data/storage/petal";
 const ICON_NAME = "iconSearch";
 const COMMAND_OPEN_KEY = "openSearch";
 const COMMAND_FOCUS_KEY = "focusSearch";
+const COMMAND_OPEN_FLOATING_KEY = "openSearchFloating";
+const COMMAND_OPEN_TAB_KEY = "openSearchTab";
 /** Le focus est redemandé peu après l'ouverture : l'onglet n'est pas toujours affiché quand `openTab` se résout. */
 const FOCUS_RETRY_MS = 50;
+/** Durée d'affichage d'un message d'erreur (toast) : le temps de le lire. */
+const ERROR_TOAST_MS = 8000;
+/**
+ * Clé de `custom.data` portant le jeton d'un transfert vers un onglet. SiYuan 3.8.9 transmet `custom.data` à `init` (`this.data` de
+ * l'onglet) et l'enregistre dans la mise en page (`Object.assign({}, model.data)`) : c'est donc un objet simple, sérialisable.
+ */
+const TRANSFER_KEY = "docseekerTransfer";
+/** Délai au-delà duquel un transfert non repris par un onglet est abandonné (jeton nettoyé, verrou levé, incident tracé). */
+const TRANSFER_TTL_MS = 30_000;
+
+/** Session en attente d'un onglet ouvert par « Ouvrir dans un nouvel onglet », retrouvée par son jeton. */
+interface Transfer {
+  readonly state: SearchSessionState;
+  timer: ReturnType<typeof setTimeout>;
+  /** `openTab` a répondu (résolu ou rejeté) : seule la reprise par `init` reste attendue. */
+  settled: boolean;
+}
 
 /** Une saisie plus récente que cela retarde la synchronisation automatique (extraction dans le thread principal). */
 const TYPING_QUIET_MS = 3000;
 const USER_ACTIVITY_EVENTS = ["keydown", "pointerdown", "wheel"] as const;
 
-type PanelPart = "autoIndex" | "autoIndexInterval" | "reindex" | "clearIndex" | "diagnostic" | "log";
+type PanelPart = "openMode" | "autoIndex" | "autoIndexInterval" | "reindex" | "clearIndex" | "diagnostic" | "log";
 /** Items du panneau, dans l'ordre : clé i18n du titre (`<clé>Desc` pour la description) et partie du panneau. */
 const SETTING_ITEMS: readonly { key: string; part: PanelPart }[] = [
+  { key: "openMode", part: "openMode" },
   { key: "autoIndex", part: "autoIndex" },
   { key: "autoIndexInterval", part: "autoIndexInterval" },
   { key: "reindex", part: "reindex" },
@@ -63,7 +85,7 @@ export default class DocSeekerPlugin extends Plugin {
     const plugin = this;
     this.addTab({
       type: TAB_TYPE,
-      init: (custom) => this.renderTab(custom.element),
+      init: (custom) => this.renderTab(custom.element, custom),
       // Chaque onglet libère ses propres ressources : en détruire un ne touche pas les autres.
       destroy() {
         plugin.disposeTab(this.element);
@@ -86,13 +108,25 @@ export default class DocSeekerPlugin extends Plugin {
       icon: ICON_NAME,
       title: this.t("openSearch"),
       position: "right",
-      callback: () => this.openSearchTab(),
+      callback: () => this.openSearch(),
     });
 
     // Aucun raccourci par défaut (hotkey "") : l'utilisateur choisit le sien dans les réglages de SiYuan.
     this.addCommand({
       langKey: COMMAND_OPEN_KEY,
       langText: this.t("commandOpenSearch"),
+      hotkey: "",
+      callback: () => this.openSearch(),
+    });
+    this.addCommand({
+      langKey: COMMAND_OPEN_FLOATING_KEY,
+      langText: this.t("commandOpenSearchFloating"),
+      hotkey: "",
+      callback: () => this.openFloatingSearch(),
+    });
+    this.addCommand({
+      langKey: COMMAND_OPEN_TAB_KEY,
+      langText: this.t("commandOpenSearchTab"),
       hotkey: "",
       callback: () => this.openSearchTab(),
     });
@@ -193,6 +227,17 @@ export default class DocSeekerPlugin extends Plugin {
   /** Onglets de recherche ouverts, dans l'ordre d'ouverture (le dernier est la cible de « Aller au champ de recherche »). */
   private readonly searchTabs = new Map<Element, SearchTab>();
   private readonly warnLog = createWarnLog();
+  /** Session de la recherche (requête soumise + options), partagée entre la fenêtre flottante et le transfert vers un onglet. */
+  private readonly session = createSearchSessionStore();
+  /** Fenêtre flottante, créée à la première ouverture. */
+  private floating: FloatingSearch | null = null;
+  /** Sessions à restituer aux onglets ouverts par « Ouvrir dans un nouvel onglet », par jeton (relu dans `custom.data` par `init`) ; chacune est reprise une seule fois. */
+  private readonly transfers = new Map<string, Transfer>();
+  private transferSeq = 0;
+  /** Vrai tant qu'un transfert attend la réponse d'`openTab` : un double clic n'ouvre pas un second onglet. */
+  private transferring = false;
+  /** Calque de surlignage remis au visualiseur par la fenêtre flottante : libéré au prochain calque et au déchargement. */
+  private lastFloatingOverlay: { dispose(): void } | undefined;
   private panel: SettingsPanel | null = null;
   private autoSync: AutoSync | null = null;
   private lastInputAt = Number.NEGATIVE_INFINITY;
@@ -216,8 +261,54 @@ export default class DocSeekerPlugin extends Plugin {
     this.sharedIndex?.dispose();
     this.sharedIndex = null;
     this.disposePanel();
+    try {
+      this.floating?.dispose();
+    } catch (error) {
+      this.warnLog.warn("Libération de la fenêtre flottante en échec", error);
+    }
+    this.floating = null;
+    for (const transfer of this.transfers.values()) clearTimeout(transfer.timer);
+    this.transfers.clear();
+    this.transferring = false;
+    this.releaseFloatingOverlay();
+    this.session.clear();
     for (const host of [...this.tabCleanups.keys()]) this.disposeTab(host);
     this.removeTopBar(TOP_BAR_ID);
+  }
+
+  /** Libère le dernier calque de surlignage remis au visualiseur par la fenêtre flottante ; un échec est tracé. */
+  private releaseFloatingOverlay(): void {
+    const overlay = this.lastFloatingOverlay;
+    this.lastFloatingOverlay = undefined;
+    try {
+      overlay?.dispose();
+    } catch (error) {
+      this.warnLog.warn("Libération du calque de surlignage en échec", error);
+    }
+  }
+
+  /** Le PDF est ouvert depuis la fenêtre : son calque appartient au visualiseur, le plugin le garde pour le libérer (nouveau calque, déchargement). */
+  private keepFloatingOverlay(overlay: { dispose(): void }): void {
+    if (this.unloaded) {
+      try {
+        overlay.dispose();
+      } catch (error) {
+        this.warnLog.warn("Libération du calque de surlignage en échec", error);
+      }
+      return;
+    }
+    if (this.lastFloatingOverlay === overlay) return;
+    this.releaseFloatingOverlay();
+    this.lastFloatingOverlay = overlay;
+  }
+
+  /** Message d'erreur visible (toast) : texte i18n fixe, sans `<`, `>` ni `&` (SiYuan l'insère comme HTML) ; le détail va au journal. */
+  private toast(message: string): void {
+    try {
+      showMessage(message, ERROR_TOAST_MS, "error");
+    } catch (error) {
+      this.warnLog.warn("Notification d'erreur impossible", error);
+    }
   }
 
   private disposeTab(host: Element): void {
@@ -289,16 +380,116 @@ export default class DocSeekerPlugin extends Plugin {
     return typeof value === "string" ? value : key;
   }
 
-  private openSearchTab(): void {
-    openTab({
-      app: this.app,
-      custom: {
-        id: `${this.name}${TAB_TYPE}`,
-        icon: ICON_NAME,
-        title: this.t("tabTitle"),
-      },
-      openNewTab: true, // sans cela SiYuan refocalise l'onglet de recherche déjà ouvert (id fixe)
+  /** Icône de la barre et commande « Rechercher dans les PDF » : fenêtre flottante ou onglet, selon le réglage `openMode`. */
+  private openSearch(): void {
+    // Le réglage est lu AVANT de choisir : un clic juste après le démarrage ne doit pas ignorer « Fenêtre flottante ».
+    const open = (mode: OpenMode): void => {
+      if (this.unloaded) return;
+      if (mode === "dialog") this.openFloatingSearch();
+      else this.openSearchTab();
+    };
+    this.settings.ready
+      .then(
+        () => open(this.settings.get().openMode),
+        (error: unknown) => {
+          this.warnLog.warn("Lecture des réglages impossible : la recherche s'ouvre dans un onglet", error);
+          open("tab");
+        },
+      )
+      .catch((error: unknown) => this.warnLog.warn("Ouverture de la recherche en échec", error));
+  }
+
+  /** Ouvre (ou refocalise) la fenêtre flottante, quel que soit le réglage. */
+  private openFloatingSearch(): void {
+    if (this.unloaded) return;
+    this.floating ??= createFloatingSearch({
+      openDialog: openFloatingDialog,
+      title: this.t("floatingTitle"),
+      session: this.session,
+      mount: (host, options) => this.mountSearchInto(host, { floating: options }),
+      onWarn: (message, error) => this.warnLog.warn(message, error),
+      notify: (message) => this.toast(message),
+      openFailedText: this.t("floatingOpenFailed"),
     });
+    this.floating.open();
+  }
+
+  /** Ouvre toujours un NOUVEL onglet de recherche ; un échec est tracé et affiché (jamais une promesse rejetée non gérée). */
+  private openSearchTab(): void {
+    if (this.unloaded) return;
+    this.requestSearchTab().catch((error: unknown) => {
+      this.warnLog.warn("Ouverture de l'onglet de recherche impossible", error);
+      if (!this.unloaded) this.toast(this.t("openTabFailed"));
+    });
+  }
+
+  /**
+   * Demande un nouvel onglet à SiYuan ; résolue quand `openTab` l'est, rejetée si `openTab` échoue (même de façon synchrone).
+   * `data` : transmis tel quel à `init` de l'onglet (`custom.data`).
+   */
+  private requestSearchTab(data?: Record<string, string>): Promise<void> {
+    return new Promise<unknown>((resolve) =>
+      resolve(
+        openTab({
+          app: this.app,
+          custom: {
+            id: `${this.name}${TAB_TYPE}`,
+            icon: ICON_NAME,
+            title: this.t("tabTitle"),
+            ...(data ? { data } : {}),
+          },
+          openNewTab: true, // sans cela SiYuan refocalise l'onglet de recherche déjà ouvert (id fixe)
+        }),
+      ),
+    ).then(() => undefined);
+  }
+
+  /**
+   * « Ouvrir dans un nouvel onglet » : la session est rangée sous un JETON unique, placé dans `custom.data` de l'onglet ; `init`
+   * (appelé par SiYuan pendant `openTab` si l'onglet est créé tout de suite, ou plus tard) la reprend par ce jeton : l'ordre
+   * `init` / résolution d'`openTab` n'a pas d'importance et aucun autre onglet ne peut la voler. La fenêtre se ferme APRÈS
+   * l'ouverture, sans rendre le focus. Si l'onglet ne s'ouvre pas, la fenêtre reste ouverte et l'erreur est affichée et tracée ;
+   * un jeton jamais repris est nettoyé au bout de `TRANSFER_TTL_MS`.
+   */
+  private transferToTab(close: FloatingMountOptions["close"]): void {
+    // Un transfert en cours, ou une fenêtre déjà en fermeture (double clic) : un seul onglet, une seule fermeture.
+    if (this.unloaded || this.transferring || this.floating?.isOpen() !== true) return;
+    const seq = ++this.transferSeq;
+    const state = this.session.get();
+    const token = state ? `${Date.now().toString(36)}-${seq.toString(36)}-${Math.random().toString(36).slice(2, 10)}` : undefined;
+    this.transferring = true;
+    const release = (): void => {
+      if (this.transferSeq === seq) this.transferring = false;
+    };
+    const timer = setTimeout(() => {
+      release(); // openTab n'a jamais répondu : on peut réessayer
+      if (token && this.transfers.delete(token)) {
+        this.warnLog.warn("Transfert vers un onglet : la session n'a jamais été reprise par un onglet, elle est abandonnée");
+      }
+    }, TRANSFER_TTL_MS);
+    const transfer: Transfer | undefined = token && state ? { state, timer, settled: false } : undefined;
+    if (token && transfer) this.transfers.set(token, transfer);
+    /** `openTab` a répondu : si rien n'attend plus de reprise par `init`, la minuterie n'a plus d'objet. */
+    const settle = (): void => {
+      release();
+      if (transfer) transfer.settled = true;
+      if (!transfer || !token || !this.transfers.has(token)) clearTimeout(timer);
+    };
+    this.requestSearchTab(token ? { [TRANSFER_KEY]: token } : undefined).then(
+      () => {
+        settle();
+        if (!this.unloaded) close({ restoreFocus: false });
+      },
+      (error: unknown) => {
+        settle();
+        if (token) {
+          this.transfers.delete(token);
+          clearTimeout(timer);
+        }
+        this.warnLog.warn("Ouverture dans un nouvel onglet impossible", error);
+        if (!this.unloaded) this.toast(this.t("transferTabFailed"));
+      },
+    );
   }
 
   /**
@@ -306,8 +497,17 @@ export default class DocSeekerPlugin extends Plugin {
    * refocalise l'onglet existant quand `openNewTab` est absent) ou en ouvre un, puis focalise son champ.
    */
   private focusSearch(): void {
-    const hasTab = this.searchTabs.size > 0;
     const fail = (error: unknown): void => this.warnLog.warn("Accès au champ de recherche impossible", error);
+    if (this.floating?.isOpen() === true) {
+      // La fenêtre flottante est ouverte : c'est elle qu'on veut (elle est devant tout le reste).
+      try {
+        if (!this.floating.focusInput()) this.warnLog.warn("Champ de recherche non focalisé");
+      } catch (error) {
+        fail(error);
+      }
+      return;
+    }
+    const hasTab = this.searchTabs.size > 0;
     /** Focalise le champ du dernier onglet VISIBLE ; faux si aucun onglet n'est affiché ou si le focus est refusé. */
     const focus = (): boolean => {
       const visible = [...this.searchTabs].filter(([host]) => isShown(host));
@@ -342,25 +542,58 @@ export default class DocSeekerPlugin extends Plugin {
     }
   }
 
-  private renderTab(host: Element): void {
+  /**
+   * Reprend la session d'un transfert d'après le jeton de `custom.data`, une seule fois. Toute donnée à nous est retirée de l'onglet :
+   * SiYuan enregistre `custom.data` dans la mise en page, un jeton périmé n'a pas à être restauré au prochain démarrage.
+   */
+  private takeTransfer(custom: { data?: unknown }): SearchSessionState | undefined {
+    const data: unknown = custom.data;
+    if (typeof data !== "object" || data === null || !(TRANSFER_KEY in data)) return undefined;
+    const token = (data as Record<string, unknown>)[TRANSFER_KEY];
+    custom.data = undefined;
+    const transfer = typeof token === "string" ? this.transfers.get(token) : undefined;
+    if (!transfer || typeof token !== "string") return undefined;
+    this.transfers.delete(token);
+    if (transfer.settled) clearTimeout(transfer.timer);
+    return transfer.state;
+  }
+
+  private renderTab(host: Element, custom: { data?: unknown } = {}): void {
     if (this.unloaded) return; // plugin déchargé : ne recrée ni index ni onglet orphelins
     this.disposeTab(host);
     const cleanups: Array<() => void> = [];
     this.tabCleanups.set(host, cleanups);
     host.replaceChildren();
-    ensureSearchStyle(document);
     const container = document.createElement("div");
     container.style.padding = "16px";
     host.append(container);
 
     const searchHost = document.createElement("div");
     container.append(searchHost);
+    // Onglet ouvert par « Ouvrir dans un nouvel onglet » : il reçoit la session une seule fois, d'après son jeton.
+    const initial = this.takeTransfer(custom);
+    const searchTab = this.mountSearchInto(searchHost, initial ? { initial } : {});
+    this.searchTabs.set(host, searchTab);
+    cleanups.push(() => searchTab.dispose());
+  }
+
+  /**
+   * Monte la vue de recherche dans `host` : même assemblage pour un onglet et pour la fenêtre flottante.
+   * `floating` : mode fenêtre flottante (session restituée et mémorisée, fermeture après l'ouverture d'un PDF, bouton « nouvel onglet »,
+   * Échap sur un champ vide) ; `initial` : session à restituer dans un onglet (transfert), sans rien mémoriser.
+   */
+  private mountSearchInto(
+    host: HTMLElement,
+    mode: { floating?: FloatingMountOptions; initial?: SearchSessionState },
+  ): SearchTab {
+    ensureSearchStyle(document);
+    const { floating } = mode;
     const kernel = createKernelApi();
     const getPdfjs = (): PdfjsLoader | undefined => window.pdfjsLib as PdfjsLoader | undefined;
     const loadPdf = createLoadPdf(getPdfjs);
     const sharedIndex = this.getSharedIndex();
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
-    const searchTab = mountSearchTab(searchHost, {
+    return mountSearchTab(host, {
       store: this.getPetalStore(kernel),
       sharedIndex,
       onOpenSettings: () => this.openSetting(),
@@ -381,9 +614,24 @@ export default class DocSeekerPlugin extends Plugin {
       },
       onWarn: (message, error) => this.warnLog.warn(message, error),
       t: (key) => this.t(key),
+      ...(floating
+        ? {
+            notify: (message: string) => this.toast(message),
+            session: { initial: floating.initial, save: floating.save },
+            floating: {
+              // Le PDF est ouvert : la fenêtre se ferme sans rendre le focus (il va au visualiseur) ; le calque reste au plugin.
+              onPdfOpened: (overlay: { dispose(): void }) => {
+                this.keepFloatingOverlay(overlay);
+                floating.close({ restoreFocus: false });
+              },
+              onOpenInTab: () => this.transferToTab(floating.close),
+              onCloseRequest: () => floating.close(),
+            },
+          }
+        : mode.initial
+          ? { session: { initial: mode.initial, save: () => undefined } }
+          : {}),
     });
-    this.searchTabs.set(host, searchTab);
-    cleanups.push(() => searchTab.dispose());
   }
 
   private getPetalStore(kernel: ReturnType<typeof createKernelApi>): PetalStore {

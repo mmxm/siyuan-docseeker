@@ -10,7 +10,15 @@
  * fermeture, avant de vider le menu, puis le focus tombe sur BODY (vérifié dans le bundle 3.8.9 et dans le banc d'essai).
  */
 import { Dialog, Menu, type IMenu } from "siyuan";
-import type { DialogHandle, MenuAnchor, MenuHandle, NativeDialogOptions, NativeMenuItem } from "../ui/nativeUiTypes";
+import type {
+  DialogHandle,
+  FloatingDialogHandle,
+  FloatingDialogOptions,
+  MenuAnchor,
+  MenuHandle,
+  NativeDialogOptions,
+  NativeMenuItem,
+} from "../ui/nativeUiTypes";
 
 const HTML_ESCAPES: Readonly<Record<string, string>> = {
   "&": "&amp;",
@@ -118,6 +126,7 @@ export function openMenu(items: readonly NativeMenuItem[], anchor: MenuAnchor, o
       if (closed) return; // déjà fermé, ou remplacé par un autre menu : ne jamais fermer le menu d'un autre
       menu.close();
     },
+    isOpen: () => !closed,
   };
 }
 
@@ -196,5 +205,70 @@ export function openDialog(options: NativeDialogOptions): DialogHandle {
   }
   // « Ouvert » tant que SiYuan ne l'a pas détruit : destruction différée comprise (pas de réouverture pendant le délai), et
   // faux dès que l'élément a quitté le document, même si SiYuan ne rappelle pas `destroyCallback`.
+  return { close, isOpen: () => !closed && dialog.element.isConnected };
+}
+
+// --- Fenêtre flottante -----------------------------------------------------------------------------------------
+
+/** Dimensions de la recherche globale native (relevées dans le bundle 3.8.9) et clé de mémorisation de la position. */
+const FLOATING_WIDTH = "80vw";
+const FLOATING_HEIGHT = "90vh";
+const FLOATING_POSITION_ID = "docseeker-search";
+
+/** Squelette statique : aucun pied (ni Annuler ni Confirmer), un seul conteneur que l'appelant remplit en DOM. */
+const FLOATING_CONTENT = '<div class="docseeker-floating-body"></div>';
+
+/**
+ * Fenêtre flottante de la recherche (comme la recherche globale native : 80vw x 90vh, position et taille mémorisées par SiYuan
+ * sous `positionId`). Pas de gestionnaire Échap ici : l'Échap GLOBAL de SiYuan ferme le dernier dialogue (après avoir fermé un menu
+ * ouvert au-dessus), et c'est à la vue de consommer (`stopPropagation`) les frappes qu'elle traite elle-même.
+ */
+export function openFloatingDialog(options: FloatingDialogOptions): FloatingDialogHandle {
+  let closing = false;
+  let closed = false;
+  let noFocus = false;
+  const dialog: Dialog = new Dialog({
+    title: toHtmlText(options.title),
+    content: FLOATING_CONTENT,
+    width: FLOATING_WIDTH,
+    height: FLOATING_HEIGHT,
+    positionId: FLOATING_POSITION_ID,
+    // SiYuan transmet à `destroyCallback` l'argument de `destroy` (ex. `{ focus: "false" }` après l'ouverture d'un résultat).
+    destroyCallback: (info) => {
+      if (closed) return;
+      closed = true;
+      options.onDestroyed?.({ focus: !noFocus && info?.["focus"] !== "false" });
+    },
+  });
+  // Échap global, voile et croix appellent `dialog.destroy()` SANS passer par `close()` : on enveloppe `destroy` sur l'instance pour
+  // connaître le DÉBUT de la destruction (SiYuan ne rappelle `destroyCallback` qu'après ~190 ms, fenêtre pendant laquelle un
+  // `open()` retomberait sur un dialogue condamné). Les arguments d'origine sont transmis tels quels.
+  const siyuanDestroy = dialog.destroy.bind(dialog) as (destroyOptions?: Record<string, unknown>) => void;
+  dialog.destroy = (destroyOptions?: Record<string, unknown>): void => {
+    if (!closing) {
+      closing = true;
+      noFocus = destroyOptions?.["focus"] === "false";
+      try {
+        options.onClosing?.({ focus: !noFocus });
+      } finally {
+        siyuanDestroy(destroyOptions);
+      }
+      return;
+    }
+    siyuanDestroy(destroyOptions);
+  };
+  const close = (closeOptions?: { readonly focus?: boolean }): void => {
+    if (closing) return;
+    dialog.destroy(closeOptions?.focus === false ? { focus: "false" } : undefined);
+  };
+  try {
+    const body = dialog.element.querySelector<HTMLElement>(".docseeker-floating-body");
+    if (!body) throw new Error("Squelette de fenêtre flottante introuvable");
+    options.build(body);
+  } catch (error) {
+    close(); // pas de fenêtre vide laissée à l'écran
+    throw error;
+  }
+  // « Ouverte » tant que SiYuan ne l'a pas détruite (destruction différée comprise), et fausse dès que l'élément a quitté le document.
   return { close, isOpen: () => !closed && dialog.element.isConnected };
 }

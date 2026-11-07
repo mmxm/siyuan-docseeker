@@ -24,6 +24,10 @@ describe("SEARCH_CSS", () => {
     expect(rulesFor(selector).join(" ")).toContain(FOCUS);
   });
 
+  it("la fenêtre flottante a une marge intérieure (le corps du dialogue de SiYuan défile et n'en a pas)", () => {
+    expect(rulesFor(".docseeker-floating-body").join(" ")).toMatch(/padding:\s*8px 16px 16px/);
+  });
+
   it("n'utilise aucune taille de texte inférieure à 12px", () => {
     const sizes = [...SEARCH_CSS.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]));
     expect(sizes.length).toBeGreaterThan(0);

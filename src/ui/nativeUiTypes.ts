@@ -44,6 +44,8 @@ export interface NativeDialogOptions {
 /** Menu ouvert par `OpenMenu` : `close()` le ferme s'il est encore ouvert (sans effet sinon, jamais un autre menu). */
 export interface MenuHandle {
   close(): void;
+  /** Vrai tant que CE menu est ouvert ; faux s'il est fermé, remplacé par un autre, ou s'il ne s'est jamais ouvert (même identifiant déjà ouvert : bascule). */
+  isOpen(): boolean;
 }
 
 /** Dialogue ouvert par `OpenDialog`. */
@@ -51,6 +53,37 @@ export interface DialogHandle {
   /** Détruit le dialogue (sans effet s'il est déjà en cours de destruction ou détruit). */
   close(): void;
   /** Vrai tant que le dialogue est à l'écran, destruction différée comprise ; faux dès qu'il est détruit (même sans callback). */
+  isOpen(): boolean;
+}
+
+/**
+ * Fenêtre flottante (comme la recherche globale native : 80vw x 90vh, position mémorisée par SiYuan) : un conteneur vide à
+ * remplir en DOM, un titre, la croix native, ni « Annuler » ni « Confirmer ». SiYuan la ferme sur Échap global, voile ou croix.
+ */
+export interface FloatingDialogOptions {
+  /** Texte brut ; l'adaptateur l'échappe (SiYuan l'insère comme HTML). */
+  readonly title: string;
+  /** Remplit le conteneur vide (DOM seulement, jamais de chaîne HTML). */
+  build(container: HTMLElement): void;
+  /**
+   * Appelé UNE fois, quand SiYuan a réellement détruit la fenêtre (son `destroyCallback`, après un délai), quelle que soit
+   * l'origine : `close()`, Échap global, voile, croix. `focus` est faux si la destruction a demandé de ne pas rendre le focus
+   * (`close({ focus: false })`, `destroy({ focus: "false" })` de SiYuan).
+   */
+  onDestroyed?(info: { readonly focus: boolean }): void;
+  /**
+   * Appelé UNE fois, dès que la destruction COMMENCE (avant le délai de SiYuan), que `close()` en soit l'origine ou SiYuan lui-même
+   * (Échap global, voile, croix : il appelle alors `dialog.destroy()`). Pendant ce délai la fenêtre est condamnée : l'appelant ne
+   * doit plus y adresser d'action. `focus` : même sens que pour `onDestroyed`.
+   */
+  onClosing?(info: { readonly focus: boolean }): void;
+}
+
+/** Fenêtre flottante ouverte par `OpenFloatingDialog`. */
+export interface FloatingDialogHandle {
+  /** Détruit la fenêtre (sans effet si la destruction est déjà en cours). `focus: false` : ne pas rendre le focus (un PDF s'ouvre). */
+  close(options?: { readonly focus?: boolean }): void;
+  /** Vrai tant que la fenêtre est à l'écran, destruction différée comprise ; faux dès qu'elle est détruite. */
   isOpen(): boolean;
 }
 
@@ -67,3 +100,4 @@ export const MENU_ID_HISTORY = "docseeker-history";
  */
 export type OpenMenu = (items: readonly NativeMenuItem[], anchor: MenuAnchor, onClose?: () => void, id?: string) => MenuHandle;
 export type OpenDialog = (options: NativeDialogOptions) => DialogHandle;
+export type OpenFloatingDialog = (options: FloatingDialogOptions) => FloatingDialogHandle;
