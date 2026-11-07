@@ -2,7 +2,7 @@
 
 > Document de passation. Il dit où en est le projet, comment il est construit, ce qui reste ouvert et comment reprendre.
 > Complète `CAHIER_DES_CHARGES.md` (le quoi), `PLAN_IMPLEMENTATION.md` (le plan et le guide d'entrée) et `CLAUDE.md` (règles de travail).
-> Dernière mise à jour : 2026-11-07 (J12 bis ajouté : refonte à l'identique de la recherche native de SiYuan pour le chemin et les critères enregistrés, code committé `9b2951e` ; J12 committé `ae36b73`. `npm test`, `npm run typecheck` et `npm run test:coverage` relancés ce jour-là, chiffres du 2026-11-07, mesurés par l'agent TDD et à relancer par le coordinateur avant le commit ; `npm run build` relancé le 2026-11-06, pas depuis J12 bis ; `npm run package`, `npm run release:check` et `gh release view v0.2.0` datent du 2026-11-05 et n'ont pas été relancés).
+> Dernière mise à jour : 2026-11-07 (CI et release automatisée ajoutées (`.github/workflows/ci.yml`, `.github/workflows/release.yml`), `scripts/release.mjs --ci`, version passée à 0.3.0 dans `package.json`, `plugin.json` et `CHANGELOG.md`. D'après le statut git de début de session, ces fichiers ne sont pas committés ; aucun tag `v0.3.0`, rien de poussé, et les workflows n'ont jamais tourné sur GitHub. Voir §1, §5 (dettes R10) et §7. J12 bis ajouté : refonte à l'identique de la recherche native de SiYuan pour le chemin et les critères enregistrés, code committé `9b2951e` ; J12 committé `ae36b73`. `npm test`, `npm run typecheck` et `npm run test:coverage` relancés ce jour-là, chiffres du 2026-11-07, mesurés par l'agent TDD et à relancer par le coordinateur avant le commit ; `npm run build` relancé le 2026-11-06, pas depuis J12 bis ; `npm run package`, `npm run release:check` et `gh release view v0.2.0` datent du 2026-11-05 et n'ont pas été relancés).
 
 Légende utilisée ci-dessous :
 - **[SiYuan]** : validé à la main dans SiYuan 3.8.9 (webapp, ordinateur). Source : commits `docs:` et sections précédentes de ce fichier ; non rejouable depuis le dépôt.
@@ -13,7 +13,8 @@ Légende utilisée ci-dessous :
 
 ## 1. En une minute
 
-- **Version publiée : 0.2.0.** `package.json` et `plugin.json` indiquent `0.2.0`. Tag git `v0.2.0` sur le commit `4a83cb0`.
+- **Version publiée : 0.2.0.** Tag git `v0.2.0` sur le commit `4a83cb0`. **Version préparée : 0.3.0.** `package.json` et `plugin.json` indiquent `0.3.0`, et `CHANGELOG.md` a une section `## 0.3.0`. Rien n'est encore publié en 0.3.0 : pas de tag `v0.3.0`, pas de release. La section 0.3.0 du CHANGELOG porte la mention « Publiée le 2026-11-07 », à corriger avant le tag (elle ne reflète pas l'état réel).
+- **CI et release automatisée (R10, fait côté code, non exécuté sur GitHub)** : `.github/workflows/ci.yml` (push sur `main` et PR : `npm ci`, `npm run typecheck`, `npm test`, `npm run package`) ; `.github/workflows/release.yml` (tag `vX.Y.Z` poussé = vérification tag/versions/CHANGELOG, typecheck, tests, paquet, SHA-256, puis release GitHub avec `package.zip` ; `workflow_dispatch` = mode à blanc, qui ne publie rien). Détail en §2 et limites en §5.
 - **Release GitHub `DocSeeker 0.2.0` publiée** le 2026-11-05 (non brouillon, non préversion) avec `package.zip` (79 719 octets, sha256 `99f4e35c…`). Vérifié avec `gh release view v0.2.0`.
 - **Branche `main`** : `origin/main` est à `9b2951e` (J12 bis poussé) (documentation de J12 poussée ; le code J12, `ae36b73`, est sur `origin/main`). **Le code J12 bis (refonte à l'identique de SiYuan : dialogue « Spécifier le chemin », ligne de critères) n'est pas committé** : il est dans l'arbre de travail, avec la documentation modifiée le 2026-11-07. Il sera committé par le coordinateur après relance des vérifications. `dist/` et `package.zip` sont ignorés par git.
 - **Tests : 3 738 tests verts dans 101 fichiers** (`npm test`, mesure du 2026-11-07, code de sortie 0). Le rejet non géré de `tests/unit/searchTab.floating.test.ts` (R12) est corrigé depuis le commit `671d5f4` : il ne fait plus sortir `npm test` en code 1. Les mesures de `tests/perf` ne sont pas dans `npm test`.
@@ -21,17 +22,19 @@ Légende utilisée ci-dessous :
 - **Couverture** (`npm run test:coverage`, seuil 80 % sur `src/**`, mesure du 2026-11-07, code de sortie 0) : instructions 98,77 %, branches 93,45 %, fonctions 96,75 %, lignes 97,54 %. Mesure de l'agent TDD ; à relancer par le coordinateur avant le commit de J12 bis.
 - **Bundle** : `npm run build` relancé le 2026-11-06 : `dist/index.js` = 281 298 octets (83 360 octets gzip). Ce bundle est antérieur à J12 (construit le 2026-11-06) : il ne reflète ni J12 ni J12 bis. `package.zip` = 79 719 octets, celui de la release 0.2.0 (non reconstruit depuis). Le bundle installé dans `~/SiYuan` a été recopié le 2026-11-07 à 11 h 29, sur demande de l'utilisateur, à partir de l'état `970c48e` (ancien menu « Spécifier le chemin » et bouton signet). **Le bundle J12 bis n'y est pas copié.**
 - **Ce qui marche dans SiYuan 3.8.9** : diagnostic M0, indexation de PDF réels, recherche, vignettes surlignées, clic → PDF à la bonne page avec calque, plusieurs onglets de recherche, pages dépliables, re-classement par proximité (phase 1). Détail en section 2.
-- **Ce qui manque** : pause/reprise de l'indexation (le code existe, l'interface non), dossiers surveillés et taille des vignettes dans les réglages, `preview.png`, soumission au Marché, CI. Voir section 5.
+- **Ce qui manque** : pause/reprise de l'indexation (le code existe, l'interface non), dossiers surveillés et taille des vignettes dans les réglages, `preview.png`, soumission au Marché, validation de la CI et de la release sur GitHub réel (§5). Voir section 5.
 - **Depuis J12 bis, J12, J11 et J10** : ce qui est vérifié et ce qui ne l'est pas est détaillé dans la section 1 bis (rubriques « Vérifié » et « Non vérifié » par jalon ; liste à cocher des validations manuelles J10, J11, J12 et J12 bis).
 - **J12 bis (code, committé `9b2951e`)** : le chemin se choisit dans un dialogue « Spécifier le chemin » identique à celui de la recherche native de SiYuan 3.8.9, et les critères enregistrés sont dans une ligne sous le champ, avec les boutons « Enregistrer les critères de requête » et « Réinitialiser les critères de recherche ». Le filtre par dossier d'assets est supprimé. Essayé à la main dans la webapp d'un noyau jetable SiYuan 3.8.9, avec captures d'écran ; pas dans l'application de bureau ni dans `~/SiYuan`.
 - **J12 (committé `ae36b73`)** : la version committée (menu « Spécifier le chemin » à deux sections, bouton signet « Critères enregistrés », filtre par dossier d'assets) a été remplacée par J12 bis. Ne pas la décrire comme l'interface actuelle.
-- **Attention** : `npm run release:check` échoue actuellement sur « le tag v0.2.0 existe déjà ». C'est attendu après publication. Pour une nouvelle version, il faut d'abord incrémenter la version (voir section 7).
+- **Attention** : `npm run release:check` échouait sur « le tag v0.2.0 existe déjà » ; c'est attendu après publication. Pour 0.3.0, il n'a pas été relancé depuis la mise à jour de version : son résultat est inconnu. La procédure à suivre est en section 7.
 
 ---
 
 ## 1 bis. Feuille de route en cours (décidée le 2026-11-06)
 
 Ordre : **J7** (résultats compacts, recherche sur Entrée) → **J8** (paramètres du plugin : Réindexer, diagnostic, vider l'index, interrupteur d'indexation automatique) → **J9** (indexation automatique : démarrage, nouveaux PDF, suppressions, `removeStaleTmp`) → **J11** (classement phase 2, format `.dsx` v2, migration automatique grâce à J9) → **J10** (parité avec la recherche SiYuan : chemin, filtres, tris, onglet ou fenêtre flottante, raccourcis) → **J12** (filtre par documents SiYuan et critères de recherche enregistrés, `ae36b73`) → **J12 bis** (refonte à l'identique de la recherche SiYuan : dialogue « Spécifier le chemin », ligne de critères ; non committé).
+
+**R10 (CI GitHub Actions et release automatisée, §6 étape 10) : fait côté code, non committé à la date de mise à jour, jamais exécuté sur GitHub.** Il reste à le valider : un run vert de `ci.yml` sur `main`, un mode à blanc de `release.yml`, puis un premier tag. Les limites sont en §5 (dettes R10).
 
 **État : J7, J8, J9, J11, J10 et J12 sont faits côté code et committés. J12 bis est fait côté code et committé (`9b2951e`). Aucun n'est validé dans l'application de bureau ni dans le `~/SiYuan` de l'utilisateur.** La liste à cocher est plus bas, dans « Validations manuelles à faire ».
 
@@ -242,6 +245,14 @@ Les jalons du plan initial sont décrits dans `PLAN_IMPLEMENTATION.md`. Dates : 
 - **Commits** : `4a83cb0` (préparation), tag `v0.2.0` sur ce commit, release GitHub publiée le 2026-11-05.
 - **Non fait** : `preview.png`, soumission au Marché (`siyuan-note/bazaar`) : aucune trace dans le dépôt.
 
+### CI et release automatisée (R10, version 0.3.0)
+- **Fichiers** : `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `scripts/release.mjs` (mode `--ci <tag> <fichier-notes>` : vérifie tag, `package.json`, `plugin.json` et la section `## x.y.z` du CHANGELOG, refuse une version non supérieure aux tags existants, écrit les notes), `tests/unit/scripts/workflows.test.ts` (contrôles statiques des deux workflows : permissions, actions épinglées sur un SHA, pas de `${{ github.* }}` dans `run:`, `GITHUB_TOKEN` seul secret, Node 22, déclencheurs, ordre des jobs, vérification du tag sur la tête de `main`), `tests/unit/scripts/release.test.ts`.
+- **CI** (`ci.yml`) : sur push vers `main` et sur PR, lecture seule. `npm ci`, `npm run typecheck`, `npm test`, `npm run package`.
+- **Release** (`release.yml`) : déclenchée par un tag `vX.Y.Z` poussé, ou par `workflow_dispatch` (mode à blanc : le job `publish` ne tourne pas). Job `build` : vérifie que le tag pointe sur la tête de `origin/main`, `scripts/release.mjs --ci`, typecheck, tests, paquet, SHA-256 de `package.zip` ajouté aux notes, artefact. Job `publish` (seul avec `contents: write`, seulement sur tag) : retélécharge l'artefact, revérifie que le tag pointe encore sur le commit, puis `gh release create --verify-tag --target <commit>`. Un seul run par tag, sans annulation en cours.
+- **Mode à blanc** : échoue tant que le CHANGELOG n'a pas de section `## <version de package.json>` (« Non publié » ne suffit pas), voulu.
+- **Vérifié** : la lecture des fichiers et des tests de workflows (titres lus en 2026-11-07). **Non vérifié** : aucune exécution des workflows sur GitHub ; aucun appel de `scripts/release.mjs --ci` pendant cette mise à jour.
+- **Commits** : aucun à la date de mise à jour (fichiers non suivis dans le statut git de début de session).
+
 ### Parité avec la recherche SiYuan (J10)
 - **Fichiers** : `src/search/resultOptions.ts` (filtres, huit tris, `sortDocs`, normalisation des options), `src/search/searchController.ts` (filtres avant re-classement ; tri seul sans relance), `src/search/searchSession.ts` (session en mémoire), `src/search/searchHistory.ts` (20 requêtes, dédoublonnées), `src/ui/searchToolbar.ts` (barre d'outils, menus Tri et Groupe, dialogue des filtres, liste des dossiers bornée), `src/ui/keyboardNav.ts` (fonctions pures du clavier), `src/ui/searchView.ts` (champ, cartes, historique, liste à plat de 60 cartes), `src/siyuan/nativeUi.ts` (adaptateur unique des menus et dialogues natifs), `src/siyuan/floatingSearch.ts` (fenêtre flottante), `src/searchTab.ts` (câblage ; `position: "right"` pour l'ouverture à droite), `src/settings.ts` (tri, regroupement, `openMode`, historique), `src/index.ts` (quatre commandes, réglage, transfert vers un onglet, `traceKeys`), `src/ui/pathLabel.ts`, `src/diagnostic/traceKeys.ts`, `src/indexer/loadPdf.ts` (`ensureWorkerSrc`).
 - **Tests** : `tests/unit/search/resultOptions*.test.ts`, `searchController.sort.test.ts`, `searchHistory.test.ts`, `searchSession.test.ts`, `tests/unit/ui/keyboardNav.test.ts`, `searchView.keyboard.test.ts`, `searchView.history.test.ts`, `searchView.group.test.ts`, `searchView.flatLimit.test.ts`, `searchView.floating.test.ts`, `searchToolbar.test.ts`, `tests/unit/siyuan/nativeUi.test.ts`, `floatingSearch.test.ts`, `floatingDialog.test.ts`, `tests/unit/searchTab.floating.test.ts`, `tests/unit/settings.test.ts`, `tests/unit/scripts/devSandbox.*.test.ts`, `tests/unit/diagnostic/traceKeys.test.ts`. Tests de vue en jsdom : ils ne voient ni le rendu ni la mise en page.
@@ -390,12 +401,21 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 ### Documentation et process
 19. **`src/siyuan/openPdf.ts`** : en-tête mis à jour (constat du 2026-11-07) : l'ouverture à la page est dite vérifiée dans SiYuan 3.8.9, et quatre points restent à valider, dont l'ouverture à droite (`position: "right"`, J10). Le point 1 de cette liste est à relire après la validation de bureau.
 20. **`CHANGELOG.md` 0.2.0** : la note de 0.2.0 reconnaît que pause/reprise n'a pas d'interface (point 4) ; la section « Non publié » n'annonce pas de pause. Rien à corriger avant la prochaine release sur ce point, sauf si la pause est ajoutée.
-21. **`release:check`** : échoue sur le tag existant. Normal après publication ; il faut incrémenter la version avant la release suivante.
+21. **`release:check`** : échouait sur le tag existant (`v0.2.0`), comportement normal après publication. Pour 0.3.0, résultat non relancé (voir §1). Il reste la vérification locale ; la publication passe désormais par le tag (§7).
 22. **`preview.png`** absent (requis pour le Marché).
-23. **Pas de CI** : aucun `.github/`. Les vérifications ne tournent que sur la machine du développeur.
+23. ~~**Pas de CI** : aucun `.github/`.~~ **CI et release ajoutées (R10, 0.3.0), non validées sur GitHub** : voir « Dettes ouvertes par R10 » ci-dessous.
 24. **Pas de lint** : aucun script `lint` ni ESLint, alors que le plan initial le prévoyait.
 25. **Couverture** : 97,54 % des lignes (mesure du 2026-11-07 ; instructions 98,77 %, branches 93,45 %, fonctions 96,75 %). Mesure de l'agent TDD, à relancer avant le commit de J12 bis.
 26. ~~**`npm test` et `npm run test:coverage` sortent en code 1 (R12)** : un test de `tests/unit/searchTab.floating.test.ts` (ligne 378, « calque en échec détecté ») crée `Promise.reject(...)` dans `mockResolvedValue` avant d'attacher le gestionnaire ; la rejection est signalée comme erreur non gérée. Les 3 115 tests passent. À corriger par le test lui-même (création de la promesse à la demande), sans masquer l'erreur.~~ **Corrigé** (commit `671d5f4`) : `npm test` sort en code 0 (constat du 2026-11-07, avec 3 580 tests). Le test a été corrigé sans masquer l'erreur.
+
+### Dettes ouvertes par R10 (CI et release automatisée, 0.3.0)
+- **Jamais exécuté sur GitHub** : `ci.yml` et `release.yml` n'ont aucun run sur le dépôt. Un premier run réel (CI sur `main`, puis mode à blanc) est nécessaire avant tout tag. Les contrôles statiques de `tests/unit/scripts/workflows.test.ts` ne prouvent pas qu'ils passent.
+- **Aucune protection de branche ni de tag** sur `git@github.com:mmxm/siyuan-docseeker.git`, à ce jour (non vérifié sur le dépôt lui-même). Recommandé, dans un ruleset GitHub : tags `v*` (création, modification et suppression restreintes), protection de `main` (PR obligatoire, check du job `verify` du workflow `CI` requis), environnement `release` avec relecteur obligatoire (le job `publish` n'utilise pas encore d'environnement), releases immuables. Sans ces protections, quelqu'un qui peut pousser un tag peut publier une release.
+- **Tag léger et au sommet de `main`** : `git tag vX.Y.Z` (sans `-a`). Un tag annoté est refusé à la publication (`.object.sha` de l'API est le SHA de l'objet tag, pas du commit). Le job `build` refuse aussi un tag qui ne pointe pas sur `origin/main`.
+- **Section 0.3.0 du CHANGELOG** : datée « Publiée le 2026-11-07 » alors qu'aucune release 0.3.0 n'existe. À corriger avant le tag.
+- **Mode à blanc sans effet sur la publication** : `workflow_dispatch` ne construit que le tag simulé `v<version de package.json>`, et ne crée aucune release. Il ne prouve pas la publication, seulement le build et les vérifications.
+- **Actions tierces épinglées sur un SHA** (`checkout`, `setup-node`, `upload-artifact`, `download-artifact`) : les SHA et les versions en commentaire sont à mettre à jour à la main (Dependabot non configuré).
+- **Non vérifié** : `gh` et `unzip` sur `ubuntu-latest` (utilisés par `release.mjs` et le job `publish`) ; l'effet réel de `npm ci --ignore-scripts` sur le paquet.
 
 ### Dettes ouvertes par J12 bis (refonte à l'identique de SiYuan)
 - **Rendu non vu** : thème sombre, largeur de 320 px, étiquette longue (tronquée par la croix dans la fenêtre de 800 px). Rien de tout cela n'a été capturé.
@@ -469,8 +489,9 @@ Chaque étape a un critère de fin. L'ordre est une proposition.
    - Fin : `preview.png` dans le dépôt, PR ouverte sur le dépôt Bazaar, lien noté ici.
 9. **Réglages restants** (dossiers surveillés, taille des vignettes). Déjà faits : indexation automatique (interrupteur, fréquence), vider l'index (J8, J9).
    - Fin : chaque réglage restant est persisté dans `settings.json`, testé et visible dans le panneau de paramètres.
-10. **CI GitHub Actions** : `npm test`, `npm run typecheck`, `npm run package` sur chaque push.
-    - Fin : workflow vert sur `main`, badge dans le README.
+10. ~~**CI GitHub Actions** : `npm test`, `npm run typecheck`, `npm run package` sur chaque push.~~ **R10, fait côté code (0.3.0), non validé sur GitHub** : `ci.yml` et `release.yml`, voir §2 et « Dettes ouvertes par R10 » (§5).
+    - Reste : un run vert de `ci.yml` sur `main` (constat daté ici) ; un mode à blanc de `release.yml` vert ; un premier tag `v0.3.0` publié par le workflow, constaté ici.
+    - Fin : workflow vert sur `main`, puis release 0.3.0 constatée. Badge dans le README : non fait (le README n'est pas modifié ici).
 11. **Améliorations** : grille virtualisée si le document a beaucoup de pages, réduction de la duplication de termes entre segments, validation des données IndexedDB, clé de vignette avec recadrage.
     - Fin : chaque point fermé par un test ou une mesure.
 
@@ -509,14 +530,16 @@ node scripts/gen-fts5-tokens-fixture.mjs   # tokenisation de référence
 - **Rechargement** : Marché > Téléchargés > Plugins, désactiver puis réactiver DocSeeker. Ni ⌘R ni relancer SiYuan ne suffisent (validé [SiYuan]).
 - **Ne jamais modifier les données SiYuan (`~/SiYuan`) sans demander**. Les mesures lisent `~/SiYuan/data/storage/petal/siyuan-docseeker/idx` en lecture seule.
 
-### Procédure de publication
-1. Incrémenter la version à l'identique dans `package.json` et `plugin.json` (format `x.y.z`, `release.mjs` le vérifie), et ajouter une section `## x.y.z` dans `CHANGELOG.md`.
-2. `npm run release:check` : doit afficher `Release X.Y.Z prête. Rien n'a été publié.`
-3. Commit (voir section 8), puis `git push origin main`.
-4. `git tag vX.Y.Z` puis `git push origin vX.Y.Z`.
-5. `gh release create vX.Y.Z package.zip --title "DocSeeker X.Y.Z" --notes-file CHANGELOG.md`.
+### Procédure de publication (depuis 0.3.0 : par tag, le workflow publie)
+1. Incrémenter la version à l'identique dans `package.json` et `plugin.json` (format `x.y.z`, `release.mjs` le vérifie), et ajouter une section `## x.y.z` dans `CHANGELOG.md` (« Non publié » ne suffit pas).
+2. `npm run release:check` (vérification locale, rien n'est publié) : doit afficher `Release X.Y.Z prête. Rien n'a été publié.`. Exige un arbre git propre et la branche `main`.
+3. Commit (voir section 8), puis `git push origin main`. Le workflow `ci.yml` se lance sur ce push.
+4. `git tag vX.Y.Z` (tag léger, sans `-a`) sur la tête de `main`, puis `git push origin vX.Y.Z`.
+5. Le workflow `release.yml` construit, vérifie et publie la release GitHub avec `package.zip` et le SHA-256 dans les notes. Le suivre dans l'onglet Actions du dépôt. Ne pas créer la release à la main.
 
-`release:check` ne publie rien. Il affiche les commandes à lancer à la main.
+Le mode à blanc (`workflow_dispatch` de `release.yml`) construit et vérifie la version courante sans rien publier ; il échoue sans section CHANGELOG. Un tag annoté, un tag qui ne pointe pas sur la tête de `main`, ou une version non supérieure aux tags existants est refusé. Limites et protections recommandées : « Dettes ouvertes par R10 » (§5).
+
+`release:check` ne publie rien. Il affiche les commandes à lancer à la main (génération des notes, `git tag`, `git push` du tag) ; la release elle-même est créée par le workflow, jamais à la main.
 
 ---
 

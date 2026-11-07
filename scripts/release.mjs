@@ -2,8 +2,8 @@
 // Vérifie qu'une release est prête (`npm run release:check`) SANS rien publier :
 // pas de commit, pas de tag, pas de push, pas de release GitHub. Affiche ensuite les commandes à lancer à la main.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -50,14 +50,77 @@ export function missingZipEntries(entries, required) {
   return required.filter((entry) => !present.has(entry));
 }
 
-/** Commandes manuelles de publication, affichées et jamais exécutées par ce script. */
+/** Commandes manuelles de publication, affichées et jamais exécutées par ce script. Notes générées comme en CI. */
 export function releaseCommands(version) {
   const tag = `v${version}`;
   return [
+    `node scripts/release.mjs --ci ${tag} release-notes.md`,
     `git tag ${tag}`,
     `git push origin ${tag}`,
-    `gh release create ${tag} package.zip --title "DocSeeker ${version}" --notes-file CHANGELOG.md`,
   ];
+}
+
+/** Tags `vX.Y.Z` de `tags` dont la version est supérieure ou égale à `version`, hors `currentTag`. Les tags non versionnés sont ignorés. */
+export function notNewerTags(version, tags, currentTag) {
+  return tags.filter((tag) => {
+    if (tag === currentTag) return false;
+    try {
+      return compareVersions(versionFromTag(tag), version) >= 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Chemin absolu du fichier de notes, qui doit rester strictement sous `cwd`. Lève une erreur sinon. */
+export function resolveNotesPath(notesPath, cwd) {
+  const absolute = resolve(cwd, notesPath);
+  const rel = relative(cwd, absolute);
+  if (!notesPath || !rel || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`Chemin de notes refusé : ${JSON.stringify(notesPath)} (doit être un fichier sous le répertoire courant)`);
+  }
+  return absolute;
+}
+
+/** `vX.Y.Z` strict -> `X.Y.Z`. Lève une erreur pour tout autre format. */
+export function versionFromTag(tag) {
+  const match = typeof tag === "string" ? /^v(\d+\.\d+\.\d+)$/.exec(tag) : null;
+  if (!match) throw new Error(`Tag invalide : ${JSON.stringify(tag)} (attendu vX.Y.Z)`);
+  try {
+    parseVersion(match[1]);
+  } catch {
+    throw new Error(`Tag invalide : ${JSON.stringify(tag)} (attendu vX.Y.Z sans zéro initial)`);
+  }
+  return match[1];
+}
+
+/** Corps de la section `## <version>` du CHANGELOG, sans le titre, jusqu'au prochain `## `. Comparaison littérale. */
+export function extractChangelogSection(changelogText, version) {
+  const lines = String(changelogText).replace(/\r\n?/g, "\n").split("\n");
+  const start = lines.findIndex((line) => line.trimEnd() === `## ${version}`);
+  if (start === -1) throw new Error(`CHANGELOG.md : pas de section « ## ${version} »`);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+  const body = lines.slice(start + 1, end).join("\n").trim();
+  if (!body) throw new Error(`CHANGELOG.md : la section « ## ${version} » est vide`);
+  return body;
+}
+
+/** Vérifications du mode --ci : tag, package.json, plugin.json et CHANGELOG concordent. Renvoie { version, notes }. */
+export function prepareCiRelease({ tag, packageJson, pluginJson, changelog, tags = [] }) {
+  const version = versionFromTag(tag);
+  const pkgVersion = readVersion(packageJson, "package.json");
+  const pluginVersion = readVersion(pluginJson, "plugin.json");
+  if (pkgVersion !== version) throw new Error(`package.json (${pkgVersion}) ne correspond pas au tag ${tag}`);
+  if (pluginVersion !== version) throw new Error(`plugin.json (${pluginVersion}) ne correspond pas au tag ${tag}`);
+  const newer = notNewerTags(version, tags, tag);
+  if (newer.length) throw new Error(`version ${version} non strictement supérieure aux tags existants : ${newer.join(", ")}`);
+  return { version, notes: extractChangelogSection(changelog, version) };
 }
 
 // ---------- vérifications (effets de bord : git, npm, unzip, fichiers) ----------
@@ -110,20 +173,18 @@ function checkRelease() {
 
   if (version) {
     const changelog = existsSync(join(ROOT, "CHANGELOG.md")) ? readRootFile("CHANGELOG.md") : "";
-    if (new RegExp(`^## ${version.replaceAll(".", "\\.")}\\b`, "m").test(changelog)) ok(`CHANGELOG.md contient la section ${version}`);
-    else fail(`CHANGELOG.md : pas de section « ## ${version} »`);
+    try {
+      extractChangelogSection(changelog, version);
+      ok(`CHANGELOG.md contient la section ${version}`);
+    } catch (error) {
+      fail(error.message);
+    }
 
     const tags = git(["tag", "--list", "v*"]).split("\n").filter(Boolean);
     if (tags.includes(`v${version}`)) {
       fail(`le tag v${version} existe déjà`);
     } else {
-      const notNewer = tags.filter((tag) => {
-        try {
-          return compareVersions(tag.slice(1), version) >= 0;
-        } catch {
-          return false; // tag qui n'est pas une version : ignoré
-        }
-      });
+      const notNewer = notNewerTags(version, tags, `v${version}`);
       if (notNewer.length) fail(`version non croissante par rapport aux tags existants : ${notNewer.join(", ")}`);
       else ok(`tag v${version} absent, version plus récente que les tags existants`);
     }
@@ -152,7 +213,25 @@ function checkRelease() {
 
 // Exécuté seulement en ligne de commande (pas à l'import par les tests).
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
+if (isMain && process.argv[2] === "--ci") {
+  // Intégration continue : `node scripts/release.mjs --ci vX.Y.Z release-notes.md`. N'exige ni arbre propre ni branche main.
+  const [tag, notesPath] = process.argv.slice(3);
+  try {
+    if (!tag || !notesPath) throw new Error("Usage : node scripts/release.mjs --ci <tag> <fichier-de-notes>");
+    const { version, notes } = prepareCiRelease({
+      tag,
+      packageJson: readRootFile("package.json"),
+      pluginJson: readRootFile("plugin.json"),
+      changelog: existsSync(join(ROOT, "CHANGELOG.md")) ? readRootFile("CHANGELOG.md") : "",
+      tags: git(["tag", "--list", "v*"]).split("\n").filter(Boolean),
+    });
+    writeFileSync(resolveNotesPath(notesPath, process.cwd()), `${notes}\n`);
+    console.log(`Release ${version} cohérente (tag, package.json, plugin.json, CHANGELOG). Notes écrites dans ${notesPath}.`);
+  } catch (error) {
+    console.error(`ECHEC : ${error.message}`);
+    process.exitCode = 1;
+  }
+} else if (isMain) {
   const { failures, version } = checkRelease();
   console.log("");
   if (failures.length) {

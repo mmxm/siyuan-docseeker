@@ -1,6 +1,10 @@
 # Journal des modifications
 
-## Non publié
+## 0.3.0
+
+Publiée le 2026-11-07.
+
+- Release automatisée : un tag `vX.Y.Z` poussé sur `main` construit le paquet et publie la release GitHub (GitHub Actions) ; une intégration continue lance types, tests et paquet sur chaque push vers `main` et chaque PR.
 
 - Indexation automatique : au démarrage, au retour sur la fenêtre, puis périodiquement (5, 15 ou 60 minutes). Les PDF ajoutés ou modifiés sont indexés, les PDF supprimés sont retirés de l'index. Réglable dans les paramètres.
 - Indicateur d'état sous le champ de recherche : indexation en cours (résultats éventuellement incomplets), échecs, dossiers non lisibles.
