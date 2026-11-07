@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Critères enregistrés dans la barre : plus de bouton signet ; le menu « Plus » propose, comme la recherche native, « Enregistrer les
-// critères de requête » et « Réinitialiser les critères de recherche » ; la barre signale à la ligne des critères que l'état a changé.
+// critères de requête » et « Réinitialiser les critères » ; la barre signale à la ligne des critères que l'état a changé.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_FILTERS, type SearchOptions } from "../../../src/search/resultOptions";
 import { mountSearchToolbar, type SearchToolbar, type SearchToolbarDeps } from "../../../src/ui/searchToolbar";
@@ -69,8 +69,8 @@ describe("menu « Plus » : commandes des critères", () => {
       t("sortMenu"),
       t("groupMenu"),
       "—",
-      "Enregistrer les critères de requête",
-      "Réinitialiser les critères de recherche",
+      "Enregistrer les critères",
+      "Réinitialiser les critères",
     ]);
   });
 
@@ -79,11 +79,11 @@ describe("menu « Plus » : commandes des critères", () => {
     const reset = vi.fn();
     toolbar = mount({ criteriaActions: { save, reset } });
     moreBtn().click();
-    pick(fakes.lastMenu(), "Enregistrer les critères de requête");
+    pick(fakes.lastMenu(), "Enregistrer les critères");
     expect(save).toHaveBeenCalledTimes(1);
     expect(reset).not.toHaveBeenCalled();
     moreBtn().click();
-    pick(fakes.lastMenu(), "Réinitialiser les critères de recherche");
+    pick(fakes.lastMenu(), "Réinitialiser les critères");
     expect(reset).toHaveBeenCalledTimes(1);
   });
 
@@ -93,7 +93,7 @@ describe("menu « Plus » : commandes des critères", () => {
     moreBtn().click();
     const menu = fakes.lastMenu();
     toolbar.dispose();
-    const item = menu.items.find((i) => i.label === "Enregistrer les critères de requête")!;
+    const item = menu.items.find((i) => i.label === "Enregistrer les critères")!;
     item.click!();
     expect(save).not.toHaveBeenCalled();
   });

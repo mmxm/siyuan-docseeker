@@ -24,7 +24,7 @@ afterEach(() => vi.restoreAllMocks());
 
 function inputOptions(over: Partial<InputDialogOptions> = {}): InputDialogOptions {
   return {
-    title: "Enregistrer les critères de requête",
+    title: "Enregistrer les critères",
     value: "Ma requête",
     placeholder: "Remarques",
     dataKey: "dialog-savecriterion",
@@ -41,7 +41,7 @@ describe("openInputDialog : structure native", () => {
     openInputDialog(inputOptions());
     expect(last().options.width).toBe("520px");
     expect(last().element.getAttribute("data-key")).toBe("dialog-savecriterion");
-    expect(last().element.querySelector(".b3-dialog__header")!.textContent).toBe("Enregistrer les critères de requête");
+    expect(last().element.querySelector(".b3-dialog__header")!.textContent).toBe("Enregistrer les critères");
   });
 
   it(".b3-dialog__content > input.b3-text-field.fn__block[data-dialog-input] est le seul enfant du contenu", () => {

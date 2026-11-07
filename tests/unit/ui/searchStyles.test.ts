@@ -24,6 +24,19 @@ describe("SEARCH_CSS", () => {
     expect(rulesFor(selector).join(" ")).toContain(FOCUS);
   });
 
+  it("la croix du chemin réserve sa place à droite du texte au lieu de le recouvrir", () => {
+    const rule = rulesFor(".docseeker-icons .search__path").join(" ");
+    expect(rule).toMatch(/padding-right:\s*(1[6-9]|2\d)px/);
+  });
+
+  it("la croix du champ est centrée dans son bouton (pas collée au bord droit)", () => {
+    expect(rulesFor(".docseeker-search-box .docseeker-clear svg").join(" ")).toContain("position: static");
+  });
+
+  it("la ligne d'activité de l'index ne réserve aucune hauteur quand elle est vide", () => {
+    expect(rulesFor(".docseeker-index-activity:empty").join(" ")).toContain("display: none");
+  });
+
   it("un bouton de la barre occupé (lecture des documents) est visiblement atténué avec le curseur d'attente", () => {
     const rule = rulesFor('.docseeker-icons .block__icon[aria-busy="true"]').join(" ");
     expect(rule).toContain("cursor: progress");
@@ -160,13 +173,13 @@ describe("SEARCH_CSS", () => {
       expect(rulesFor(".docseeker-icons .search__path[hidden]").join(" ")).toContain("display: none");
     });
 
-    it("l'étiquette de chemin s'abrège avec une ellipse et peut rétrécir ; le padding natif de droite est annulé", () => {
+    it("l'étiquette de chemin s'abrège avec une ellipse et peut rétrécir ; le padding de droite réserve la place de la croix", () => {
       const rule = rulesFor(".docseeker-icons .search__path").join(" ");
       expect(rule).toContain("overflow: hidden");
       expect(rule).toContain("text-overflow: ellipsis");
       expect(rule).toContain("white-space: nowrap");
       expect(rule).toContain("min-width: 0");
-      expect(rule).toMatch(/padding-right:\s*0/);
+      expect(rule).toMatch(/padding-right:\s*20px/);
       expect(rule).toMatch(/max-width:\s*100%/);
     });
 

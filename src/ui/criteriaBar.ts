@@ -1,7 +1,7 @@
 /**
  * Ligne des critères de requête enregistrés, copie de celle de la recherche native de SiYuan 3.8.9 (`initCriteriaMenu`,
  * `saveCriterion` et les clics `set-criteria` / `remove-criteria` de app/src/search) : des puces (le nom du critère, une croix pour le
- * supprimer) puis « Enregistrer les critères de requête » et « Réinitialiser les critères de recherche ».
+ * supprimer) puis « Enregistrer les critères » et « Réinitialiser les critères ».
  *
  * Aucun accès direct à SiYuan (dialogues et réglages injectés) et aucun innerHTML : les noms viennent des données, ils sont posés en
  * `textContent` dans la ligne comme dans les dialogues de confirmation.
@@ -336,7 +336,7 @@ export function createCriteriaBar(doc: Document, deps: CriteriaBarDeps): Criteri
         },
       });
     } catch (error) {
-      warn("Dialogue « Enregistrer les critères de requête » impossible à ouvrir", error);
+      warn("Dialogue « Enregistrer les critères » impossible à ouvrir", error);
       say(t("criteriaSaveFailed"));
     }
   };

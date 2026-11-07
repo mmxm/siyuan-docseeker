@@ -58,8 +58,8 @@ export interface SearchToolbarDeps {
   getGroupByDocument(): boolean;
   setGroupByDocument(next: boolean): void;
   /**
-   * Commandes des critères enregistrés du menu « Plus », comme la recherche native (« Enregistrer les critères de requête » et
-   * « Réinitialiser les critères de recherche »). Absent : pas de ces commandes (la ligne des critères est montée par la vue).
+   * Commandes des critères enregistrés du menu « Plus », comme la recherche native (« Enregistrer les critères » et
+   * « Réinitialiser les critères »). Absent : pas de ces commandes (la ligne des critères est montée par la vue).
    */
   criteriaActions?: { save(): void; reset(): void };
   /** Appelé après chaque resynchronisation (options, chemin, tri, regroupement) : la ligne des critères recalcule la puce courante. */

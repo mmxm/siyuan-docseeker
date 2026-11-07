@@ -14,6 +14,7 @@ export const SEARCH_CSS = `
 .docseeker-search-box .docseeker-history-icon:hover, .docseeker-search-box .docseeker-clear:hover { color: var(--b3-theme-on-background); }
 .docseeker-search-box .docseeker-history-icon:focus-visible, .docseeker-search-box .docseeker-clear:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-search-box .docseeker-clear[hidden] { display: none; }
+.docseeker-search-box .docseeker-clear svg { position: static; }
 .docseeker-search-box svg { height: 16px; width: 16px; flex: none; }
 .docseeker-search-box .search__arrowdown { height: 12px; width: 12px; }
 .docseeker-icons { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; min-width: 0; min-height: 32px; padding: 0; box-sizing: border-box; }
@@ -25,7 +26,7 @@ export const SEARCH_CSS = `
 .docseeker-icons .block__icon svg { height: 16px; width: 16px; }
 .docseeker-count { font-size: 12px; margin-right: 8px; }
 .docseeker-count[hidden] { display: none; }
-.docseeker-icons .search__path { flex: 0 1 auto; min-width: 0; max-width: 100%; padding-right: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docseeker-icons .search__path { flex: 0 1 auto; min-width: 0; max-width: 100%; padding-right: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docseeker-icons .search__path[hidden] { display: none; }
 .docseeker-icons .search__rmpath { cursor: pointer; }
 .docseeker-icons .search__rmpath:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
@@ -53,6 +54,7 @@ export const SEARCH_CSS = `
 .docseeker-reset-filters[hidden] { display: none; }
 .docseeker-status { font-size: 12px; color: var(--b3-theme-on-surface); min-height: 1.4em; }
 .docseeker-index-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.docseeker-index-activity:empty { display: none; }
 .docseeker-index-activity { font-size: 12px; color: var(--b3-theme-on-surface); min-height: 1.4em; white-space: normal; overflow-wrap: anywhere; }
 .docseeker-index-count { font-size: 12px; color: var(--b3-theme-on-surface); opacity: 0.8; }
 .docseeker-index-settings { min-height: 32px; min-width: 32px; }

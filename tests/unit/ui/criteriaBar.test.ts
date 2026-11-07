@@ -131,8 +131,8 @@ describe("DOM de la ligne (identique au natif)", () => {
 
   it("boutons : data-type, libellés natifs, infobulle native sur la réinitialisation", () => {
     const s = setup();
-    expect(saveBtn(s.header).textContent).toBe("Enregistrer les critères de requête");
-    expect(resetBtn(s.header).textContent).toBe("Réinitialiser les critères de recherche");
+    expect(saveBtn(s.header).textContent).toBe("Enregistrer les critères");
+    expect(resetBtn(s.header).textContent).toBe("Réinitialiser les critères");
     expect(resetBtn(s.header).getAttribute("aria-label")).toBe("Les conditions de requête actuelles ne seront plus utilisées pour la prochaine requête");
     expect(resetBtn(s.header).getAttribute("data-position")).toBe("9south");
     expect(saveBtn(s.header).hasAttribute("aria-label")).toBe(false);
@@ -323,12 +323,12 @@ describe("clic sur une puce et sur sa croix", () => {
   });
 });
 
-describe("dialogue « Enregistrer les critères de requête »", () => {
+describe("dialogue « Enregistrer les critères »", () => {
   it("s'ouvre comme openInputDialog : 520px, data-key, titre, champ vide, placeholder « Remarques », boutons natifs", () => {
     const s = setup([crit("a", { query: "z" })]);
     saveBtn(s.header).click();
     const dialog = inputDialog()!;
-    expect(dialog.querySelector(".b3-dialog__header")!.textContent).toBe("Enregistrer les critères de requête");
+    expect(dialog.querySelector(".b3-dialog__header")!.textContent).toBe("Enregistrer les critères");
     expect(dialog.querySelector<HTMLElement>(".b3-dialog__container")!.style.width).toBe("520px");
     expect(field().value).toBe("");
     expect(field().placeholder).toBe("Remarques");

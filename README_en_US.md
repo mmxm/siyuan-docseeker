@@ -127,7 +127,7 @@ The icon on the right of the field, or **Alt+↓**, shows the last 20 searches. 
 
 A line below the search field shows the **Critères enregistrés** (Saved criteria) as chips. A criterion keeps a complete search: the query, the path, the filters, the sort and the grouping. The chip of the current criterion is highlighted.
 
-The same line has two buttons: **Enregistrer les critères de requête** (Save the query criteria) and **Réinitialiser les critères de recherche** (Reset the search criteria). Both actions are also in the **Plus** (More) menu.
+The same line has two buttons: **Enregistrer les critères** (Save the query criteria) and **Réinitialiser les critères** (Reset the search criteria). Both actions are also in the **Plus** (More) menu.
 
 - **Save**: give it a name of 80 characters at most, in the dialogue that opens (field **Remarques**, Notes). The query is limited to 200 characters, and 30 criteria at most can be saved. If the name already exists, the plugin asks whether to overwrite it; renaming and merging follow SiYuan's rules.
 - **Recall**: clicking a chip applies the criterion, path included, and runs the search again. If a saved path no longer exists, it is removed and a message names it. A document that exists but cites no PDF stays applied: the result is empty.

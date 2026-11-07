@@ -130,7 +130,7 @@ describe("searchView : ligne des critères", () => {
     expect(chip().textContent).toBe("Mon critère");
     moreBtn().click();
     const labels = fakes.lastMenu().items.map((i) => i.label);
-    expect(labels.slice(-2)).toEqual(["Enregistrer les critères de requête", "Réinitialiser les critères de recherche"]);
+    expect(labels.slice(-2)).toEqual(["Enregistrer les critères", "Réinitialiser les critères"]);
   });
 
   it("clic sur la puce : requête restaurée dans le champ et relancée, options appliquées, puce courante", () => {
@@ -163,7 +163,7 @@ describe("searchView : ligne des critères", () => {
     mount();
     field().value = "  loup ";
     moreBtn().click();
-    pick(fakes.lastMenu(), "Enregistrer les critères de requête");
+    pick(fakes.lastMenu(), "Enregistrer les critères");
     expect(document.querySelector('[data-key="dialog-savecriterion"]')).not.toBeNull();
     document.querySelector<HTMLInputElement>("[data-dialog-input]")!.value = "Loup";
     document.querySelector<HTMLButtonElement>("[data-input-confirm]")!.click();
@@ -239,7 +239,7 @@ describe("searchView : réinitialiser les critères de recherche", () => {
     mount();
     field().value = "loup";
     moreBtn().click();
-    pick(fakes.lastMenu(), "Réinitialiser les critères de recherche");
+    pick(fakes.lastMenu(), "Réinitialiser les critères");
     expect(field().value).toBe("");
     expect(submit).toHaveBeenLastCalledWith("");
   });

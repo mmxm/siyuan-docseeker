@@ -127,7 +127,7 @@ L'icône à droite du champ, ou **Alt+↓**, affiche les 20 dernières recherche
 
 Une ligne sous le champ de recherche affiche les **critères enregistrés** sous forme de puces. Un critère garde une recherche complète : la requête, le chemin, les filtres, le tri et le regroupement. La puce du critère courant est en surbrillance.
 
-La même ligne porte deux boutons : **Enregistrer les critères de requête** et **Réinitialiser les critères de recherche**. Ces deux actions sont aussi dans le menu **Plus**.
+La même ligne porte deux boutons : **Enregistrer les critères** et **Réinitialiser les critères**. Ces deux actions sont aussi dans le menu **Plus**.
 
 - **Enregistrer** : donnez un nom de 80 caractères au plus, dans le dialogue qui s'ouvre (champ **Remarques**). La requête est limitée à 200 caractères, et 30 critères au plus peuvent être enregistrés. Si le nom existe déjà, le plugin demande s'il faut l'écraser ; renommer et fusionner suivent les règles de SiYuan.
 - **Rappeler** : cliquer sur une puce applique le critère, chemin compris, et relance la recherche. Si un chemin enregistré n'existe plus, il est retiré et un message le nomme. Un document qui existe mais ne cite aucun PDF reste appliqué : le résultat est vide.
