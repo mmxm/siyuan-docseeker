@@ -122,7 +122,7 @@ export const SEARCH_CSS = `
 .docseeker-viewer-button:disabled { opacity: 0.5; cursor: default; }
 .docseeker-viewer-button:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
 .docseeker-viewer-close { width: 100%; }
-.b3-dialog__container.docseeker-fullscreen { box-sizing: border-box; height: 100vh; height: 100dvh; height: var(--docseeker-vvh, 100dvh); max-height: 100vh; max-height: 100dvh; max-height: var(--docseeker-vvh, 100dvh); transform: translateY(var(--docseeker-vv-top, 0px)); padding-top: env(safe-area-inset-top, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); }
+.b3-dialog__container.docseeker-fullscreen { align-self: flex-start; /* .b3-dialog centre ses enfants : sans cela, clavier iOS ouvert, la moitié haute passe dessous */ box-sizing: border-box; height: 100vh; height: 100dvh; height: var(--docseeker-vvh, 100dvh); max-height: 100vh; max-height: 100dvh; max-height: var(--docseeker-vvh, 100dvh); transform: translateY(var(--docseeker-vv-top, 0px)); padding-top: env(safe-area-inset-top, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); }
 .b3-dialog__container.docseeker-fullscreen[data-docseeker-keyboard] { padding-bottom: 0; /* clavier ouvert (posé par trackVisualViewport) : la zone sûre du bas est sous le clavier */ }
 .b3-dialog__container.docseeker-fullscreen[data-docseeker-keyboard] .docseeker-floating-bar { display: none; }
 .docseeker-floating-body--fullscreen { display: flex; flex-direction: column; min-height: 0; height: 100%; }

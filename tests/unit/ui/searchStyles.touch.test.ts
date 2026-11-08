@@ -119,6 +119,11 @@ describe("hauteur, clavier et zones sûres", () => {
     expect(rule).toContain("box-sizing: border-box");
   });
 
+  it("le conteneur plein écran s'aligne en haut : .b3-dialog le centre sinon, et sa moitié haute passe sous le clavier iOS", () => {
+    const rule = rulesIn(base, ".b3-dialog__container.docseeker-fullscreen").join(" ");
+    expect(rule).toContain("align-self: flex-start");
+  });
+
   it("la feuille ne fixe la hauteur qu'à un endroit : l'ordre vh, dvh, vvh de height et de max-height est celui du repli", () => {
     const rule = rulesIn(base, ".b3-dialog__container.docseeker-fullscreen").join(" ");
     expect(rule.indexOf("height: 100vh")).toBeLessThan(rule.indexOf("height: 100dvh"));
