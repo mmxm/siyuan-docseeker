@@ -18,6 +18,7 @@ import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
 import { IndexUnavailableError, NotFoundError, type KernelApi } from "./siyuan/kernelApi";
 import { openPdfAtPage as realOpenPdfAtPage, openPdfInBrowser, type OpenPdfOptions } from "./siyuan/openPdf";
+import { NativeModelNotOpenError, openNativeMobilePdf as realOpenNativeMobilePdf } from "./siyuan/nativeMobilePdf";
 import { desktopProfile, type PlatformProfile } from "./platform/profile";
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
@@ -60,6 +61,12 @@ export interface SearchTabDeps {
    * pas de visionneur, le PDF s'ouvre par `openPdfFallback`. Le bureau ne s'en sert jamais.
    */
   readonly openFloatingDialog?: OpenFloatingDialog;
+  /**
+   * Mobile (`canOpenTab` faux) : ouvre le PDF dans le visionneur natif de SiYuan (défaut : `openNativeMobilePdf`), tenté avant le
+   * visionneur de page maison. Il lève si l'éditeur mobile est absent ou si le visionneur ne s'ouvre pas : repli sur le visionneur
+   * maison puis sur `openPdfFallback`. Le bureau ne s'en sert jamais.
+   */
+  readonly openNativePdf?: OpenPdfOptions["openTab"];
   /** Visionneur de page (défaut : `openMobilePdfViewer`) ; injectable pour les tests. */
   readonly openPdfViewer?: typeof openMobilePdfViewer;
   readonly app: unknown;
@@ -235,6 +242,9 @@ export function createWarnLog(
  * Si l'assemblage échoue en cours de route (montage de la vue, abonnements), tout ce qui a déjà été créé est libéré dans l'ordre
  * inverse : ni abonnement, ni minuterie, ni élément orphelin (la fenêtre flottante n'a alors aucune vue à libérer).
  */
+/** Résultat d'une ouverture par onglet : faite (ou échec déjà signalé) ; natif indisponible (rien cliqué) ; natif cliqué sans confirmation. */
+type OpenOutcome = "done" | "unavailable" | "clicked";
+
 export function mountSearchTab(host: HTMLElement, deps: SearchTabDeps): SearchTab {
   const cleanups: Array<() => void> = [];
   try {
@@ -626,6 +636,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     );
     return true;
   };
+  const openNativePdf = deps.openNativePdf ?? realOpenNativeMobilePdf;
   const openBrowserPdf = deps.openPdfFallback ?? ((path: string, page: number) => openPdfInBrowser({ path, page, onWarn }));
   const open = async (docId: string, page: number, query: string, alternate: boolean): Promise<void> => {
     openController?.abort();
@@ -640,12 +651,137 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       showMessage(deps.t?.("docNotFound") ?? DOC_NOT_FOUND);
       return;
     }
+    /**
+     * Ouvre le PDF par `openPdfAtPage` avec les surlignages calculés (bureau : `openTab` de SiYuan ; mobile : visionneur natif).
+     * Renvoie faux seulement si la tentative `native` a échoué (l'appelant se replie) ; vrai sinon, y compris pour un échec déjà signalé.
+     * Une tentative native laisse la recherche ouverte dessous : la fenêtre flottante n'est pas fermée.
+     */
+    const openWithTab = async (tabFn: NonNullable<OpenPdfOptions["openTab"]>, native: boolean): Promise<OpenOutcome> => {
+      let rects: PercentStyle[] = [];
+      let focusIndex = 0;
+      let issue: string | undefined;
+      try {
+        const match = await pageMatches.getPageMatches(docId, page, query, mine.signal);
+        // Un ordinal peut figurer plusieurs fois (un mot de page satisfaisant plusieurs mots de la requête) : un seul rectangle.
+        const kept = [...new Set(match.ordinals)].filter((ordinal) => match.boxes[ordinal] !== undefined);
+        const boxes = kept.map((ordinal) => match.boxes[ordinal] as FractionBox);
+        focusIndex = await findFocusIndex(doc.path, page, match, kept, mine.signal);
+        // Les boîtes sont déjà des fractions de page : une page de 1 x 1 donne directement des pourcentages.
+        rects = wordBoxesToPageRects(boxes, 1, 1).map((rect) => rectToPercentStyle(rect, 1, 1));
+      } catch (error) {
+        if (stale()) {
+          if (closedWindow()) onWarn("Ouverture du PDF abandonnée : la fenêtre de recherche a été fermée");
+          return "done";
+        }
+        onWarn("Surlignage indisponible : la page s'ouvre sans calque", error);
+        issue = `${HIGHLIGHT_UNAVAILABLE} : ${messageOf(error)}.`;
+      }
+      if (stale()) {
+        if (closedWindow()) onWarn("Ouverture du PDF abandonnée : la fenêtre de recherche a été fermée"); // rien ne s'est ouvert
+        return "done";
+      }
+      let handle: Awaited<ReturnType<typeof openPdf>>;
+      try {
+        handle = await openPdf({
+          openTab: tabFn,
+          app: deps.app,
+          path: doc.path,
+          page,
+          rects,
+          focusIndex,
+          ...(alternate && !native ? { position: "right" as const } : {}), // Alt+clic / Ctrl+Entrée : à droite
+          // Natif : annulable, et la page n'est cherchée que dans le visionneur natif (jamais dans un autre PDF ouvert).
+          ...(native ? { signal: mine.signal, resolvePageRoot: () => document.getElementById("modelMain") } : {}),
+          onWarn: (message) => onWarn(message),
+        });
+      } catch (error) {
+        if (stale() && !closedWindow()) {
+          onWarn("Ouverture du PDF périmée (remplacée par une ouverture plus récente ou recherche fermée) : échec ignoré", error);
+          return "done";
+        }
+        if (native) {
+          // Le visionneur natif est une tentative : la cause est tracée et l'appelant se replie, sans message d'échec.
+          // Lien déjà cliqué mais visionneur absent : il peut encore apparaître, donc pas de navigateur (seulement le visionneur maison).
+          onWarn("Visionneur PDF natif de SiYuan indisponible : repli sur le visionneur de page", error);
+          return error instanceof NativeModelNotOpenError ? "clicked" : "unavailable";
+        }
+        onWarn("Ouverture du PDF impossible", error);
+        showMessage(`Impossible d'ouvrir ce PDF (${messageOf(error)}).`);
+        return "done";
+      }
+      // Remplacée par une ouverture plus récente, ou onglet fermé : le calque est libéré. Une FENÊTRE flottante fermée pendant l'ouverture
+      // (Échap) ne l'abandonne pas : le PDF s'est ouvert, son calque va au plugin et un échec de surlignage est signalé.
+      if (openController !== mine || (disposed && !deps.floating)) {
+        handle.dispose();
+        return "done";
+      }
+      // Faux tant que la fenêtre flottante est encore là pour afficher un message (onPdfOpened a échoué : elle reste ouverte).
+      let windowGone = false;
+      if (deps.floating && !native) {
+        // Le calque passe au visualiseur (il se libère seul quand la page disparaît, ou quand une ouverture plus récente le remplace) :
+        // le garder ici le ferait avorter par le `dispose()` de la vue, que la fermeture de la fenêtre va déclencher. Le plugin le garde.
+        callFloating("Fermeture de la recherche flottante", () => {
+          deps.floating?.onPdfOpened(handle);
+          windowGone = true;
+        });
+      } else {
+        lastOpened?.dispose();
+        lastOpened = handle;
+      }
+      const gone = (): boolean => windowGone || (deps.floating !== undefined && disposed);
+      let notified = false;
+      /** La fenêtre n'est plus là : un toast (texte i18n fixe) en plus du journal. */
+      const notifyLost = (): void => {
+        if (notified || !deps.notify) return;
+        notified = true;
+        try {
+          deps.notify(deps.t?.("highlightUnavailable") ?? HIGHLIGHT_UNAVAILABLE);
+        } catch (error) {
+          onWarn("Notification d'erreur impossible", error);
+        }
+      };
+      if (issue) {
+        if (gone()) notifyLost(); // déjà tracé plus haut (onWarn)
+        else showMessage(issue);
+      }
+      let report: Awaited<typeof handle.ready> | undefined;
+      try {
+        report = await handle.ready;
+      } catch (error) {
+        onWarn("État du surlignage inconnu", error);
+        if (gone()) notifyLost();
+      }
+      const problem = report ? describeHighlightProblem(report) : undefined;
+      if (gone()) {
+        // La fenêtre est fermée ou se ferme : plus d'endroit où afficher le message, donc le journal et un toast (sauf si l'incident a déjà été tracé).
+        if (problem) {
+          if (issue === undefined) onWarn(problem);
+          notifyLost();
+        }
+        return "done";
+      }
+      if (stale() || !report) return "done";
+      if (problem) showMessage(issue ?? problem);
+      return "done";
+    };
     // Sans onglet (mobile) : visionneur de page dans un second dialogue ; s'il ne s'ouvre pas, repli par le navigateur, sans surlignage.
     // La recherche reste ouverte et `openTab` n'est jamais appelé.
     if (openTabFn === undefined) {
       const openDialog = deps.openFloatingDialog;
-      if (!profile.canOpenTab && openDialog !== undefined && (await openViewer(openDialog, docId, doc.path, page, query, mine))) return;
+      // `openTab` absent : mobile (profil sans onglet), ou bureau sans `openTab` injecté, qui ne tente ni le natif ni le visionneur maison.
+      const mobileWithoutTab = !profile.canOpenTab;
+      // Visionneur natif de SiYuan (PDF.js complet) d'abord ; s'il échoue, visionneur maison puis navigateur.
+      const nativeOutcome: OpenOutcome = mobileWithoutTab ? await openWithTab(openNativePdf, true) : "unavailable";
+      if (nativeOutcome === "done") return;
       if (stale()) return;
+      if (mobileWithoutTab && openDialog !== undefined && (await openViewer(openDialog, docId, doc.path, page, query, mine))) return;
+      if (stale()) return;
+      if (nativeOutcome === "clicked") {
+        // Le lien natif a été cliqué : le visionneur peut encore apparaître, ouvrir aussi le navigateur ferait un doublon.
+        onWarn("Visionneur natif cliqué mais non confirmé, visionneur de page indisponible : pas de repli sur le navigateur");
+        showMessage(deps.t?.("pdfBrowserOpenError") ?? PDF_BROWSER_OPEN_ERROR);
+        return;
+      }
       try {
         if (openBrowserPdf(doc.path, page)) return;
         onWarn("Ouverture du PDF dans le navigateur refusée : fenêtre bloquée");
@@ -657,100 +793,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       }
       return;
     }
-    let rects: PercentStyle[] = [];
-    let focusIndex = 0;
-    let issue: string | undefined;
-    try {
-      const match = await pageMatches.getPageMatches(docId, page, query, mine.signal);
-      // Un ordinal peut figurer plusieurs fois (un mot de page satisfaisant plusieurs mots de la requête) : un seul rectangle.
-      const kept = [...new Set(match.ordinals)].filter((ordinal) => match.boxes[ordinal] !== undefined);
-      const boxes = kept.map((ordinal) => match.boxes[ordinal] as FractionBox);
-      focusIndex = await findFocusIndex(doc.path, page, match, kept, mine.signal);
-      // Les boîtes sont déjà des fractions de page : une page de 1 x 1 donne directement des pourcentages.
-      rects = wordBoxesToPageRects(boxes, 1, 1).map((rect) => rectToPercentStyle(rect, 1, 1));
-    } catch (error) {
-      if (stale()) {
-        if (closedWindow()) onWarn("Ouverture du PDF abandonnée : la fenêtre de recherche a été fermée");
-        return;
-      }
-      onWarn("Surlignage indisponible : la page s'ouvre sans calque", error);
-      issue = `${HIGHLIGHT_UNAVAILABLE} : ${messageOf(error)}.`;
-    }
-    if (stale()) {
-      if (closedWindow()) onWarn("Ouverture du PDF abandonnée : la fenêtre de recherche a été fermée"); // rien ne s'est ouvert
-      return;
-    }
-    let handle: Awaited<ReturnType<typeof openPdf>>;
-    try {
-      handle = await openPdf({
-        openTab: openTabFn,
-        app: deps.app,
-        path: doc.path,
-        page,
-        rects,
-        focusIndex,
-        ...(alternate ? { position: "right" as const } : {}), // Alt+clic / Ctrl+Entrée : à droite
-        onWarn: (message) => onWarn(message),
-      });
-    } catch (error) {
-      if (stale() && !closedWindow()) return;
-      onWarn("Ouverture du PDF impossible", error);
-      showMessage(`Impossible d'ouvrir ce PDF (${messageOf(error)}).`);
-      return;
-    }
-    // Remplacée par une ouverture plus récente, ou onglet fermé : le calque est libéré. Une FENÊTRE flottante fermée pendant l'ouverture
-    // (Échap) ne l'abandonne pas : le PDF s'est ouvert, son calque va au plugin et un échec de surlignage est signalé.
-    if (openController !== mine || (disposed && !deps.floating)) {
-      handle.dispose();
-      return;
-    }
-    // Faux tant que la fenêtre flottante est encore là pour afficher un message (onPdfOpened a échoué : elle reste ouverte).
-    let windowGone = false;
-    if (deps.floating) {
-      // Le calque passe au visualiseur (il se libère seul quand la page disparaît, ou quand une ouverture plus récente le remplace) :
-      // le garder ici le ferait avorter par le `dispose()` de la vue, que la fermeture de la fenêtre va déclencher. Le plugin le garde.
-      callFloating("Fermeture de la recherche flottante", () => {
-        deps.floating?.onPdfOpened(handle);
-        windowGone = true;
-      });
-    } else {
-      lastOpened?.dispose();
-      lastOpened = handle;
-    }
-    const gone = (): boolean => windowGone || (deps.floating !== undefined && disposed);
-    let notified = false;
-    /** La fenêtre n'est plus là : un toast (texte i18n fixe) en plus du journal. */
-    const notifyLost = (): void => {
-      if (notified || !deps.notify) return;
-      notified = true;
-      try {
-        deps.notify(deps.t?.("highlightUnavailable") ?? HIGHLIGHT_UNAVAILABLE);
-      } catch (error) {
-        onWarn("Notification d'erreur impossible", error);
-      }
-    };
-    if (issue) {
-      if (gone()) notifyLost(); // déjà tracé plus haut (onWarn)
-      else showMessage(issue);
-    }
-    let report: Awaited<typeof handle.ready> | undefined;
-    try {
-      report = await handle.ready;
-    } catch (error) {
-      onWarn("État du surlignage inconnu", error);
-      if (gone()) notifyLost();
-    }
-    const problem = report ? describeHighlightProblem(report) : undefined;
-    if (gone()) {
-      // La fenêtre est fermée ou se ferme : plus d'endroit où afficher le message, donc le journal et un toast (sauf si l'incident a déjà été tracé).
-      if (problem) {
-        if (issue === undefined) onWarn(problem);
-        notifyLost();
-      }
-      return;
-    }
-    if (stale() || !report) return;
-    if (problem) showMessage(issue ?? problem);
+    await openWithTab(openTabFn, false);
   };
 
   // --- Portée de documents : résolution asynchrone des PDF cités avant d'appliquer le filtre au contrôleur.

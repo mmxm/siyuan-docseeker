@@ -32,6 +32,8 @@ export interface PdfTarget {
   readonly position?: "right" | "bottom";
   /** Open in a new tab instead of reusing an existing one. */
   readonly openNewTab?: boolean;
+  /** Annulation : un `openTab` qui attend (visionneur natif mobile) en sort sans rien faire une fois annulé. */
+  readonly signal?: AbortSignal;
 }
 
 /** Injected `openTab` from the SiYuan plugin API (kept loose for testability). */
@@ -60,6 +62,8 @@ export interface OpenPdfOptions
   /** Passed to `openTab`: open beside / below. The overlay then targets the opened tab's panel when known. */
   readonly position?: "right" | "bottom";
   readonly openNewTab?: boolean;
+  /** Transmis tel quel à `openTab` (`target.signal`). */
+  readonly signal?: AbortSignal;
 }
 
 export class InvalidPdfPathError extends RangeError {
@@ -139,7 +143,7 @@ async function finish(
  * release explicitly (idempotent); it also self-releases when the page is gone for good.
  */
 export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<OpenPdfReport>> {
-  const { openTab, app, path, page, rects, focusIndex = 0, root = document, position, openNewTab, ...rest } = options;
+  const { openTab, app, path, page, rects, focusIndex = 0, root = document, position, openNewTab, signal, ...rest } = options;
   assertValidPdfPath(path);
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError(`page must be an integer >= 1, got ${page}`);
@@ -153,6 +157,7 @@ export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<O
     pdf: { path, page },
     ...(position !== undefined && { position }),
     ...(openNewTab !== undefined && { openNewTab }),
+    ...(signal !== undefined && { signal }),
   };
   const opened = await openTab(target);
   if (mine !== generation) return supersededHandle(page);

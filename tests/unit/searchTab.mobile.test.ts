@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSearchTab } from "../../src/searchTab";
 import { desktopProfile, mobileProfile } from "../../src/platform/profile";
 import { cards, flush, harness as baseHarness, sharedInstances, submitQuery, PDF_A } from "./helpers/searchTabHarness";
+import { nativeDown } from "./helpers/nativeDown";
 import { createNativeFakes } from "./ui/nativeFakes";
 
 const fakes = createNativeFakes();
@@ -13,7 +14,7 @@ const mobileFloating = () => ({ onPdfOpened: vi.fn(), onCloseRequest: vi.fn() })
 const mobile = (over: Parameters<typeof baseHarness>[0] = {}) => {
   const openPdfFallback = vi.fn((_path: string, _page: number) => true);
   const floating = mobileFloating();
-  const h = baseHarness({ profile: mobileProfile(), floating, openPdfFallback, ...over }, fakes);
+  const h = baseHarness({ profile: mobileProfile(), ...nativeDown(), floating, openPdfFallback, ...over }, fakes);
   return { ...h, floating, openPdfFallback };
 };
 
@@ -34,7 +35,6 @@ describe("mobile : clic sur un résultat", () => {
     await flush();
     expect(h.openPdfFallback).toHaveBeenCalledTimes(1);
     expect(h.openPdfFallback).toHaveBeenCalledWith(PDF_A, 2);
-    expect(h.openPdfAtPage).not.toHaveBeenCalled();
     expect(h.deps.openTab).not.toHaveBeenCalled();
     tab.dispose();
   });
@@ -61,7 +61,6 @@ describe("mobile : clic sur un résultat", () => {
     cards(h.host)[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
     await flush();
     expect(h.openPdfFallback).toHaveBeenCalledTimes(2);
-    expect(h.openPdfAtPage).not.toHaveBeenCalled();
     expect(h.deps.openTab).not.toHaveBeenCalled();
     tab.dispose();
   });
@@ -74,7 +73,7 @@ describe("mobile : clic sur un résultat", () => {
     cards(h.host)[0]!.click();
     await flush();
     expect(h.openPdfFallback).toHaveBeenCalledTimes(1);
-    expect(h.openPdfAtPage).not.toHaveBeenCalled();
+    expect(h.deps.openTab).toBeUndefined();
     tab.dispose();
   });
 

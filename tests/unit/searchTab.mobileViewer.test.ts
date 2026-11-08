@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSearchTab, type SearchTabDeps } from "../../src/searchTab";
 import { desktopProfile, mobileProfile } from "../../src/platform/profile";
 import { cards, flush, harness as baseHarness, input, sharedInstances, submitQuery, PDF_A } from "./helpers/searchTabHarness";
+import { nativeDown } from "./helpers/nativeDown";
 import { createNativeFakes } from "./ui/nativeFakes";
 import type { FloatingDialogOptions } from "../../src/ui/nativeUiTypes";
 
@@ -21,7 +22,7 @@ function mobile(over: Partial<SearchTabDeps> = {}) {
   const openPdfViewer = vi.fn(async (_options: Record<string, unknown>) => handle);
   const floating = { onPdfOpened: vi.fn(), onCloseRequest: vi.fn() };
   const h = baseHarness(
-    { profile: mobileProfile(), floating, openPdfFallback, openFloatingDialog, openPdfViewer: openPdfViewer as never, ...over },
+    { profile: mobileProfile(), ...nativeDown(), floating, openPdfFallback, openFloatingDialog, openPdfViewer: openPdfViewer as never, ...over },
     fakes,
   );
   return { ...h, floating, openPdfFallback, openFloatingDialog, openPdfViewer, handle };
@@ -55,7 +56,6 @@ describe("mobile : visionneur de page", () => {
     expect(options["page"]).toBe(2);
     expect(options["openDialog"]).toBe(h.openFloatingDialog);
     expect(h.openPdfFallback).not.toHaveBeenCalled();
-    expect(h.openPdfAtPage).not.toHaveBeenCalled();
     expect(h.deps.openTab).not.toHaveBeenCalled();
     expect(h.floating.onPdfOpened).not.toHaveBeenCalled(); // la recherche reste ouverte dessous
     tab.dispose();
@@ -69,7 +69,7 @@ describe("mobile : visionneur de page", () => {
     cards(h.host)[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
     await flush();
     expect(h.openPdfViewer).toHaveBeenCalledTimes(1);
-    expect(h.openPdfAtPage).not.toHaveBeenCalled();
+    expect(h.deps.openTab).not.toHaveBeenCalled();
     tab.dispose();
   });
 
@@ -419,6 +419,7 @@ describe("intégration avec le vrai visionneur", () => {
     const h = baseHarness(
       {
         profile: mobileProfile(),
+        ...nativeDown(),
         floating,
         openFloatingDialog: openFloatingDialog as never,
         loadDocument: async () => doc as never,
