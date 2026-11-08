@@ -153,6 +153,24 @@ export const SEARCH_CSS = `
   .docseeker-doc-fullpath { display: block; font-size: 12px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
   .docseeker-doc-fullpath[hidden] { display: none; }
 }
+/* mobile-compact */
+.docseeker-floating-body--fullscreen { padding: 8px; }
+.docseeker-floating-body--fullscreen .docseeker-toolbar { flex-wrap: nowrap; gap: 0; }
+.docseeker-floating-body--fullscreen .docseeker-icons { flex: 1 1 auto; flex-wrap: nowrap; justify-content: space-between; }
+.docseeker-floating-body--fullscreen .docseeker-icons .block__icon { flex: 1 1 0; min-width: 0; }
+.docseeker-floating-body--fullscreen .docseeker-count { display: none; }
+.docseeker-floating-body--fullscreen .docseeker-search .search__header { gap: 4px 8px; }
+.docseeker-floating-body--fullscreen .docseeker-search .search__header .b3-chips { flex: 1 0 100%; }
+.docseeker-floating-body--fullscreen .docseeker-search .search__header .fn__space, .docseeker-floating-body--fullscreen .docseeker-search .search__header .fn__flex-1 { display: none; }
+.docseeker-floating-body--fullscreen .docseeker-search .search__header button[data-type] { position: relative; flex: 1 1 0; min-width: 0; min-height: 30px; margin: 0; padding: 4px 8px; font-size: 13px; line-height: 1.2; box-sizing: border-box; }
+.docseeker-floating-body--fullscreen .docseeker-search .search__header button[data-type]::after { content: ""; position: absolute; top: -7px; bottom: -7px; left: -4px; right: -4px; }
+.docseeker-floating-body--fullscreen .docseeker-cards, .docseeker-floating-body--fullscreen .docseeker-list--flat { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin-top: 4px; }
+.docseeker-floating-body--fullscreen .docseeker-card, .docseeker-floating-body--fullscreen .docseeker-card--flat { width: 100%; max-width: none; min-width: 0; box-sizing: border-box; padding: 2px; }
+.docseeker-floating-body--fullscreen .docseeker-thumb { width: 100%; }
+.docseeker-floating-body--fullscreen .docseeker-doc { padding: 6px 0; }
+.docseeker-floating-body--fullscreen .docseeker-doc-title { font-size: 16px; font-weight: bold; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; }
+.docseeker-floating-body--fullscreen .docseeker-doc-fullpath { font-size: 12px; color: var(--b3-theme-on-surface); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+/* /mobile-compact */
 @media (forced-colors: active) {
   .docseeker-highlight { background: transparent; outline: 2px solid Highlight; outline-offset: -2px; }
   .docseeker-card:focus-visible { outline-color: Highlight; }
