@@ -717,8 +717,10 @@ export default class DocSeekerPlugin extends Plugin {
       toast: (message) => this.toast(message), // échec d'écriture d'un critère après la fermeture de l'onglet
       settings: this.settings, // tri et regroupement mémorisés
       indexActivity: this.getActivity(),
-      // Mobile : `openTab` est un stub qui ne fait rien, la vue ouvre le PDF par le repli du navigateur.
+      // Mobile : `openTab` est un stub qui ne fait rien : il n'est pas injecté.
       ...(profile.canOpenTab ? { openTab: openTab as unknown as OpenTabFn } : {}),
+      // Mobile : le PDF s'ouvre dans le visionneur de page, un second dialogue plein écran empilé sur la recherche.
+      ...(profile.canOpenTab ? {} : { openFloatingDialog }),
       app: this.app,
       // Les pages du PDF.js de SiYuan exposent `render` : le type d'indexation n'en décrit qu'une partie.
       loadDocument: (path, signal) =>

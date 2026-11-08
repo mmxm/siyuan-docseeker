@@ -405,3 +405,29 @@ describe("SEARCH_CSS : ligne des critères enregistrés", () => {
     expect(SEARCH_CSS).not.toContain("docseeker-criteria-summary");
   });
 });
+
+describe("SEARCH_CSS : visionneur de page mobile", () => {
+  const viewerRules = (): string =>
+    [...SEARCH_CSS.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter((m) => m[1]!.includes(".docseeker-viewer"))
+      .map((m) => m[2]!)
+      .join(" ");
+
+  it("aucune couleur en dur : variables de thème SiYuan seulement", () => {
+    expect(viewerRules().length).toBeGreaterThan(0);
+    expect(viewerRules()).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+    expect(viewerRules()).toContain("var(--b3-theme-");
+  });
+
+  it("boutons : cibles tactiles de 48 px au moins, focus visible fort", () => {
+    const button = rulesFor(".docseeker-viewer-button").join(" ");
+    expect(button).toMatch(/min-height:\s*48px/);
+    expect(button).toMatch(/min-width:\s*48px/);
+    expect(rulesFor(".docseeker-viewer-button:focus-visible").join(" ")).toContain(FOCUS);
+  });
+
+  it("la zone de page défile et la page garde son ratio", () => {
+    expect(rulesFor(".docseeker-viewer-stage").join(" ")).toMatch(/overflow:\s*auto/);
+    expect(rulesFor(".docseeker-viewer-page").join(" ")).toMatch(/position:\s*relative/);
+  });
+});

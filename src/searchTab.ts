@@ -24,7 +24,8 @@ import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from ".
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
 import type { SaveCriteriaResult, SavedCriteria } from "./search/savedCriteria";
 import type { DocSeekerSettings } from "./settings";
-import type { OpenConfirmDialog, OpenCustomDialog, OpenDialog, OpenInputDialog, OpenMenu } from "./ui/nativeUiTypes";
+import type { OpenConfirmDialog, OpenCustomDialog, OpenDialog, OpenFloatingDialog, OpenInputDialog, OpenMenu } from "./ui/nativeUiTypes";
+import { openMobilePdfViewer } from "./ui/mobilePdfViewer";
 import { DEFAULT_STRINGS, mountSearchView } from "./ui/searchView";
 
 export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
@@ -54,6 +55,13 @@ export interface SearchTabDeps {
    * Défaut : `openPdfInBrowser` (seul adaptateur de `window.open`). Peut lever : l'erreur est tracée et un message est affiché.
    */
   readonly openPdfFallback?: (path: string, page: number) => boolean;
+  /**
+   * Dialogue plein écran natif (`openFloatingDialog`) sur lequel le visionneur de page s'empile (mobile, `canOpenTab` faux). Absent :
+   * pas de visionneur, le PDF s'ouvre par `openPdfFallback`. Le bureau ne s'en sert jamais.
+   */
+  readonly openFloatingDialog?: OpenFloatingDialog;
+  /** Visionneur de page (défaut : `openMobilePdfViewer`) ; injectable pour les tests. */
+  readonly openPdfViewer?: typeof openMobilePdfViewer;
   readonly app: unknown;
   /** Charge un PDF pour le rendu des vignettes (PDF.js de SiYuan). */
   readonly loadDocument: (path: string, signal?: AbortSignal) => Promise<RenderableDocument>;
@@ -488,6 +496,136 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
 
   // Mobile : `openTab` est un stub, il n'est donc jamais utilisé même s'il est injecté.
   const openTabFn = profile.canOpenTab ? deps.openTab : undefined;
+  // --- Visionneur de page (mobile) : la recherche, dessous, est inerte pour le focus tant qu'il est ouvert.
+  const openViewerFn = deps.openPdfViewer ?? openMobilePdfViewer;
+  interface ViewerSession {
+    handle?: { dispose(): void };
+    released: boolean;
+    /** Cible rendue inerte à l'ouverture : c'est CETTE cible que l'on libère, même si l'hôte a changé de dialogue entre-temps. */
+    inertTarget?: Element | undefined;
+  }
+  let viewerSession: ViewerSession | undefined;
+  /** Premier dialogue (ou à défaut l'hôte) à rendre inerte pendant le visionneur. */
+  const inertTargetNow = (): Element => host.closest(".b3-dialog") ?? host;
+  /** Lève l'inert posé par cette session (idempotent) ; sans effet sur l'inert d'une autre session. */
+  const releaseInert = (session: ViewerSession): void => {
+    const target = session.inertTarget;
+    session.inertTarget = undefined;
+    target?.removeAttribute("inert");
+  };
+  const endViewer = (session: ViewerSession, restore?: { opener: OpenerRef; focus: boolean }): void => {
+    releaseInert(session);
+    if (session.released) return;
+    session.released = true;
+    if (viewerSession === session) viewerSession = undefined;
+    if (restore?.focus && !disposed) restoreFocus(restore.opener);
+  };
+  /** Libère le visionneur courant ; un `dispose()` qui lève est tracé et ne doit jamais interrompre l'appelant. */
+  const disposeHandle = (session: ViewerSession): void => {
+    try {
+      session.handle?.dispose();
+    } catch (error) {
+      onWarn("Fermeture du visionneur de page impossible", error);
+    }
+  };
+  const disposeViewer = (): void => {
+    const session = viewerSession;
+    if (!session) return;
+    endViewer(session);
+    disposeHandle(session);
+  };
+  cleanups.push(disposeViewer);
+  interface OpenerRef {
+    readonly element: HTMLElement | undefined;
+    readonly docId: string;
+    readonly page: number;
+  }
+  const findCard = (docId: string, page: number): HTMLElement | undefined =>
+    Array.from(host.querySelectorAll<HTMLElement>("button.docseeker-card")).find(
+      (card) => card.dataset["docId"] === docId && card.dataset["page"] === String(page),
+    );
+  /** Carte à qui rendre le focus : l'élément actif s'il est dans la vue, sinon la carte du résultat (un toucher iOS ne focalise pas). */
+  const findOpener = (docId: string, page: number): OpenerRef => {
+    const active = host.ownerDocument.activeElement;
+    const element =
+      active instanceof HTMLElement && active !== host.ownerDocument.body && host.contains(active) ? active : findCard(docId, page);
+    return { element, docId, page };
+  };
+  /** Rend le focus : carte d'origine (ou son équivalent re-rendu), sinon champ de recherche, sinon hôte. Jamais par-dessus un focus posé ailleurs. */
+  const restoreFocus = (opener: OpenerRef): void => {
+    const ownerDoc = host.ownerDocument;
+    const active = ownerDoc.activeElement;
+    if (active !== null && active !== ownerDoc.body && active !== ownerDoc.documentElement) return;
+    const card = opener.element?.isConnected === true ? opener.element : findCard(opener.docId, opener.page);
+    if (card) {
+      card.focus({ preventScroll: true });
+      if (ownerDoc.activeElement === card) return;
+    }
+    if (view.focusInput()) return;
+    if (!host.hasAttribute("tabindex")) host.setAttribute("tabindex", "-1");
+    host.focus({ preventScroll: true });
+  };
+  const highlightsFor = async (docId: string, page: number, query: string, signal: AbortSignal): Promise<PercentStyle[]> => {
+    const match = await pageMatches.getPageMatches(docId, page, query, signal);
+    const kept = [...new Set(match.ordinals)];
+    const boxes = kept.flatMap((ordinal) => {
+      const box = match.boxes[ordinal];
+      return box === undefined ? [] : [box];
+    });
+    return wordBoxesToPageRects(boxes, 1, 1).map((rect) => rectToPercentStyle(rect, 1, 1));
+  };
+  const KNOWN_VIEWER_STATUSES = new Set(["attached", "empty", "disposed", "superseded", "timeout"]);
+  /** Vrai si le visionneur est ouvert (ou remplacé / fermé avec l'onglet) ; faux s'il n'a pas pu s'ouvrir (l'appelant se replie). */
+  const openViewer = async (
+    openDialog: OpenFloatingDialog,
+    docId: string,
+    path: string,
+    page: number,
+    query: string,
+    mine: AbortController,
+  ): Promise<boolean> => {
+    const previous = viewerSession;
+    if (previous) {
+      endViewer(previous);
+      disposeHandle(previous);
+    }
+    const opener = findOpener(docId, page);
+    const inertTarget = inertTargetNow();
+    const session: ViewerSession = { released: false, inertTarget };
+    viewerSession = session;
+    inertTarget.setAttribute("inert", "");
+    let handle: Awaited<ReturnType<typeof openViewerFn>>;
+    try {
+      handle = await openViewerFn({
+        openDialog,
+        renderer,
+        path,
+        page,
+        getHighlights: (target, signal) => highlightsFor(docId, target, query, signal),
+        ...(deps.t ? { t: deps.t } : {}),
+        onWarn,
+        onClosing: () => releaseInert(session),
+        onClosed: (info) => endViewer(session, { opener, focus: info.focus }),
+      });
+    } catch (error) {
+      endViewer(session);
+      onWarn("Ouverture du visionneur de page impossible : repli sur le navigateur", error);
+      return false;
+    }
+    session.handle = handle;
+    if (disposed || openController !== mine || session.released) {
+      endViewer(session);
+      disposeHandle(session);
+      return true;
+    }
+    handle.ready.then(
+      (report) => {
+        if (!KNOWN_VIEWER_STATUSES.has(report.status)) onWarn(describeHighlightProblem(report) ?? `${HIGHLIGHT_UNAVAILABLE} : état inconnu.`);
+      },
+      (error: unknown) => onWarn("État du visionneur de page inconnu", error),
+    );
+    return true;
+  };
   const openBrowserPdf = deps.openPdfFallback ?? ((path: string, page: number) => openPdfInBrowser({ path, page, onWarn }));
   const open = async (docId: string, page: number, query: string, alternate: boolean): Promise<void> => {
     openController?.abort();
@@ -502,8 +640,12 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       showMessage(deps.t?.("docNotFound") ?? DOC_NOT_FOUND);
       return;
     }
-    // Sans onglet (mobile) : repli par le navigateur, sans surlignage ; la recherche reste ouverte et `openTab` n'est jamais appelé.
+    // Sans onglet (mobile) : visionneur de page dans un second dialogue ; s'il ne s'ouvre pas, repli par le navigateur, sans surlignage.
+    // La recherche reste ouverte et `openTab` n'est jamais appelé.
     if (openTabFn === undefined) {
+      const openDialog = deps.openFloatingDialog;
+      if (!profile.canOpenTab && openDialog !== undefined && (await openViewer(openDialog, docId, doc.path, page, query, mine))) return;
+      if (stale()) return;
       try {
         if (openBrowserPdf(doc.path, page)) return;
         onWarn("Ouverture du PDF dans le navigateur refusée : fenêtre bloquée");
@@ -874,7 +1016,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     },
     thumbnails: loader,
     onOpen: (docId, page, query, opts) => {
-      void open(docId, page, query, opts?.alternate === true);
+      open(docId, page, query, opts?.alternate === true).catch((error: unknown) => onWarn("Ouverture du résultat en échec", error));
     },
     history: {
       get: currentHistory,
@@ -1022,6 +1164,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       unsubscribeInvalidate();
       unsubscribeStatus();
       view.dispose();
+      disposeViewer();
       controller.dispose();
       loader.dispose();
       renderer.dispose();

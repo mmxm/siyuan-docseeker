@@ -56,6 +56,8 @@ export interface PdfRenderer {
     signal?: AbortSignal,
   ): Promise<{ width: number; height: number }>;
   renderCrop(request: RenderCropRequest): Promise<Blob>;
+  /** Nombre de pages du PDF (visionneur de page) : ouvre le document comme les autres appels, sans rendre de page. */
+  getPageCount(path: string, signal?: AbortSignal): Promise<number>;
   dispose(): void;
 }
 
@@ -412,6 +414,25 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
             return { width, height };
           }),
         );
+      } finally {
+        linked.cleanup();
+      }
+    },
+
+    async getPageCount(path, signal) {
+      guard();
+      const linked = linkSignals(signal);
+      try {
+        if (linked.signal.aborted) throw abortError();
+        const { signal } = linked;
+        return await schedule(signal, async () => {
+          const { entry, doc } = await acquire(path, signal);
+          try {
+            return doc.numPages;
+          } finally {
+            release(entry);
+          }
+        });
       } finally {
         linked.cleanup();
       }

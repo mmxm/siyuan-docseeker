@@ -109,9 +109,23 @@ export const SEARCH_CSS = `
 .docseeker-card-page { font-size: 12px; color: var(--b3-theme-on-surface); }
 .docseeker-settings-section { padding: 8px 16px; color: var(--b3-theme-on-background); }
 .docseeker-settings-title { font-weight: bold; }
+.docseeker-viewer { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 8px; gap: 8px; color: var(--b3-theme-on-background); background: var(--b3-theme-background); }
+.docseeker-viewer-stage { flex: 1 1 auto; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; background: var(--b3-theme-surface); border: 1px solid var(--b3-border-color); }
+.docseeker-viewer-page { position: relative; width: 100%; }
+.docseeker-viewer-image { display: block; width: 100%; height: 100%; object-fit: fill; }
+.docseeker-viewer-page .docseeker-highlight { mix-blend-mode: multiply; }
+.docseeker-viewer-state { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+.docseeker-viewer-message, .docseeker-viewer-note { padding: 8px; font-size: 14px; text-align: center; overflow-wrap: anywhere; color: var(--b3-theme-on-surface); }
+.docseeker-viewer-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.docseeker-viewer-label { flex: 1 1 auto; text-align: center; font-size: 14px; color: var(--b3-theme-on-background); }
+.docseeker-viewer-button { min-height: 48px; min-width: 48px; box-sizing: border-box; padding: 0 16px; font: inherit; cursor: pointer; color: var(--b3-theme-on-background); background: var(--b3-theme-surface); border: 1px solid var(--b3-border-color); border-radius: var(--b3-border-radius, 4px); }
+.docseeker-viewer-button:disabled { opacity: 0.5; cursor: default; }
+.docseeker-viewer-button:focus-visible { outline: 2px solid var(--b3-theme-primary); outline-offset: 2px; }
+.docseeker-viewer-close { width: 100%; }
 @media (forced-colors: active) {
   .docseeker-highlight { background: transparent; outline: 2px solid Highlight; outline-offset: -2px; }
   .docseeker-card:focus-visible { outline-color: Highlight; }
+  .docseeker-viewer-button:focus-visible { outline-color: Highlight; }
   .docseeker-filter-field input:focus-visible, .docseeker-filter-reset:focus-visible, .docseeker-reset-filters:focus-visible { outline-color: Highlight; }
   .docseeker-filter-field [aria-invalid="true"] { border-color: Mark; box-shadow: none; outline: 2px solid Mark; }
   .docseeker-filter-reset[aria-disabled="true"] { opacity: 1; color: GrayText; border-color: GrayText; }

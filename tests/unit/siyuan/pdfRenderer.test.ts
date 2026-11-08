@@ -516,3 +516,38 @@ describe("robustness (review fixes)", () => {
     expect(calls).toEqual(["image/webp", "image/png"]);
   });
 });
+
+describe("getPageCount", () => {
+  it("renvoie le nombre de pages du PDF, sans rendre ni lire de page", async () => {
+    const { renderer, fake } = setup({ numPages: 7 });
+    expect(await renderer.getPageCount("a.pdf")).toBe(7);
+    expect(fake.renders).toHaveLength(0);
+  });
+
+  it("réutilise le document ouvert (une seule ouverture avec getPageSize)", async () => {
+    const { renderer, loadDocument } = setup({ numPages: 3 });
+    await renderer.getPageSize("a.pdf", 1);
+    await renderer.getPageCount("a.pdf");
+    expect(loadDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("signale l'échec d'ouverture en PdfLoadError, cause d'origine conservée", async () => {
+    const onWarn = vi.fn();
+    const boom = new Error("illisible");
+    const renderer = createPdfRenderer({ loadDocument: async () => Promise.reject(boom), createCanvas: () => makeCanvases().createCanvas(1, 1), onWarn });
+    await expect(renderer.getPageCount("a.pdf")).rejects.toMatchObject({ name: "PdfLoadError", cause: boom });
+  });
+
+  it("est annulable : un signal déjà annulé rejette en AbortError", async () => {
+    const { renderer } = setup();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(renderer.getPageCount("a.pdf", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("refuse un renderer disposé", async () => {
+    const { renderer } = setup();
+    renderer.dispose();
+    await expect(renderer.getPageCount("a.pdf")).rejects.toThrow(/dispos/);
+  });
+});
