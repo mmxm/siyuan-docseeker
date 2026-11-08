@@ -22,6 +22,7 @@ import { ensureSearchStyle } from "./ui/searchStyles";
 import { isShown } from "./ui/visibility";
 import { createClearingFlag, createSettingsPanel, type SettingsPanel } from "./ui/settingsPanel";
 import type { OpenTabFn } from "./siyuan/openPdf";
+import type { CustomDialogHandle } from "./ui/nativeUiTypes";
 import type { RenderableDocument } from "./siyuan/pdfRenderer";
 
 const TAB_TYPE = "docseeker";
@@ -60,15 +61,18 @@ const TYPING_QUIET_MS = 3000;
 const USER_ACTIVITY_EVENTS = ["keydown", "pointerdown", "wheel"] as const;
 
 type PanelPart = "openMode" | "autoIndex" | "autoIndexInterval" | "reindex" | "clearIndex" | "diagnostic" | "log";
-/** Items du panneau, dans l'ordre : clé i18n du titre (`<clé>Desc` pour la description) et partie du panneau. */
-const SETTING_ITEMS: readonly { key: string; part: PanelPart }[] = [
-  { key: "openMode", part: "openMode" },
-  { key: "autoIndex", part: "autoIndex" },
-  { key: "autoIndexInterval", part: "autoIndexInterval" },
-  { key: "reindex", part: "reindex" },
-  { key: "clearIndex", part: "clearIndex" },
-  { key: "diagnostic", part: "diagnostic" },
-  { key: "warnLog", part: "log" },
+/**
+ * Items du panneau, dans l'ordre : clé i18n du titre (`<clé>Desc` pour la description) et partie du panneau. `writes` : la partie
+ * indexe, vide l'index ou règle l'ouverture/l'indexation ; inopérante (et dangereuse) en lecture seule, elle n'est alors pas affichée.
+ */
+const SETTING_ITEMS: readonly { key: string; part: PanelPart; writes: boolean }[] = [
+  { key: "openMode", part: "openMode", writes: true },
+  { key: "autoIndex", part: "autoIndex", writes: true },
+  { key: "autoIndexInterval", part: "autoIndexInterval", writes: true },
+  { key: "reindex", part: "reindex", writes: true },
+  { key: "clearIndex", part: "clearIndex", writes: true },
+  { key: "diagnostic", part: "diagnostic", writes: false },
+  { key: "warnLog", part: "log", writes: false },
 ];
 
 const toConfig = (settings: DocSeekerSettings): AutoSyncConfig => ({
@@ -87,19 +91,23 @@ export default class DocSeekerPlugin extends Plugin {
   override onload(): void {
     // Réglages lus tout de suite (idempotent, ne rejette jamais) : un onglet restauré ou un update() n'attend pas onLayoutReady.
     void this.settings.load();
+    const profile = this.getProfile();
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- `destroy` reçoit l'onglet comme `this`
     const plugin = this;
-    this.addTab({
-      type: TAB_TYPE,
-      init: (custom) => this.renderTab(custom.element, custom),
-      // Chaque onglet libère ses propres ressources : en détruire un ne touche pas les autres.
-      destroy() {
-        plugin.disposeTab(this.element);
-      },
-    });
+    // Mobile : `addTab` ne renvoie rien et `openTab` est un stub, un onglet n'y serait jamais affiché.
+    if (profile.canOpenTab) {
+      this.addTab({
+        type: TAB_TYPE,
+        init: (custom) => this.renderTab(custom.element, custom),
+        // Chaque onglet libère ses propres ressources : en détruire un ne touche pas les autres.
+        destroy() {
+          plugin.disposeTab(this.element);
+        },
+      });
+    }
 
     this.setting = new Setting({ destroyCallback: () => this.disposePanel() });
-    for (const part of SETTING_ITEMS) {
+    for (const part of this.visibleSettingItems()) {
       this.setting.addItem({
         title: this.t(part.key),
         description: this.t(`${part.key}Desc`),
@@ -130,12 +138,14 @@ export default class DocSeekerPlugin extends Plugin {
       hotkey: "",
       callback: () => this.openFloatingSearch(),
     });
-    this.addCommand({
-      langKey: COMMAND_OPEN_TAB_KEY,
-      langText: this.t("commandOpenSearchTab"),
-      hotkey: "",
-      callback: () => this.openSearchTab(),
-    });
+    if (profile.canOpenTab) {
+      this.addCommand({
+        langKey: COMMAND_OPEN_TAB_KEY,
+        langText: this.t("commandOpenSearchTab"),
+        hotkey: "",
+        callback: () => this.openSearchTab(),
+      });
+    }
     this.addCommand({
       langKey: COMMAND_FOCUS_KEY,
       langText: this.t("commandFocusSearch"),
@@ -249,6 +259,8 @@ export default class DocSeekerPlugin extends Plugin {
   /** Calque de surlignage remis au visualiseur par la fenêtre flottante : libéré au prochain calque et au déchargement. */
   private lastFloatingOverlay: { dispose(): void } | undefined;
   private panel: SettingsPanel | null = null;
+  /** Dialogue des réglages (mobile), ouvert au plus une fois. */
+  private settingsDialog: CustomDialogHandle | null = null;
   private autoSync: AutoSync | null = null;
   private lastInputAt = Number.NEGATIVE_INFINITY;
   private autoSyncCleanup: (() => void) | null = null;
@@ -275,6 +287,12 @@ export default class DocSeekerPlugin extends Plugin {
     this.indexer?.cancel();
     this.sharedIndex?.dispose();
     this.sharedIndex = null;
+    try {
+      this.settingsDialog?.close();
+    } catch (error) {
+      this.warnLog.warn("Fermeture des réglages en échec", error);
+    }
+    this.settingsDialog = null;
     this.disposePanel();
     try {
       this.floating?.dispose();
@@ -336,6 +354,53 @@ export default class DocSeekerPlugin extends Plugin {
       } catch (error) {
         this.warnLog.warn("Libération de l'onglet en échec", error);
       }
+    }
+  }
+
+  /** Items du panneau à afficher : en lecture seule (mobile), les parties qui indexent, vident l'index ou règlent l'ouverture sont retirées. */
+  private visibleSettingItems(): readonly (typeof SETTING_ITEMS)[number][] {
+    const readOnly = this.getProfile().readOnly;
+    return SETTING_ITEMS.filter((item) => !(readOnly && item.writes));
+  }
+
+  /** Ouvre les réglages : panneau natif sur bureau ; sur mobile, dialogue du plugin (le chemin `openSetting` n'y est pas garanti). */
+  private openSettings(): void {
+    if (this.unloaded) return;
+    if (!this.getProfile().settingsInDialog) {
+      this.openSetting();
+      return;
+    }
+    if (this.settingsDialog?.isOpen()) return;
+    try {
+      ensureSearchStyle(document); // les classes des sections viennent de la feuille du plugin
+      const content = document.createElement("div");
+      for (const item of this.visibleSettingItems()) {
+        const section = document.createElement("div");
+        section.className = "docseeker-settings-section";
+        const title = document.createElement("div");
+        title.className = "b3-label__text docseeker-settings-title";
+        title.textContent = this.t(item.key);
+        const description = document.createElement("div");
+        description.className = "b3-label__text";
+        description.textContent = this.t(`${item.key}Desc`);
+        section.append(title, description, this.panelPart(item.part));
+        content.append(section);
+      }
+      this.settingsDialog = openCustomDialog({
+        title: this.t("settingsDialogTitle"),
+        width: "94vw",
+        height: "90vh",
+        dataKey: "docseeker-settings",
+        content,
+        onDestroyed: () => {
+          this.settingsDialog = null;
+          this.disposePanel();
+        },
+      });
+    } catch (error) {
+      this.disposePanel();
+      this.warnLog.warn("Ouverture des réglages impossible", error);
+      this.toast(this.t("settingsOpenFailed"));
     }
   }
 
@@ -421,7 +486,8 @@ export default class DocSeekerPlugin extends Plugin {
     // Le réglage est lu AVANT de choisir : un clic juste après le démarrage ne doit pas ignorer « Fenêtre flottante ».
     const open = (mode: OpenMode): void => {
       if (this.unloaded) return;
-      if (mode === "dialog") this.openFloatingSearch();
+      // Sans onglet possible (mobile), la recherche s'ouvre toujours en dialogue, quel que soit le réglage.
+      if (mode === "dialog" || !this.getProfile().canOpenTab) this.openFloatingSearch();
       else this.openSearchTab();
     };
     this.settings.ready
@@ -439,7 +505,8 @@ export default class DocSeekerPlugin extends Plugin {
   private openFloatingSearch(): void {
     if (this.unloaded) return;
     this.floating ??= createFloatingSearch({
-      openDialog: openFloatingDialog,
+      // Bureau : fenêtre flottante ; mobile : plein écran (le profil décide).
+      openDialog: (options) => openFloatingDialog({ ...options, layout: this.getProfile().floatingLayout }),
       title: this.t("floatingTitle"),
       session: this.session,
       mount: (host, options) => this.mountSearchInto(host, { floating: options }),
@@ -453,6 +520,7 @@ export default class DocSeekerPlugin extends Plugin {
   /** Ouvre toujours un NOUVEL onglet de recherche ; un échec est tracé et affiché (jamais une promesse rejetée non gérée). */
   private openSearchTab(): void {
     if (this.unloaded) return;
+    if (!this.getProfile().canOpenTab) return this.openFloatingSearch(); // filet : `openTab` est un stub sur mobile
     this.requestSearchTab().catch((error: unknown) => {
       this.warnLog.warn("Ouverture de l'onglet de recherche impossible", error);
       if (!this.unloaded) this.toast(this.t("openTabFailed"));
@@ -464,6 +532,7 @@ export default class DocSeekerPlugin extends Plugin {
    * `data` : transmis tel quel à `init` de l'onglet (`custom.data`).
    */
   private requestSearchTab(data?: Record<string, string>): Promise<void> {
+    if (!this.getProfile().canOpenTab) return Promise.reject(new Error("Onglets indisponibles sur mobile (openTab est un stub)"));
     return new Promise<unknown>((resolve) =>
       resolve(
         openTab({
@@ -489,7 +558,7 @@ export default class DocSeekerPlugin extends Plugin {
    */
   private transferToTab(close: FloatingMountOptions["close"]): void {
     // Un transfert en cours, ou une fenêtre déjà en fermeture (double clic) : un seul onglet, une seule fermeture.
-    if (this.unloaded || this.transferring || this.floating?.isOpen() !== true) return;
+    if (this.unloaded || this.transferring || this.floating?.isOpen() !== true || !this.getProfile().canOpenTab) return;
     const seq = ++this.transferSeq;
     const state = this.session.get();
     const token = state ? `${Date.now().toString(36)}-${seq.toString(36)}-${Math.random().toString(36).slice(2, 10)}` : undefined;
@@ -541,6 +610,11 @@ export default class DocSeekerPlugin extends Plugin {
       } catch (error) {
         fail(error);
       }
+      return;
+    }
+    if (!this.getProfile().canOpenTab) {
+      // Mobile : pas d'onglet à ramener, la fenêtre de recherche (rouverte si besoin) est le seul endroit.
+      this.openFloatingSearch();
       return;
     }
     const hasTab = this.searchTabs.size > 0;
@@ -634,7 +708,7 @@ export default class DocSeekerPlugin extends Plugin {
       kernel, // filtre « portée de documents » (PDF cités par SQL, arbre des cahiers et documents)
       sharedIndex,
       profile,
-      onOpenSettings: () => this.openSetting(),
+      onOpenSettings: () => this.openSettings(),
       openMenu,
       openDialog,
       openCustomDialog,
@@ -643,7 +717,8 @@ export default class DocSeekerPlugin extends Plugin {
       toast: (message) => this.toast(message), // échec d'écriture d'un critère après la fermeture de l'onglet
       settings: this.settings, // tri et regroupement mémorisés
       indexActivity: this.getActivity(),
-      openTab: openTab as unknown as OpenTabFn,
+      // Mobile : `openTab` est un stub qui ne fait rien, la vue ouvre le PDF par le repli du navigateur.
+      ...(profile.canOpenTab ? { openTab: openTab as unknown as OpenTabFn } : {}),
       app: this.app,
       // Les pages du PDF.js de SiYuan exposent `render` : le type d'indexation n'en décrit qu'une partie.
       loadDocument: (path, signal) =>
@@ -664,9 +739,10 @@ export default class DocSeekerPlugin extends Plugin {
               // Le PDF est ouvert : la fenêtre se ferme sans rendre le focus (il va au visualiseur) ; le calque reste au plugin.
               onPdfOpened: (overlay: { dispose(): void }) => {
                 this.keepFloatingOverlay(overlay);
-                floating.close({ restoreFocus: false });
+                // Mobile : la recherche reste ouverte sous le PDF (on y revient sans la relancer).
+                if (profile.canOpenTab) floating.close({ restoreFocus: false });
               },
-              onOpenInTab: () => this.transferToTab(floating.close),
+              ...(profile.canOpenTab ? { onOpenInTab: () => this.transferToTab(floating.close) } : {}),
               onCloseRequest: () => floating.close(),
             },
           }

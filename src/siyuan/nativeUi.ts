@@ -468,6 +468,10 @@ export function openConfirmDialog(options: ConfirmDialogOptions): ConfirmDialogH
 const FLOATING_WIDTH = "80vw";
 const FLOATING_HEIGHT = "90vh";
 const FLOATING_POSITION_ID = "docseeker-search";
+/** Plein écran (mobile) : `vh` transmis à SiYuan, puis `dvh` posé sur le conteneur (un moteur qui ne le connaît pas garde le `vh`). */
+const FULLSCREEN_WIDTH = "100vw";
+const FULLSCREEN_HEIGHT = "100vh";
+const FULLSCREEN_DYNAMIC_HEIGHT = "100dvh";
 
 /** Squelette statique : aucun pied (ni Annuler ni Confirmer), un seul conteneur que l'appelant remplit en DOM. */
 const FLOATING_CONTENT = '<div class="docseeker-floating-body"></div>';
@@ -478,15 +482,21 @@ const FLOATING_CONTENT = '<div class="docseeker-floating-body"></div>';
  * ouvert au-dessus), et c'est à la vue de consommer (`stopPropagation`) les frappes qu'elle traite elle-même.
  */
 export function openFloatingDialog(options: FloatingDialogOptions): FloatingDialogHandle {
+  const layout = options.layout ?? "window";
+  if (layout !== "window" && layout !== "fullscreen") {
+    throw new TypeError(`Disposition de fenêtre refusée : « ${String(layout)} » (attendu : window ou fullscreen)`);
+  }
+  const fullscreen = layout === "fullscreen";
   let closing = false;
   let closed = false;
   let noFocus = false;
   const dialog: Dialog = new Dialog({
     title: toHtmlText(options.title),
     content: FLOATING_CONTENT,
-    width: FLOATING_WIDTH,
-    height: FLOATING_HEIGHT,
-    positionId: FLOATING_POSITION_ID,
+    width: fullscreen ? FULLSCREEN_WIDTH : FLOATING_WIDTH,
+    height: fullscreen ? FULLSCREEN_HEIGHT : FLOATING_HEIGHT,
+    // Plein écran : pas de position à mémoriser (et SiYuan rétablirait une taille et une place de bureau).
+    ...(fullscreen ? {} : { positionId: FLOATING_POSITION_ID }),
     // SiYuan transmet à `destroyCallback` l'argument de `destroy` (ex. `{ focus: "false" }` après l'ouverture d'un résultat).
     destroyCallback: (info) => {
       if (closed) return;
@@ -516,6 +526,17 @@ export function openFloatingDialog(options: FloatingDialogOptions): FloatingDial
     dialog.destroy(closeOptions?.focus === false ? { focus: "false" } : undefined);
   };
   try {
+    if (fullscreen) {
+      const container = dialog.element.querySelector<HTMLElement>(".b3-dialog__container");
+      if (!container) throw new Error("Conteneur de fenêtre flottante introuvable");
+      // Le CSS natif plafonne le conteneur : on lève les plafonds. L'assignation `dvh` est ignorée par un moteur qui ne la connaît pas.
+      container.style.maxWidth = FULLSCREEN_WIDTH;
+      // Ordre voulu : `vh` d'abord (valeur de repli), puis `dvh`. Un moteur qui ne connaît pas `dvh` rejette la 2e assignation et garde
+      // la 1re ; un moteur qui le connaît retient `dvh` (hauteur utile, sans la barre d'adresse mobile).
+      container.style.maxHeight = FULLSCREEN_HEIGHT;
+      container.style.maxHeight = FULLSCREEN_DYNAMIC_HEIGHT;
+      container.style.height = FULLSCREEN_DYNAMIC_HEIGHT;
+    }
     const body = dialog.element.querySelector<HTMLElement>(".docseeker-floating-body");
     if (!body) throw new Error("Squelette de fenêtre flottante introuvable");
     options.build(body);

@@ -34,6 +34,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("openCustomDialog : tailles des réglages mobile", () => {
+  it("accepte 94vw x 90vh (tailles du dialogue des réglages, voir index.ts)", () => {
+    const handle = openCustomDialog(options({ width: "94vw", height: "90vh", dataKey: "docseeker-settings" }));
+    expect(lastDialog().options.width).toBe("94vw");
+    expect(lastDialog().options.height).toBe("90vh");
+    handle.close();
+  });
+});
+
 describe("openCustomDialog : structure", () => {
   it("transmet largeur et hauteur, sans contenu HTML : le DOM fourni est inséré dans le corps, dans l'ordre", () => {
     openCustomDialog(options());

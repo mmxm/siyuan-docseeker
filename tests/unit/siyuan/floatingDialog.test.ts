@@ -249,3 +249,67 @@ describe("openFloatingDialog : empilement avec un dialogue ou un menu ouvert par
     expect(onDestroyed).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("openFloatingDialog : disposition plein écran (mobile)", () => {
+  it("fullscreen : 100vw x 100vh, SANS positionId (la position mémorisée n'a pas de sens)", () => {
+    openFloatingDialog({ title: "T", layout: "fullscreen", build: () => undefined });
+    expect(last().options.width).toBe("100vw");
+    expect(last().options.height).toBe("100vh");
+    expect(last().options.positionId).toBeUndefined();
+  });
+
+  it("fullscreen : le conteneur passe à 100dvh (la barre d'adresse mobile ne rogne pas la fenêtre) et lève les plafonds natifs", () => {
+    openFloatingDialog({ title: "T", layout: "fullscreen", build: () => undefined });
+    const container = last().element.querySelector<HTMLElement>(".b3-dialog__container")!;
+    expect(container.style.width).toBe("100vw");
+    expect(container.style.height).toBe("100dvh");
+    expect(container.style.maxWidth).toBe("100vw");
+    expect(container.style.maxHeight).toBe("100dvh");
+  });
+
+  it("window (explicite) et défaut : strictement le comportement du bureau", () => {
+    openFloatingDialog({ title: "T", layout: "window", build: () => undefined });
+    openFloatingDialog({ title: "T", build: () => undefined });
+    for (const dialog of stub.instances) {
+      expect(dialog.options.width).toBe("80vw");
+      expect(dialog.options.height).toBe("90vh");
+      expect(dialog.options.positionId).toBe("docseeker-search");
+      const container = dialog.element.querySelector<HTMLElement>(".b3-dialog__container")!;
+      expect(container.style.maxWidth).toBe("");
+      expect(container.style.height).toBe("90vh");
+    }
+  });
+
+  it("fullscreen : conteneur .b3-dialog__container introuvable = le dialogue est détruit (pas d'écran vide) et l'erreur remonte", () => {
+    const original = HTMLElement.prototype.querySelector;
+    let containerLookups = 0;
+    // Le faux Dialog cherche le conteneur une fois à sa construction (focus) : seules les recherches suivantes (celles de l'adaptateur) échouent.
+    const spy = vi.spyOn(HTMLElement.prototype, "querySelector").mockImplementation(function (this: HTMLElement, selector: string) {
+      if (selector === ".b3-dialog__container" && ++containerLookups > 1) return null;
+      return original.call(this, selector);
+    } as typeof original);
+    const build = vi.fn();
+    const onDestroyed = vi.fn();
+    try {
+      expect(() => openFloatingDialog({ title: "T", layout: "fullscreen", build, onDestroyed })).toThrow(/introuvable/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(build).not.toHaveBeenCalled();
+    expect(last().destroyCalls).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".b3-dialog")).toBeNull();
+  });
+
+  it("disposition inconnue : refusée avant toute création (pas de dialogue orphelin)", () => {
+    expect(() => openFloatingDialog({ title: "T", layout: "popup" as never, build: () => undefined })).toThrow(TypeError);
+    expect(stub.instances).toHaveLength(0);
+  });
+
+  it("fullscreen : fermeture et rappels identiques (onDestroyed une fois)", () => {
+    const onDestroyed = vi.fn();
+    const handle = openFloatingDialog({ title: "T", layout: "fullscreen", build: () => undefined, onDestroyed });
+    handle.close();
+    expect(onDestroyed).toHaveBeenCalledTimes(1);
+    expect(handle.isOpen()).toBe(false);
+  });
+});

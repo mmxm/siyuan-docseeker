@@ -107,6 +107,8 @@ export const SEARCH_CSS = `
 .docseeker-card--flat { max-width: calc(var(--docseeker-thumb-width) + 16px); /* vignette + padding 2 x 4px + bord 2 x 1px, arrondi */ }
 .docseeker-card-title { max-width: 100%; font-size: 12px; font-weight: bold; text-align: center; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .docseeker-card-page { font-size: 12px; color: var(--b3-theme-on-surface); }
+.docseeker-settings-section { padding: 8px 16px; color: var(--b3-theme-on-background); }
+.docseeker-settings-title { font-weight: bold; }
 @media (forced-colors: active) {
   .docseeker-highlight { background: transparent; outline: 2px solid Highlight; outline-offset: -2px; }
   .docseeker-card:focus-visible { outline-color: Highlight; }

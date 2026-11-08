@@ -187,3 +187,41 @@ export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<O
   current = result;
   return result;
 }
+
+/** Ouvre une URL dans une nouvelle fenêtre ; renvoie la fenêtre, ou null si le navigateur la bloque. */
+export type OpenWindowFn = (url: string, target: string) => { opener: unknown } | null;
+
+export interface BrowserPdfOptions {
+  /** Forme `assets/x.pdf` (même validation que pour `openPdfAtPage`). */
+  readonly path: string;
+  /** 1-based. */
+  readonly page: number;
+  /** Injectable pour les tests ; par défaut `window.open`. */
+  readonly open?: OpenWindowFn;
+  /** Trace d'un incident sans gravité pour l'ouverture (la fenêtre est ouverte malgré tout). */
+  readonly onWarn?: (message: string, error?: unknown) => void;
+}
+
+/**
+ * Repli mobile (`openTab` y est un stub) : ouvre le PDF dans le navigateur à la page demandée (`/assets/x.pdf#page=N`), sans
+ * surlignage ni garantie de page (le lecteur PDF d'iOS ignore souvent `#page`). C'est le SEUL appel à `window.open` du plugin.
+ * Renvoie faux si le navigateur bloque la fenêtre ; une erreur de `open` est propagée à l'appelant, qui la trace.
+ */
+export function openPdfInBrowser(options: BrowserPdfOptions): boolean {
+  const { path, page } = options;
+  assertValidPdfPath(path);
+  if (!Number.isInteger(page) || page < 1) {
+    throw new RangeError(`page must be an integer >= 1, got ${page}`);
+  }
+  const open: OpenWindowFn = options.open ?? ((url, target) => window.open(url, target));
+  const url = `/${path.split("/").map(encodeURIComponent).join("/")}#page=${page}`;
+  const opened = open(url, "_blank");
+  if (opened === null) return false;
+  try {
+    opened.opener = null; // la page ouverte ne garde pas la main sur SiYuan (pas de `noopener` : il rendrait l'échec indétectable)
+  } catch (error) {
+    // La fenêtre EST ouverte : un `opener` non modifiable ne doit pas passer pour un échec « bloqué ». On trace et on réussit.
+    options.onWarn?.("Impossible de couper l'opener de la fenêtre du PDF", error);
+  }
+  return true;
+}

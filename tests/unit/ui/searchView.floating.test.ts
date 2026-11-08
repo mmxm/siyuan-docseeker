@@ -332,6 +332,12 @@ describe("bouton « Ouvrir dans un nouvel onglet »", () => {
     expect(b.closest(".block__icons")).not.toBeNull();
   });
 
+  it("sans openInTab (mobile) : aucun bouton, la fermeture reste disponible", () => {
+    mount({ floating: { requestClose } });
+    expect(toolbarButton("Ouvrir dans un nouvel onglet")).toBeNull();
+    expect(host.querySelector('[aria-label="Ouvrir dans un nouvel onglet"]')).toBeNull();
+  });
+
   it("le clic appelle openInTab une fois", () => {
     mount(floating());
     toolbarButton("Ouvrir dans un nouvel onglet")!.click();

@@ -96,3 +96,25 @@ describe("profileFor : table littérale, indépendante du code testé", () => {
     expect(a.thumbnailCache).not.toBe(b.thumbnailCache);
   });
 });
+
+describe("entrée mobile (E4) : champs du profil", () => {
+  it("bureau : fenêtre flottante classique, onglets et réglages natifs (comportement actuel)", () => {
+    const p = desktopProfile();
+    expect(p.floatingLayout).toBe("window");
+    expect(p.canOpenTab).toBe(true);
+    expect(p.settingsInDialog).toBe(false);
+  });
+
+  it("mobile : dialogue plein écran, pas d'onglet (openTab est un stub), réglages dans un dialogue", () => {
+    const p = mobileProfile();
+    expect(p.floatingLayout).toBe("fullscreen");
+    expect(p.canOpenTab).toBe(false);
+    expect(p.settingsInDialog).toBe(true);
+  });
+
+  it.each(FRONTENDS)("%s : table littérale", (frontend) => {
+    const mobile = frontend === "mobile" || frontend === "browser-mobile";
+    const p = profileFor(frontend);
+    expect([p.floatingLayout, p.canOpenTab, p.settingsInDialog]).toEqual(mobile ? ["fullscreen", false, true] : ["window", true, false]);
+  });
+});

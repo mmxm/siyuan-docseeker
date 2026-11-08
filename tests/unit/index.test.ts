@@ -48,6 +48,8 @@ const h = vi.hoisted(() => ({
   mountError: undefined as Error | undefined,
   floatingDisposeError: undefined as Error | undefined,
   openFloating: vi.fn(),
+  openCustom: vi.fn(),
+  customDialogs: [] as { options: { title: string; width: string; height: string; dataKey: string; content: Node; onDestroyed?(): void }; closeCount: number }[],
   floatingDialogs: [] as {
     options: { title: string; build(c: HTMLElement): void; onDestroyed?(info: { focus: boolean }): void; onClosing?(info: { focus: boolean }): void };
     container: HTMLElement;
@@ -172,7 +174,7 @@ vi.mock("../../src/diagnostic/m0", async (orig) => {
   };
 });
 vi.mock("../../src/siyuan/kernelApi", () => ({ createKernelApi: () => ({}) }));
-vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.fn(), openCustomDialog: vi.fn(), openInputDialog: vi.fn(), openConfirmDialog: vi.fn(), openFloatingDialog: (o: unknown) => h.openFloating(o) }));
+vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.fn(), openCustomDialog: (o: unknown) => h.openCustom(o), openInputDialog: vi.fn(), openConfirmDialog: vi.fn(), openFloatingDialog: (o: unknown) => h.openFloating(o) }));
 vi.mock("../../src/siyuan/petalStore", () => ({ createPetalStore: () => ({ clear: h.clear, removeStaleTmp: h.stale }) }));
 vi.mock("../../src/siyuan/discovery", () => ({ discoverPdfs: vi.fn() }));
 vi.mock("../../src/indexer/loadPdf", () => ({
@@ -275,11 +277,29 @@ function setup() {
 /** Simule l'ouverture du panneau par SiYuan : appelle `createActionElement` de chaque élément, dans l'ordre. */
 function openPanel() {
   const setting = h.settings[0]!;
-  const els = setting.items.map((item) => item.createActionElement?.() ?? item.actionElement!);
-  const [openMode, autoIndex, autoIndexInterval, reindex, clear, diagnostic, log] = els as HTMLElement[] as [
-    HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement,
-  ];
-  return { setting, openMode, autoIndex, autoIndexInterval, reindex, clear, diagnostic, log, close: () => setting.options.destroyCallback?.() };
+  // Les items sont retrouvés par leur titre : sur mobile, les parties inopérantes ne sont pas enregistrées (E4).
+  const titles = {
+    openMode: "Ouverture de la recherche",
+    autoIndex: "Indexation automatique",
+    autoIndexInterval: "Fréquence de vérification",
+    reindex: "Réindexer",
+    clear: "Vider l'index",
+    diagnostic: "Diagnostic technique",
+    log: "Journal",
+  } as const;
+  const els = setting.items.map((item) => ({ title: item.title, el: item.createActionElement?.() ?? item.actionElement! }));
+  const part = (name: keyof typeof titles): HTMLElement => els.find((e) => e.title === titles[name])?.el ?? document.createElement("div");
+  return {
+    setting,
+    openMode: part("openMode"),
+    autoIndex: part("autoIndex"),
+    autoIndexInterval: part("autoIndexInterval"),
+    reindex: part("reindex"),
+    clear: part("clear"),
+    diagnostic: part("diagnostic"),
+    log: part("log"),
+    close: () => setting.options.destroyCallback?.(),
+  };
 }
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -353,6 +373,25 @@ beforeEach(() => {
         dialog.beginDestroy();
       },
       isOpen: () => !dialog.destroyed && !dialog.vanished,
+    };
+  });
+  h.customDialogs.length = 0;
+  h.openCustom.mockReset().mockImplementation((options: (typeof h.customDialogs)[number]["options"]) => {
+    const record = { options, closeCount: 0 };
+    h.customDialogs.push(record);
+    const root = document.createElement("div");
+    root.append(options.content);
+    document.body.append(root);
+    let open = true;
+    return {
+      close: () => {
+        record.closeCount++;
+        if (!open) return;
+        open = false;
+        root.remove();
+        options.onDestroyed?.();
+      },
+      isOpen: () => open,
     };
   });
   h.reset.mockReset();
@@ -2220,6 +2259,11 @@ describe("profil de plateforme (E3)", () => {
     await settle(0);
     return s;
   };
+  /** Mobile : pas d'onglet (addTab n'existe pas), la recherche se monte dans le dialogue ouvert par l'entrée de la barre. */
+  const openMobile = async (s: { plugin: { topBar: { callback(): void } } }): Promise<void> => {
+    s.plugin.topBar.callback();
+    await settle(0);
+  };
 
   describe("bureau : comportement inchangé", () => {
     it.each(["desktop", "desktop-window", "browser-desktop"])("%s : profil bureau transmis, plafonds historiques", async (frontend) => {
@@ -2301,8 +2345,9 @@ describe("profil de plateforme (E3)", () => {
     it("le type d'interface n'est lu qu'une fois par session", async () => {
       h.frontend = "mobile";
       const s = await start();
-      s.render();
-      s.render();
+      await openMobile(s);
+      h.floatingDialogs[0]!.destroy();
+      await openMobile(s);
       expect(h.mountDeps[0]!.profile).toBe(h.mountDeps[1]!.profile);
     });
   });
@@ -2314,7 +2359,7 @@ describe("profil de plateforme (E3)", () => {
 
     it("transmet le profil mobile à l'onglet, à l'index partagé et au chargement des PDF", async () => {
       const s = await start();
-      s.render();
+      await openMobile(s);
       expect(h.mountDeps[0]).toMatchObject({ profile: mobileProfile() });
       expect(h.sharedDeps[0]?.decodeConcurrency).toBe(1);
       expect(h.loadPdfOptions.length).toBeGreaterThan(0);
@@ -2335,7 +2380,7 @@ describe("profil de plateforme (E3)", () => {
     it("l'index n'est pas chargé au démarrage mais à la première ouverture de la recherche", async () => {
       const s = await start();
       expect(h.sharedStart).not.toHaveBeenCalled();
-      s.render();
+      await openMobile(s);
       expect(h.sharedStart).toHaveBeenCalledTimes(1);
     });
 
@@ -2364,7 +2409,7 @@ describe("profil de plateforme (E3)", () => {
 
     it("aucune écriture de settings.json : recherche, changement de réglage, historique et critère enregistré", async () => {
       const s = await start();
-      s.render();
+      await openMobile(s);
       const settings = h.mountDeps[0]!.settings!;
       await settings.update({ history: ["pco"] });
       await settings.update({ groupByDocument: false, sort: { key: "page", direction: "asc" } });
@@ -2375,44 +2420,267 @@ describe("profil de plateforme (E3)", () => {
       s.plugin.onunload();
     });
 
-    it("panneau : affiche les valeurs EFFECTIVES (autoIndex désactivé, ouverture en fenêtre) et un changement d'intervalle n'écrit pas", async () => {
-      const s = await start({ autoIndex: true, openMode: "tab", intervalMinutes: 5 });
+    it("panneau natif : ni Réindexer, ni Vider l'index, ni indexation automatique, ni mode d'ouverture (inopérants) ; diagnostic et journal restent", async () => {
+      await start({ autoIndex: true, openMode: "tab", intervalMinutes: 5 });
+      expect(h.settings[0]!.items.map((i) => i.title)).toEqual(["Diagnostic technique", "Journal"]);
       const panel = openPanel();
-      expect(panel.autoIndex.querySelector<HTMLInputElement>("input")!.checked).toBe(false);
-      expect(panel.openMode.querySelector<HTMLSelectElement>("select")!.value).toBe("dialog");
-      const interval = panel.autoIndexInterval.querySelector<HTMLSelectElement>("select")!;
-      interval.value = "15";
-      interval.dispatchEvent(new Event("change"));
-      await settle(0);
-      expect(h.saveData).not.toHaveBeenCalled();
-      expect(panel.autoIndex.querySelector<HTMLInputElement>("input")!.checked).toBe(false);
+      expect(panel.reindex.childNodes).toHaveLength(0);
+      expect(panel.diagnostic.querySelector("button")).not.toBeNull();
       panel.close();
-      s.plugin.onunload();
     });
 
-    it("« Vider l'index » et « Réindexer » : information de lecture seule, sans boîte de confirmation ni erreur", async () => {
+    it("le panneau reste une défense en profondeur : sans bouton visible, rien ne touche au dossier d'index ni à settings.json", async () => {
       const s = await start();
-      const panel = openPanel();
-      (panel.clear.querySelector("button") as HTMLButtonElement).click();
-      (panel.reindex.querySelector("button") as HTMLButtonElement).click();
-      await settle(0);
-      expect(h.confirm).not.toHaveBeenCalled();
-      expect(panel.clear.querySelector('[role="status"]')!.textContent).toBe("readOnlyNotice");
-      expect(panel.reindex.querySelector('[role="status"]')!.textContent).toBe("readOnlyNotice");
-      expect(panel.log.textContent ?? "").not.toContain("en échec");
-      s.plugin.onunload();
-    });
-
-    it("« Vider l'index » et « Réindexer » du panneau sont refusés avec une erreur, sans toucher au dossier d'index", async () => {
-      const s = await start();
-      const panel = openPanel();
-      (panel.clear.querySelector("button") as HTMLButtonElement).click();
-      (panel.reindex.querySelector("button") as HTMLButtonElement).click();
+      openPanel();
       await settle(0);
       expect(h.clear).not.toHaveBeenCalled();
       expect(h.start).not.toHaveBeenCalled();
+      expect(h.saveData).not.toHaveBeenCalled();
       s.plugin.onunload();
     });
   });
 });
 
+describe("entrée mobile (E4) : openTab est un stub", () => {
+  const MOBILE = ["mobile", "browser-mobile"] as const;
+  const settle = async (): Promise<void> => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  };
+  const command = (key: string) => h.commands.find((c) => c.langKey === key);
+  const openTabMock = async () => {
+    const { openTab: mocked } = await import("siyuan");
+    return vi.mocked(mocked).mockReset().mockResolvedValue(undefined as never);
+  };
+  const start = async (stored: unknown = "") => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.loadData.mockResolvedValue(stored);
+    const s = setup();
+    await flush();
+    return s;
+  };
+  type MountDeps = {
+    openTab?: unknown;
+    floating?: { onPdfOpened(overlay: { dispose(): void }): void; onOpenInTab?: () => void; onCloseRequest(): void };
+    onOpenSettings?: () => void;
+  };
+  const lastMount = (): MountDeps => h.mountDeps.at(-1) as unknown as MountDeps;
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe.each(MOBILE)("%s", (frontend) => {
+    beforeEach(() => {
+      h.frontend = frontend;
+    });
+
+    it("n'enregistre pas l'onglet (addTab renvoie undefined sur mobile) ni la commande « onglet »", async () => {
+      const s = await start();
+      expect((s.plugin as { tab?: unknown }).tab).toBeUndefined();
+      expect(h.commands.map((c) => c.langKey).sort()).toEqual(["focusSearch", "openSearch", "openSearchFloating"]);
+    });
+
+    it("l'entrée de la barre ouvre un dialogue PLEIN ÉCRAN, jamais openTab", async () => {
+      const openTab = await openTabMock();
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(h.openFloating.mock.calls[0]![0]).toMatchObject({ layout: "fullscreen", title: "Recherche dans les PDF" });
+      expect(openTab).not.toHaveBeenCalled();
+    });
+
+    it("réglage « onglet » enregistré, ou réglages illisibles : la recherche s'ouvre quand même en dialogue", async () => {
+      const openTab = await openTabMock();
+      const s = await start({ openMode: "tab" });
+      s.plugin.topBar.callback();
+      await settle();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      s.plugin.onunload();
+      h.openFloating.mockClear();
+      h.loadData.mockRejectedValue(new Error("lecture KO"));
+      const t = await start();
+      t.plugin.topBar.callback();
+      await settle();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(openTab).not.toHaveBeenCalled();
+    });
+
+    it("commandes : ouvrir (plein écran), fenêtre flottante, aller au champ ; aucune n'appelle openTab", async () => {
+      const openTab = await openTabMock();
+      const s = await start();
+      command("openSearch")!.callback!();
+      await settle();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      command("focusSearch")!.callback!(); // fenêtre ouverte : on focalise son champ
+      await settle();
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      h.floatingDialogs[0]!.destroy();
+      await settle();
+      command("focusSearch")!.callback!(); // fenêtre fermée : on l'ouvre au lieu de demander un onglet
+      await settle();
+      expect(h.openFloating).toHaveBeenCalledTimes(2);
+      command("openSearchFloating")!.callback!();
+      await settle();
+      expect(h.openFloating.mock.calls.every((c) => (c[0] as { layout?: string }).layout === "fullscreen")).toBe(true);
+      expect(openTab).not.toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+
+    it("la vue montée dans le dialogue n'a ni openTab, ni bouton « nouvel onglet »", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      expect(lastMount().openTab).toBeUndefined();
+      expect(lastMount().floating).toBeDefined();
+      expect(lastMount().floating!.onOpenInTab).toBeUndefined();
+      s.plugin.onunload();
+    });
+
+    it("onPdfOpened NE ferme PAS la recherche (le calque est gardé et libéré au déchargement)", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      const overlay = { dispose: vi.fn() };
+      lastMount().floating!.onPdfOpened(overlay);
+      await settle();
+      expect(h.floatingDialogs[0]!.closeCalls).toHaveLength(0);
+      expect(h.floatingDialogs[0]!.destroyed).toBe(false);
+      expect(overlay.dispose).not.toHaveBeenCalled();
+      s.plugin.onunload();
+      expect(overlay.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("onCloseRequest (Échap sur champ vide) ferme toujours la fenêtre", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      lastMount().floating!.onCloseRequest();
+      expect(h.floatingDialogs[0]!.closeCalls).toHaveLength(1);
+      s.plugin.onunload();
+    });
+
+    it("réglages : dialogue du plugin (openSetting n'est pas appelé), sans les contrôles inopérants", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      lastMount().onOpenSettings!();
+      expect(h.openSetting).not.toHaveBeenCalled();
+      expect(h.openCustom).toHaveBeenCalledTimes(1);
+      const dialog = h.customDialogs[0]!;
+      expect(dialog.options).toMatchObject({ title: "settingsDialogTitle", dataKey: "docseeker-settings", width: "94vw", height: "90vh" });
+      const content = dialog.options.content as HTMLElement;
+      expect(content.textContent).toContain("Diagnostic technique");
+      expect(content.textContent).toContain("Journal");
+      for (const hidden of ["Réindexer", "Vider l'index", "Indexation automatique", "Ouverture de la recherche"]) {
+        expect(content.textContent).not.toContain(hidden);
+      }
+      expect(content.querySelector("button")).not.toBeNull(); // le diagnostic est utilisable
+      s.plugin.onunload();
+    });
+
+    it("réglages ouverts deux fois : un seul dialogue ; refermé, il peut être rouvert (panneau libéré)", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      lastMount().onOpenSettings!();
+      lastMount().onOpenSettings!();
+      expect(h.openCustom).toHaveBeenCalledTimes(1);
+      h.customDialogs[0]!.options.onDestroyed?.();
+      lastMount().onOpenSettings!();
+      expect(h.openCustom).toHaveBeenCalledTimes(2);
+      s.plugin.onunload();
+    });
+
+    it("réglages : échec d'ouverture du dialogue = message visible + trace, jamais silencieux", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      h.openCustom.mockImplementation(() => {
+        throw new Error("dialogue KO");
+      });
+      lastMount().onOpenSettings!();
+      expect(h.showMessage).toHaveBeenCalledWith("settingsOpenFailed", expect.any(Number), "error");
+      expect(console.warn).toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+
+    it("réglages : échec d'ouverture = panneau libéré (ses écouteurs ne fuient pas) et on peut réessayer", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      const disposeSpy = vi.spyOn(s.plugin as unknown as { disposePanel(): void }, "disposePanel");
+      h.openCustom.mockImplementationOnce(() => {
+        throw new Error("dialogue KO");
+      });
+      lastMount().onOpenSettings!();
+      expect(disposeSpy).toHaveBeenCalled();
+      lastMount().onOpenSettings!(); // réessai : le mock par défaut ouvre le dialogue
+      expect(h.customDialogs).toHaveLength(1);
+      s.plugin.onunload();
+    });
+
+    it("réglages ouverts au déchargement : le dialogue est fermé une fois", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      lastMount().onOpenSettings!();
+      expect(h.customDialogs[0]!.closeCount).toBe(0);
+      s.plugin.onunload();
+      expect(h.customDialogs[0]!.closeCount).toBe(1);
+    });
+
+    it("réglages : aucun style en ligne, sections et titres portent des classes du plugin", async () => {
+      const s = await start();
+      s.plugin.topBar.callback();
+      await settle();
+      lastMount().onOpenSettings!();
+      const content = h.customDialogs[0]!.options.content as HTMLElement;
+      expect(content.querySelector(".docseeker-settings-section[style], .docseeker-settings-title[style]")).toBeNull();
+      expect(content.querySelector(".docseeker-settings-section .docseeker-settings-title")).not.toBeNull();
+      s.plugin.onunload();
+    });
+
+    it("aucun chemin ne touche à openTab : barre, commandes, réglages, déchargement", async () => {
+      const openTab = await openTabMock();
+      const s = await start({ openMode: "tab" });
+      s.plugin.topBar.callback();
+      for (const c of h.commands) c.callback!();
+      await settle();
+      lastMount().onOpenSettings!();
+      s.plugin.onunload();
+      expect(openTab).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bureau : inchangé (prouvé)", () => {
+    it.each(["desktop", "desktop-window", "browser-desktop"])("%s : onglet, 4 commandes, fenêtre 'window', openTab transmis, réglages natifs complets", async (frontend) => {
+      h.frontend = frontend;
+      await openTabMock();
+      const s = await start();
+      expect((s.plugin as { tab?: unknown }).tab).toBeDefined();
+      expect(h.commands.map((c) => c.langKey).sort()).toEqual(["focusSearch", "openSearch", "openSearchFloating", "openSearchTab"]);
+      expect(h.settings[0]!.items).toHaveLength(7);
+      command("openSearchFloating")!.callback!();
+      await settle();
+      expect(h.openFloating.mock.calls[0]![0]).toMatchObject({ layout: "window" });
+      expect(lastMount().openTab).toBeTypeOf("function");
+      expect(lastMount().floating!.onOpenInTab).toBeTypeOf("function");
+      lastMount().floating!.onPdfOpened({ dispose: vi.fn() });
+      expect(h.floatingDialogs[0]!.closeCalls).toEqual([{ focus: false }]); // ferme après l'ouverture d'un PDF
+      lastMount().onOpenSettings!();
+      expect(h.openSetting).toHaveBeenCalledTimes(1);
+      expect(h.openCustom).not.toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+
+    it("bureau : openSearchTab ouvre un onglet et openMode « onglet » est respecté", async () => {
+      const openTab = await openTabMock();
+      const s = await start({ openMode: "tab" });
+      s.plugin.topBar.callback();
+      await settle();
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(h.openFloating).not.toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+  });
+});

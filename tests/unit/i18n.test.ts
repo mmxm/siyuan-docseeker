@@ -25,6 +25,7 @@ const NEW_KEYS = [
   "highlightUnavailable", "floatingOpenFailed", "openTabFailed", "transferTabFailed",
   "docFilterNoPdf", "scopeLoading", "scopeNotReady", "scopeTooLarge", "scopeFailed", "scopeRefreshFailed",
   "scopeInvalid", "kernelUnavailable",
+  "pdfBrowserOpenFailed", "pdfBrowserOpenError", "noIndexMobile", "settingsDialogTitle", "settingsOpenFailed",
   "traceKeys", "traceKeysRunning", "traceKeysDone", "traceKeysNoTab", "traceKeysFailed", "traceKeysNoKey",
 ];
 const read = (path: string): string => readFileSync(path, "utf8");
@@ -56,7 +57,7 @@ describe("i18n/fr_FR.json", () => {
   });
 
   it("les textes des notifications d'erreur (toasts) sont du texte brut : ni <, ni > ni &, SiYuan les insérant comme HTML", () => {
-    for (const key of ["highlightUnavailable", "floatingOpenFailed", "openTabFailed", "transferTabFailed"]) {
+    for (const key of ["highlightUnavailable", "floatingOpenFailed", "openTabFailed", "transferTabFailed", "pdfBrowserOpenFailed", "pdfBrowserOpenError", "settingsOpenFailed"]) {
       expect(fr[key], key).toBeTypeOf("string");
       expect(fr[key]!.length, key).toBeGreaterThan(0);
       expect(fr[key], key).not.toMatch(/[<>&]/);

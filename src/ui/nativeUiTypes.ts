@@ -65,6 +65,11 @@ export interface DialogHandle {
 export interface FloatingDialogOptions {
   /** Texte brut ; l'adaptateur l'échappe (SiYuan l'insère comme HTML). */
   readonly title: string;
+  /**
+   * « window » (défaut) : fenêtre 80vw x 90vh à position mémorisée (bureau). « fullscreen » : plein écran 100vw x 100dvh (repli vh),
+   * sans position mémorisée (mobile).
+   */
+  readonly layout?: "window" | "fullscreen";
   /** Remplit le conteneur vide (DOM seulement, jamais de chaîne HTML). */
   build(container: HTMLElement): void;
   /**

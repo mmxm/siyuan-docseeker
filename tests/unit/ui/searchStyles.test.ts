@@ -11,6 +11,16 @@ function rulesFor(selector: string): string[] {
     .map((m) => m[2]!);
 }
 
+describe("SEARCH_CSS : dialogue des réglages", () => {
+  it("les classes de section et de titre existent, sans couleur en dur", () => {
+    const section = rulesFor(".docseeker-settings-section").join(" ");
+    const title = rulesFor(".docseeker-settings-title").join(" ");
+    expect(section).toMatch(/padding:\s*8px 16px/);
+    expect(title).toMatch(/font-weight:\s*bold/);
+    expect(section + title).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
+  });
+});
+
 describe("SEARCH_CSS", () => {
   it.each([
     ".docseeker-card:focus-visible",

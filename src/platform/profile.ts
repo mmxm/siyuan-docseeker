@@ -26,6 +26,12 @@ export interface PlatformProfile {
   readonly disableAutoFetch: boolean;
   /** Index chargé à la première ouverture de la recherche plutôt qu'au démarrage. */
   readonly lazyIndexLoad: boolean;
+  /** Disposition de la fenêtre de recherche : fenêtre flottante (bureau) ou plein écran (mobile). */
+  readonly floatingLayout: "window" | "fullscreen";
+  /** Faux sur mobile : `openTab` y est un stub qui ne fait rien (aucun onglet, aucun Alt+clic, aucun transfert vers un onglet). */
+  readonly canOpenTab: boolean;
+  /** Vrai sur mobile : les réglages s'ouvrent dans un dialogue du plugin plutôt que par `openSetting` (chemin non garanti). */
+  readonly settingsInDialog: boolean;
   /** Valeurs imposées à la lecture des réglages (jamais écrites dans `settings.json`, qui est synchronisé). */
   readonly settingsOverride: { readonly autoIndex?: boolean; readonly openMode?: OpenMode };
 }
@@ -41,6 +47,9 @@ export function desktopProfile(): PlatformProfile {
     decodeConcurrency: DEFAULT_DECODE_CONCURRENCY,
     disableAutoFetch: false,
     lazyIndexLoad: false,
+    floatingLayout: "window",
+    canOpenTab: true,
+    settingsInDialog: false,
     settingsOverride: {},
   };
 }
@@ -56,6 +65,9 @@ export function mobileProfile(): PlatformProfile {
     decodeConcurrency: 1,
     disableAutoFetch: true,
     lazyIndexLoad: true,
+    floatingLayout: "fullscreen",
+    canOpenTab: false,
+    settingsInDialog: true,
     settingsOverride: { autoIndex: false, openMode: "dialog" },
   };
 }

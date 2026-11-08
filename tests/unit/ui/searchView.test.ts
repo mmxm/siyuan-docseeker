@@ -210,6 +210,13 @@ describe("mountSearchView", () => {
     expect(host.querySelector("button.docseeker-open-settings")).toBeNull();
   });
 
+  it("lecture seule (mobile) : « aucun index » ne renvoie pas aux paramètres d'indexation mais explique la synchronisation", () => {
+    mount({ readOnly: true });
+    update({ kind: "no-index", indexing: false });
+    expect(status()).toBe("L'index se construit dans SiYuan sur ordinateur, puis se synchronise");
+    expect(status()).not.toContain("lancer l'indexation");
+  });
+
   it("ne propose pas les paramètres pour une simple erreur de recherche (hors index)", () => {
     mount({ onOpenSettings: vi.fn() });
     update({ kind: "error", message: "boum" });

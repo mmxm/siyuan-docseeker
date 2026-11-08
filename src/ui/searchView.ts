@@ -84,7 +84,9 @@ export interface SearchViewDeps {
   /** Regroupement par document au montage (défaut : oui). État de VUE : changer de mode ne relance aucune recherche. */
   readonly initialGroupByDocument?: boolean;
   /** Mode fenêtre flottante : Échap sur un champ vide ferme la fenêtre ; bouton « Ouvrir dans un nouvel onglet ». */
-  readonly floating?: { requestClose(): void; openInTab(): void };
+  readonly floating?: { requestClose(): void; openInTab?(): void };
+  /** Lecture seule (mobile) : l'index vient d'un autre appareil, les messages n'invitent pas à lancer l'indexation. */
+  readonly readOnly?: boolean;
   /** Appelé à chaque changement de regroupement choisi dans le menu « Plus » (pour le mémoriser). */
   readonly onGroupByDocumentChange?: (groupByDocument: boolean) => void;
 }
@@ -132,6 +134,7 @@ export const DEFAULT_STRINGS: Readonly<Record<string, string>> = {
   noResults: "Aucun résultat",
   error: "Erreur : {message}",
   indexing: "Index en cours de construction",
+  noIndexMobile: "L'index se construit dans SiYuan sur ordinateur, puis se synchronise",
   noIndex: "Aucun index : ouvrez les paramètres du plugin pour lancer l'indexation",
   openSettings: "Ouvrir les paramètres",
   docOne: "{n} document",
@@ -824,6 +827,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         break;
       case "no-index":
         if (vm.indexing) setStatus(tr("indexing"));
+        else if (deps.readOnly) setStatus(tr("noIndexMobile")); // mobile : l'indexation s'y fait ailleurs, rien à lancer dans les paramètres
         else setStatus(tr("noIndex"), { settings: true });
         break;
       case "results": {
@@ -1153,7 +1157,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       t: (key, vars) => tr(key, vars),
       openMenu,
       openDialog,
-      ...(deps.floating ? { openInTab: () => deps.floating?.openInTab() } : {}),
+      ...(deps.floating?.openInTab ? { openInTab: () => deps.floating?.openInTab?.() } : {}),
       ...(criteriaBar ? { criteriaActions: { save: () => criteriaBar?.openSave(), reset: () => criteriaBar?.reset() } } : {}),
       onStateChange: () => criteriaBar?.refresh(),
       getGroupByDocument: () => groupByDocument,

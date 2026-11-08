@@ -17,7 +17,7 @@ import { DSX_SUFFIX, type SharedIndex } from "./search/sharedIndex";
 import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
 import { IndexUnavailableError, NotFoundError, type KernelApi } from "./siyuan/kernelApi";
-import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
+import { openPdfAtPage as realOpenPdfAtPage, openPdfInBrowser, type OpenPdfOptions } from "./siyuan/openPdf";
 import { desktopProfile, type PlatformProfile } from "./platform/profile";
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
@@ -44,8 +44,16 @@ export interface SearchTabDeps {
   readonly sharedIndex: SharedIndex;
   /** Ouvre le panneau de paramètres du plugin (indexation, index, diagnostic). */
   readonly onOpenSettings?: () => void;
-  /** `openTab` de SiYuan et `app` du plugin, passés tels quels à `openPdfAtPage`. */
-  readonly openTab: OpenPdfOptions["openTab"];
+  /**
+   * `openTab` de SiYuan et `app` du plugin, passés tels quels à `openPdfAtPage`. Absent (mobile, où `openTab` est un stub qui ne fait
+   * rien) ou profil sans `canOpenTab` : le PDF s'ouvre par `openPdfFallback`, jamais par `openTab`.
+   */
+  readonly openTab?: OpenPdfOptions["openTab"] | undefined;
+  /**
+   * Repli sans onglet (mobile) : ouvre le PDF `assets/x.pdf` à la page (1-based) et renvoie faux si le navigateur bloque la fenêtre.
+   * Défaut : `openPdfInBrowser` (seul adaptateur de `window.open`). Peut lever : l'erreur est tracée et un message est affiché.
+   */
+  readonly openPdfFallback?: (path: string, page: number) => boolean;
   readonly app: unknown;
   /** Charge un PDF pour le rendu des vignettes (PDF.js de SiYuan). */
   readonly loadDocument: (path: string, signal?: AbortSignal) => Promise<RenderableDocument>;
@@ -95,7 +103,8 @@ export interface SearchTabDeps {
   readonly floating?: {
     /** `overlay` : le calque de surlignage, désormais propre au visualiseur ; le plugin le garde pour le libérer au déchargement. */
     onPdfOpened(overlay: { dispose(): void }): void;
-    onOpenInTab(): void;
+    /** Absent (mobile) : le bouton « Ouvrir dans un nouvel onglet » n'est pas affiché. */
+    onOpenInTab?(): void;
     onCloseRequest(): void;
   };
   readonly observerFactory?: (
@@ -140,6 +149,8 @@ export interface SearchTab {
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const PDF_BROWSER_OPEN_ERROR = "Impossible d'ouvrir ce PDF sur cet appareil.";
+const PDF_BROWSER_OPEN_FAILED = "Impossible d'ouvrir ce PDF sur cet appareil : le navigateur a bloqué la fenêtre.";
 const DOC_NOT_FOUND = "Document introuvable dans l'index : voir les paramètres du plugin.";
 const HIGHLIGHT_UNAVAILABLE = "Surlignage indisponible";
 const SETTING_NOT_SAVED = "Réglage non enregistré";
@@ -475,6 +486,9 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     }
   };
 
+  // Mobile : `openTab` est un stub, il n'est donc jamais utilisé même s'il est injecté.
+  const openTabFn = profile.canOpenTab ? deps.openTab : undefined;
+  const openBrowserPdf = deps.openPdfFallback ?? ((path: string, page: number) => openPdfInBrowser({ path, page, onWarn }));
   const open = async (docId: string, page: number, query: string, alternate: boolean): Promise<void> => {
     openController?.abort();
     const mine = new AbortController();
@@ -486,6 +500,19 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     const doc = searchStore.getDoc(docId);
     if (!doc) {
       showMessage(deps.t?.("docNotFound") ?? DOC_NOT_FOUND);
+      return;
+    }
+    // Sans onglet (mobile) : repli par le navigateur, sans surlignage ; la recherche reste ouverte et `openTab` n'est jamais appelé.
+    if (openTabFn === undefined) {
+      try {
+        if (openBrowserPdf(doc.path, page)) return;
+        onWarn("Ouverture du PDF dans le navigateur refusée : fenêtre bloquée");
+        showMessage(deps.t?.("pdfBrowserOpenFailed") ?? PDF_BROWSER_OPEN_FAILED);
+      } catch (error) {
+        // Chemin invalide, `window.open` qui lève… : message distinct de « bloquée », détail technique seulement dans le journal.
+        onWarn("Ouverture du PDF dans le navigateur impossible", error);
+        showMessage(deps.t?.("pdfBrowserOpenError") ?? PDF_BROWSER_OPEN_ERROR);
+      }
       return;
     }
     let rects: PercentStyle[] = [];
@@ -514,7 +541,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     let handle: Awaited<ReturnType<typeof openPdf>>;
     try {
       handle = await openPdf({
-        openTab: deps.openTab,
+        openTab: openTabFn,
         app: deps.app,
         path: doc.path,
         page,
@@ -824,6 +851,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   const deleteCriteriaFn = criteriaStore?.deleteCriteria?.bind(criteriaStore);
 
   const view = mountSearchView(host, {
+    ...(profile.readOnly ? { readOnly: true } : {}),
     controller: {
       submit: (query) => {
         if (pendingOptions !== undefined) {
@@ -894,7 +922,9 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       ? {
           floating: {
             requestClose: () => callFloating("Fermeture de la recherche flottante", () => deps.floating?.onCloseRequest()),
-            openInTab: () => callFloating("Ouverture dans un nouvel onglet", () => deps.floating?.onOpenInTab()),
+            ...(deps.floating.onOpenInTab
+              ? { openInTab: () => callFloating("Ouverture dans un nouvel onglet", () => deps.floating?.onOpenInTab?.()) }
+              : {}),
           },
         }
       : {}),
