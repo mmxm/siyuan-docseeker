@@ -6,6 +6,7 @@
 import type { PdfEntry } from "../core/manifest";
 import { ensureWorkerSrc } from "../indexer/loadPdf";
 import { discoverPdfs } from "../siyuan/discovery";
+import { PDFJS_GETDOCUMENT_RESOURCES } from "../siyuan/pdfjsLoader";
 import type { FetchLike, KernelApi } from "../siyuan/kernelApi";
 
 export type CheckStatus = "pass" | "fail" | "skip";
@@ -27,7 +28,7 @@ export interface M0Report {
 export interface PdfjsLike {
   readonly version?: string;
   GlobalWorkerOptions?: { workerSrc?: string };
-  getDocument(src: { url: string }): {
+  getDocument(src: { url: string } & typeof PDFJS_GETDOCUMENT_RESOURCES): {
     promise: Promise<{
       numPages: number;
       getPage(n: number): Promise<{ getTextContent(): Promise<{ items: readonly unknown[] }> }>;
@@ -180,7 +181,7 @@ async function checkPdfjs(deps: M0Deps, pdf: PdfEntry): Promise<Outcome> {
   }
   // Même préparation que l'indexeur ; si GlobalWorkerOptions est absent, PDF.js produit son erreur (check en échec).
   ensureWorkerSrc(pdfjs);
-  const doc = await pdfjs.getDocument({ url: assetUrl(pdf.path) }).promise;
+  const doc = await pdfjs.getDocument({ url: assetUrl(pdf.path), ...PDFJS_GETDOCUMENT_RESOURCES }).promise;
   try {
     const page = await doc.getPage(1);
     const content = await page.getTextContent();

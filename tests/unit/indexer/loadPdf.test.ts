@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLoadPdf, type PdfjsLoader } from "../../../src/indexer/loadPdf";
+import { PDFJS_BASE_URL, PDFJS_GETDOCUMENT_RESOURCES } from "../../../src/siyuan/pdfjsLoader";
+
+/** Options de ressources attendues partout (images JBIG2/JPX, ICC, polices, CMap). */
+const RES = PDFJS_GETDOCUMENT_RESOURCES;
 
 function fakePdfjs(options: { fail?: boolean } = {}) {
   const destroyTask = vi.fn(async () => undefined);
@@ -21,22 +25,36 @@ describe("createLoadPdf", () => {
     expect(doc).toBe(f.doc);
     expect(f.getDocument).toHaveBeenCalledWith({
       url: "/assets/dossier%20a/%C3%A9%20%231.pdf",
+      ...RES,
     });
   });
 
-  it("bureau : getDocument ne reçoit que l'URL, sans option de téléchargement (comportement inchangé)", async () => {
+  it("bureau : getDocument reçoit l'URL et les ressources PDF.js, sans option de téléchargement", async () => {
     const f = fakePdfjs();
     await createLoadPdf(() => f.pdfjs)("assets/a.pdf", new AbortController().signal);
-    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf" });
+    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES });
+    expect(f.getDocument.mock.calls[0]![0]).toHaveProperty("wasmUrl", "/stage/protyle/js/pdf/wasm/");
     const g = fakePdfjs();
     await createLoadPdf(() => g.pdfjs, undefined, { disableAutoFetch: false })("assets/a.pdf", new AbortController().signal);
-    expect(g.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf" });
+    expect(g.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES });
+  });
+
+  it("ressources PDF.js : URL de dossiers sous la base SiYuan, terminées par « / », cMapPacked actif", () => {
+    expect(RES.cMapPacked).toBe(true);
+    for (const key of ["wasmUrl", "iccUrl", "standardFontDataUrl", "cMapUrl"] as const) {
+      expect(RES[key].startsWith(PDFJS_BASE_URL)).toBe(true);
+      expect(RES[key].endsWith("/")).toBe(true);
+    }
+    expect(RES.wasmUrl).toBe("/stage/protyle/js/pdf/wasm/");
+    expect(RES.iccUrl).toBe("/stage/protyle/js/pdf/iccs/");
+    expect(RES.standardFontDataUrl).toBe("/stage/protyle/js/pdf/standard_fonts/");
+    expect(RES.cMapUrl).toBe("/stage/protyle/js/pdf/cmaps/");
   });
 
   it("disableAutoFetch : pas de téléchargement complet, flux conservé pour les requêtes par plages", async () => {
     const f = fakePdfjs();
     await createLoadPdf(() => f.pdfjs, undefined, { disableAutoFetch: true })("assets/a.pdf", new AbortController().signal);
-    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", disableAutoFetch: true, disableStream: false });
+    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: false });
   });
 
   it("échoue clairement si PDF.js n'est pas disponible", async () => {
@@ -224,7 +242,7 @@ describe("createLoadPdf avec un getter asynchrone", () => {
     const f = fakePdfjs();
     const load = createLoadPdf(async () => f.pdfjs);
     await expect(load("assets/a.pdf", new AbortController().signal)).resolves.toBe(f.doc);
-    expect(f.getDocument).toHaveBeenCalledWith({ url: "/assets/a.pdf" });
+    expect(f.getDocument).toHaveBeenCalledWith({ url: "/assets/a.pdf", ...RES });
   });
 
   it("propage l'échec du getter asynchrone", async () => {

@@ -1,8 +1,18 @@
+import { PDFJS_BASE_URL, PDFJS_GETDOCUMENT_RESOURCES } from "../siyuan/pdfjsLoader";
 import type { PdfDocumentLike } from "./indexer";
 
 /** Sous-ensemble du `window.pdfjsLib` de SiYuan utilisé pour l'indexation. */
 export interface PdfjsLoader {
-  getDocument(src: { url: string; disableAutoFetch?: boolean; disableStream?: boolean }): {
+  getDocument(src: {
+    url: string;
+    wasmUrl?: string;
+    iccUrl?: string;
+    standardFontDataUrl?: string;
+    cMapUrl?: string;
+    cMapPacked?: boolean;
+    disableAutoFetch?: boolean;
+    disableStream?: boolean;
+  }): {
     readonly promise: Promise<PdfDocumentLike>;
     destroy(): Promise<void> | void;
   };
@@ -15,7 +25,7 @@ export interface PdfjsLoader {
  * SiYuan ne renseigne `workerSrc` qu'à ce moment-là : sans PDF déjà ouvert dans la session,
  * `getDocument` échoue avec « No "GlobalWorkerOptions.workerSrc" specified. ».
  */
-export const SIYUAN_PDF_WORKER_SRC = "/stage/protyle/js/pdf/pdf.worker.compat.mjs?v=6.4.299-siyuan.2";
+export const SIYUAN_PDF_WORKER_SRC = `${PDFJS_BASE_URL}pdf.worker.compat.mjs?v=6.4.299-siyuan.2`;
 
 /**
  * Renseigne `workerSrc` s'il est vide/absent (jamais d'écrasement). Renvoie false si
@@ -63,7 +73,7 @@ function toAssetUrl(path: string): string {
 export interface LoadPdfOptions {
   /**
    * Évite le téléchargement complet du PDF (mobile) : PDF.js ne demande que les plages utiles. Le flux reste actif
-   * (`disableStream: false`), car les requêtes par plages en dépendent. Absent ou faux : `getDocument({ url })`, comme avant.
+   * (`disableStream: false`), car les requêtes par plages en dépendent. Absent ou faux : `getDocument({ url, ...ressources })`.
    */
   readonly disableAutoFetch?: boolean;
 }
@@ -94,10 +104,12 @@ export function createLoadPdf(
     if (!ensureWorkerSrc(pdfjs)) {
       onWarn("pdfjsLib.GlobalWorkerOptions absent : impossible de définir workerSrc, PDF.js risque d'échouer");
     }
+    // Les ressources (wasm, ICC, polices, CMap) sont passées partout : sans elles, les images JBIG2/JPX des
+    // référentiels scannés ne sont pas décodées et les vignettes sont blanches.
     const task = pdfjs.getDocument(
       options.disableAutoFetch
-        ? { url: toAssetUrl(path), disableAutoFetch: true, disableStream: false }
-        : { url: toAssetUrl(path) },
+        ? { url: toAssetUrl(path), ...PDFJS_GETDOCUMENT_RESOURCES, disableAutoFetch: true, disableStream: false }
+        : { url: toAssetUrl(path), ...PDFJS_GETDOCUMENT_RESOURCES },
     );
     // La tâche n'est libérée qu'une fois, que ce soit par l'annulation ou par destroy() du document.
     let released: Promise<void> | undefined;

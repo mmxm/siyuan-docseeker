@@ -287,7 +287,7 @@ describe("runM0Diagnostic", () => {
   });
 
   it("pdfjs: version, pages et items sur le plus petit PDF via /assets", async () => {
-    const getDocument = vi.fn((_s: { url: string }) => ({
+    const getDocument = vi.fn((_s: { url: string; [k: string]: unknown }) => ({
       promise: Promise.resolve({
         numPages: 7,
         getPage: async () => ({ getTextContent: async () => ({ items: [1, 2, 3] }) }),
@@ -296,7 +296,14 @@ describe("runM0Diagnostic", () => {
     }));
     const { deps } = makeDeps({ pdfjs: { version: "4.0.1", getDocument } });
     const c = by(await runM0Diagnostic(deps), "pdfjs");
-    expect(getDocument).toHaveBeenCalledWith({ url: "/assets/small.pdf" });
+    expect(getDocument).toHaveBeenCalledWith({
+      url: "/assets/small.pdf",
+      wasmUrl: "/stage/protyle/js/pdf/wasm/",
+      iccUrl: "/stage/protyle/js/pdf/iccs/",
+      standardFontDataUrl: "/stage/protyle/js/pdf/standard_fonts/",
+      cMapUrl: "/stage/protyle/js/pdf/cmaps/",
+      cMapPacked: true,
+    });
     expect(c.status).toBe("pass");
     expect(c.detail).toContain("4.0.1");
     expect(c.detail).toContain("7");
@@ -304,7 +311,7 @@ describe("runM0Diagnostic", () => {
   });
 
   it("pdfjs: ignore les PDF vides (0 octet) pour choisir le plus petit", async () => {
-    const getDocument = vi.fn((_s: { url: string }) => ({
+    const getDocument = vi.fn((_s: { url: string; [k: string]: unknown }) => ({
       promise: Promise.resolve({
         numPages: 1,
         getPage: async () => ({ getTextContent: async () => ({ items: [] }) }),
@@ -317,7 +324,14 @@ describe("runM0Diagnostic", () => {
       pdfjs: { version: "4.0.1", getDocument },
     });
     await runM0Diagnostic(deps);
-    expect(getDocument).toHaveBeenCalledWith({ url: "/assets/small.pdf" });
+    expect(getDocument).toHaveBeenCalledWith({
+      url: "/assets/small.pdf",
+      wasmUrl: "/stage/protyle/js/pdf/wasm/",
+      iccUrl: "/stage/protyle/js/pdf/iccs/",
+      standardFontDataUrl: "/stage/protyle/js/pdf/standard_fonts/",
+      cMapUrl: "/stage/protyle/js/pdf/cmaps/",
+      cMapPacked: true,
+    });
   });
 
   it("pdfjs: destroy appelé, version absente tolérée, destroy optionnel", async () => {
