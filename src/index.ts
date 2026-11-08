@@ -508,6 +508,7 @@ export default class DocSeekerPlugin extends Plugin {
       // Bureau : fenêtre flottante ; mobile : plein écran (le profil décide).
       openDialog: (options) => openFloatingDialog({ ...options, layout: this.getProfile().floatingLayout }),
       title: this.t("floatingTitle"),
+      closeLabel: this.t("floatingClose"),
       session: this.session,
       mount: (host, options) => this.mountSearchInto(host, { floating: options }),
       onWarn: (message, error) => this.warnLog.warn(message, error),

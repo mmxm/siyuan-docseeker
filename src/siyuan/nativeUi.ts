@@ -10,6 +10,8 @@
  * fermeture, avant de vider le menu, puis le focus tombe sur BODY (vérifié dans le bundle 3.8.9 et dans le banc d'essai).
  */
 import { Dialog, Menu, type IMenu } from "siyuan";
+import { ensureSearchStyle } from "../ui/searchStyles";
+import { trackVisualViewport } from "../ui/visualViewport";
 import type {
   CustomDialogHandle,
   ConfirmDialogHandle,
@@ -174,11 +176,21 @@ const DIALOG_CONTENT =
   '<div class="fn__space"></div>' +
   '<button type="button" class="b3-button b3-button--text"></button>' +
   "</div>";
-const WIDTH_PATTERN = /^\d{1,4}px$/;
+/**
+ * Taille de dialogue acceptée (E4b) : « 420px », « 94vw », « 90dvh », ou « min(520px, 94vw) » (deux termes, séparés par une virgule et
+ * au plus une espace). Rien d'autre n'atteint le HTML de SiYuan : pas de `calc`, de `var`, de guillemet ni de point-virgule.
+ */
+const SIZE_TERM = "\\d{1,4}(?:px|vw|vh|dvw|dvh)";
+const CSS_SIZE = new RegExp(`^(?:${SIZE_TERM}|min\\(${SIZE_TERM}, ?${SIZE_TERM}\\))$`);
+
+/** Marque le dialogue comme venant du plugin : la feuille de style y agrandit les boutons au doigt (sans toucher aux autres dialogues). */
+function markNativeDialog(dialog: Dialog): void {
+  dialog.element.classList.add("docseeker-dialog");
+}
 
 export function openDialog(options: NativeDialogOptions): DialogHandle {
-  if (options.width !== undefined && !WIDTH_PATTERN.test(options.width)) {
-    throw new TypeError(`Largeur de dialogue refusée : « ${options.width} » (attendu : 420px)`);
+  if (options.width !== undefined && !CSS_SIZE.test(options.width)) {
+    throw new TypeError(`Largeur de dialogue refusée : « ${options.width} » (attendu : 420px ou min(420px, 94vw))`);
   }
   // SiYuan n'appelle `destroyCallback` qu'après un délai : `closing` coupe tout de suite les clics suivants.
   let closing = false;
@@ -199,6 +211,7 @@ export function openDialog(options: NativeDialogOptions): DialogHandle {
       }
     },
   });
+  markNativeDialog(dialog);
   const close = (): void => {
     if (closing) return;
     closing = true;
@@ -244,7 +257,6 @@ export function openDialog(options: NativeDialogOptions): DialogHandle {
 
 // --- Dialogue à contenu libre ----------------------------------------------------------------------------------
 
-const CSS_SIZE = /^\d{1,4}(px|vw|vh)$/;
 const DATA_KEY = /^[a-z0-9-]+$/;
 
 /** Gabarit du titre natif de « Spécifier le chemin » : marge de 8 px et ligne d'indice (vide ici, historique hors périmètre). */
@@ -262,7 +274,7 @@ function customTitleHtml(title: string): string {
  */
 export function openCustomDialog(options: CustomDialogOptions): CustomDialogHandle {
   for (const [what, value] of [["Largeur", options.width], ["Hauteur", options.height]] as const) {
-    if (!CSS_SIZE.test(value)) throw new TypeError(`${what} de dialogue refusée : « ${value} » (attendu : 50vw, 70vh ou 420px)`);
+    if (!CSS_SIZE.test(value)) throw new TypeError(`${what} de dialogue refusée : « ${value} » (attendu : 50vw, 70dvh, 420px ou min(420px, 94vw))`);
   }
   if (!DATA_KEY.test(options.dataKey)) throw new TypeError(`Clé de dialogue refusée : « ${options.dataKey} » (attendu : a-z, 0-9, tiret)`);
   let closing = false;
@@ -278,6 +290,7 @@ export function openCustomDialog(options: CustomDialogOptions): CustomDialogHand
       options.onDestroyed?.();
     },
   });
+  markNativeDialog(dialog);
   // Échap global, voile et croix appellent `dialog.destroy()` sans passer par `close()` : on le sait dès le début de la destruction.
   const siyuanDestroy = dialog.destroy.bind(dialog) as (destroyOptions?: Record<string, unknown>) => void;
   dialog.destroy = (destroyOptions?: Record<string, unknown>): void => {
@@ -305,7 +318,8 @@ export function openCustomDialog(options: CustomDialogOptions): CustomDialogHand
 
 // --- Dialogue d'entrée et dialogue de confirmation (copies de ceux de SiYuan) -------------------------------------
 
-const INPUT_WIDTH = "520px";
+/** 520px sur un grand écran, 94vw sur un téléphone étroit (E4b). */
+const INPUT_WIDTH = "min(520px, 94vw)";
 
 /** Squelette de `openInputDialog` (app/src/dialog/inputDialog.ts, 3.8.9), sans donnée : valeur et libellés sont posés en DOM. */
 const INPUT_CONTENT =
@@ -327,7 +341,7 @@ function checkDialogKey(dataKey: string): void {
  */
 export function openInputDialog(options: InputDialogOptions): InputDialogHandle {
   const width = options.width ?? INPUT_WIDTH;
-  if (!/^\d{1,4}px$/.test(width)) throw new TypeError(`Largeur de dialogue refusée : « ${width} » (attendu : 520px)`);
+  if (!CSS_SIZE.test(width)) throw new TypeError(`Largeur de dialogue refusée : « ${width} » (attendu : 520px ou min(520px, 94vw))`);
   checkDialogKey(options.dataKey);
   let closing = false;
   let closed = false;
@@ -341,6 +355,7 @@ export function openInputDialog(options: InputDialogOptions): InputDialogHandle 
       options.onDestroyed?.();
     },
   });
+  markNativeDialog(dialog);
   const close = (): void => {
     if (closing) return;
     closing = true;
@@ -416,6 +431,7 @@ export function openConfirmDialog(options: ConfirmDialogOptions): ConfirmDialogH
       }
     },
   });
+  markNativeDialog(dialog);
   const close = (): void => {
     if (closing) return;
     closing = true;
@@ -468,10 +484,9 @@ export function openConfirmDialog(options: ConfirmDialogOptions): ConfirmDialogH
 const FLOATING_WIDTH = "80vw";
 const FLOATING_HEIGHT = "90vh";
 const FLOATING_POSITION_ID = "docseeker-search";
-/** Plein écran (mobile) : `vh` transmis à SiYuan, puis `dvh` posé sur le conteneur (un moteur qui ne le connaît pas garde le `vh`). */
+/** Plein écran (mobile) : `vh` transmis à SiYuan ; `dvh` et le clavier sont réglés par la feuille de style (`.docseeker-fullscreen`). */
 const FULLSCREEN_WIDTH = "100vw";
 const FULLSCREEN_HEIGHT = "100vh";
-const FULLSCREEN_DYNAMIC_HEIGHT = "100dvh";
 
 /** Squelette statique : aucun pied (ni Annuler ni Confirmer), un seul conteneur que l'appelant remplit en DOM. */
 const FLOATING_CONTENT = '<div class="docseeker-floating-body"></div>';
@@ -490,6 +505,8 @@ export function openFloatingDialog(options: FloatingDialogOptions): FloatingDial
   let closing = false;
   let closed = false;
   let noFocus = false;
+  // Suivi du clavier mobile (plein écran seulement) : démarré après la création du conteneur, arrêté à la destruction.
+  let stopViewportTracking: () => void = () => undefined;
   const dialog: Dialog = new Dialog({
     title: toHtmlText(options.title),
     content: FLOATING_CONTENT,
@@ -513,6 +530,7 @@ export function openFloatingDialog(options: FloatingDialogOptions): FloatingDial
       closing = true;
       noFocus = destroyOptions?.["focus"] === "false";
       try {
+        stopViewportTracking(); // même chemin que la croix, l'Échap global et le voile
         options.onClosing?.({ focus: !noFocus });
       } finally {
         siyuanDestroy(destroyOptions);
@@ -529,18 +547,34 @@ export function openFloatingDialog(options: FloatingDialogOptions): FloatingDial
     if (fullscreen) {
       const container = dialog.element.querySelector<HTMLElement>(".b3-dialog__container");
       if (!container) throw new Error("Conteneur de fenêtre flottante introuvable");
-      // Le CSS natif plafonne le conteneur : on lève les plafonds. L'assignation `dvh` est ignorée par un moteur qui ne la connaît pas.
+      // Le CSS natif plafonne la largeur : on la lève. La HAUTEUR n'est jamais posée en ligne (elle l'emporterait sur la feuille) :
+      // la classe ci-dessous la règle, repli vh -> dvh -> `--docseeker-vvh` (clavier ouvert).
       container.style.maxWidth = FULLSCREEN_WIDTH;
-      // Ordre voulu : `vh` d'abord (valeur de repli), puis `dvh`. Un moteur qui ne connaît pas `dvh` rejette la 2e assignation et garde
-      // la 1re ; un moteur qui le connaît retient `dvh` (hauteur utile, sans la barre d'adresse mobile).
-      container.style.maxHeight = FULLSCREEN_HEIGHT;
-      container.style.maxHeight = FULLSCREEN_DYNAMIC_HEIGHT;
-      container.style.height = FULLSCREEN_DYNAMIC_HEIGHT;
+      // SiYuan recopie l'option `height` en style EN LIGNE, qui l'emporterait sur la feuille : on l'efface pour laisser la classe régler.
+      container.style.removeProperty("height");
+      container.style.removeProperty("max-height");
+      ensureSearchStyle(dialog.element.ownerDocument); // la feuille porte la hauteur : elle doit exister même avant le montage de la vue
+      container.classList.add("docseeker-fullscreen");
+      stopViewportTracking = trackVisualViewport(dialog.element.ownerDocument.defaultView ?? window, container);
     }
     const body = dialog.element.querySelector<HTMLElement>(".docseeker-floating-body");
     if (!body) throw new Error("Squelette de fenêtre flottante introuvable");
     options.build(body);
+    if (fullscreen && options.closeLabel) {
+      // La croix native est petite au doigt : barre basse de 48 px, après la vue, qui ferme comme la croix.
+      body.classList.add("docseeker-floating-body--fullscreen");
+      const bar = body.ownerDocument.createElement("div");
+      bar.className = "docseeker-floating-bar";
+      const closeButton = body.ownerDocument.createElement("button");
+      closeButton.type = "button";
+      closeButton.className = "b3-button docseeker-floating-close";
+      closeButton.textContent = options.closeLabel;
+      closeButton.addEventListener("click", () => close());
+      bar.appendChild(closeButton);
+      body.appendChild(bar);
+    }
   } catch (error) {
+    stopViewportTracking();
     close(); // pas de fenêtre vide laissée à l'écran
     throw error;
   }

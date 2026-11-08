@@ -171,6 +171,22 @@ describe("mountSearchView", () => {
     expect(el.textContent).not.toContain("a.pdf");
   });
 
+  it("E4b : le chemin complet est aussi en texte visible (masqué par le CSS hors tactile), sans HTML interprété", () => {
+    mount();
+    const d = { ...doc("a", [1]), path: "/x/<img src=x onerror=alert(1)>/a.pdf" };
+    update(results([d]));
+    const full = host.querySelector<HTMLElement>(".docseeker-doc-fullpath")!;
+    expect(full.textContent).toBe("/x/<img src=x onerror=alert(1)>/a.pdf");
+    expect(full.querySelector("img")).toBeNull();
+    expect(full.hidden).toBe(false);
+  });
+
+  it("E4b : le chemin complet est masqué quand le PDF n'a pas de dossier", () => {
+    mount();
+    update(results([{ ...doc("a", [1]), path: "a.pdf" }]));
+    expect(host.querySelector<HTMLElement>(".docseeker-doc-fullpath")!.hidden).toBe(true);
+  });
+
   it("n'interprète pas le HTML d'un chemin", () => {
     mount();
     const d = { ...doc("a", [1]), path: "/x/<img src=x onerror=alert(1)>/a.pdf" };
@@ -274,7 +290,7 @@ describe("mountSearchView", () => {
     expect(items).toHaveLength(2);
     expect(items[1]!.textContent).toContain("Titre b");
     expect(items[1]!.textContent).toContain("/pdf/");
-    expect(items[1]!.textContent).not.toContain("b.pdf");
+    expect(items[1]!.querySelector(".docseeker-doc-path")!.textContent).not.toContain("b.pdf");
   });
 
   it("ajoute 'résultats partiels' quand partial", () => {

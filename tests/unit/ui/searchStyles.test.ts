@@ -64,10 +64,10 @@ describe("SEARCH_CSS", () => {
   });
 
   it("garantit des cibles d'au moins 32px pour les boutons", () => {
-    expect(rulesFor(".docseeker-open-settings").join(" ")).toMatch(/min-height:\s*32px/);
-    expect(rulesFor(".docseeker-card").join(" ")).toMatch(/min-height:\s*32px/);
-    expect(rulesFor(".docseeker-more").join(" ")).toMatch(/min-height:\s*32px/);
-    expect(rulesFor(".docseeker-less").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-open-settings").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+    expect(rulesFor(".docseeker-card").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+    expect(rulesFor(".docseeker-more").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+    expect(rulesFor(".docseeker-less").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
   });
 
   it("n'a plus de règle pour l'ancienne section « Avancé »", () => {
@@ -107,7 +107,7 @@ describe("SEARCH_CSS", () => {
   });
 
   it("garantit des cibles d'au moins 32px pour les boutons d'action des paramètres", () => {
-    expect(rulesFor(".docseeker-action").join(" ")).toMatch(/min-height:\s*32px/);
+    expect(rulesFor(".docseeker-action").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
   });
 
   it("masque réellement les boutons de dépliage hidden", () => {
@@ -161,8 +161,8 @@ describe("SEARCH_CSS", () => {
       const rule = rulesFor(BTN).join(" ");
       expect(rule).toMatch(/background:\s*transparent/);
       expect(rule).toMatch(/border:\s*0|border:\s*none/);
-      expect(rule).toMatch(/min-height:\s*32px/);
-      expect(rule).toMatch(/min-width:\s*32px/);
+      expect(rule).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+      expect(rule).toMatch(/min-width:\s*var\(--docseeker-hit\)/);
       expect(rule).toContain("justify-content: center");
     });
 
@@ -240,7 +240,7 @@ describe("SEARCH_CSS", () => {
       const rule = rulesFor(".docseeker-filter-field input").join(" ");
       expect(rule).toContain("width: 100%");
       expect(rule).toContain("box-sizing: border-box");
-      expect(rule).toMatch(/min-height:\s*32px/);
+      expect(rule).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
       expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
       expect(rulesFor(".docseeker-filter-field input:focus-visible").join(" ")).toContain(FOCUS);
     });
@@ -253,7 +253,7 @@ describe("SEARCH_CSS", () => {
 
     it("boutons de réinitialisation : 32 px, focus visible, aria-disabled estompé", () => {
       for (const sel of [".docseeker-filter-reset", ".docseeker-reset-filters"]) {
-        expect(rulesFor(sel).join(" "), sel).toMatch(/min-height:\s*32px/);
+        expect(rulesFor(sel).join(" "), sel).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
         expect(rulesFor(`${sel}:focus-visible`).join(" "), sel).toContain(FOCUS);
       }
       expect(rulesFor('.docseeker-filter-reset[aria-disabled="true"]').join(" ")).toContain("cursor: not-allowed");
@@ -274,7 +274,7 @@ describe("SEARCH_CSS", () => {
       expect(rulesFor(".docseeker-list--flat").join(" ")).toContain("flex-wrap: wrap");
       expect(rulesFor(".docseeker-card-title").join(" ")).toMatch(/overflow-wrap:\s*anywhere|text-overflow/);
       expect(rulesFor(".docseeker-flat-item").join(" ")).toContain("min-width: 0");
-      expect(rulesFor(".docseeker-flat-more").join(" ")).toMatch(/min-height:\s*32px/);
+      expect(rulesFor(".docseeker-flat-more").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
       expect(rulesFor(".docseeker-flat-more:focus-visible").join(" ")).toContain(FOCUS);
       expect(rulesFor(".docseeker-flat-more[hidden]").join(" ")).toContain("display: none");
       expect(rulesFor(".docseeker-flat-footer[hidden]").join(" ")).toContain("display: none");
@@ -295,11 +295,11 @@ describe("SEARCH_CSS : champ de recherche, icône d'historique et croix (10f)", 
     const icon = rulesFor(ICON).join(" ");
     expect(icon).toMatch(/position:\s*absolute/);
     expect(icon).toMatch(/left:\s*0/);
-    expect(icon).toMatch(/min-width:\s*32px/);
+    expect(icon).toMatch(/min-width:\s*var\(--docseeker-hit\)/);
     const clear = rulesFor(CLEAR).join(" ");
     expect(clear).toMatch(/position:\s*absolute/);
     expect(clear).toMatch(/right:\s*0/);
-    expect(clear).toMatch(/min-width:\s*32px/);
+    expect(clear).toMatch(/min-width:\s*var\(--docseeker-hit\)/);
     for (const rule of [icon, clear]) {
       expect(rule).toMatch(/background:\s*transparent/);
       expect(rule).toMatch(/border:\s*0|border:\s*none/);
@@ -311,7 +311,7 @@ describe("SEARCH_CSS : champ de recherche, icône d'historique et croix (10f)", 
   it("le champ laisse la place aux deux icônes (padding gauche et droit) sans largeur fixe", () => {
     const rule = rulesFor('.docseeker-search-box input[type="search"]').join(" ");
     expect(rule).toMatch(/padding-left:\s*\d+px/);
-    expect(rule).toMatch(/padding-right:\s*\d+px/);
+    expect(rule).toMatch(/padding-right:\s*(\d+px|var\(--docseeker-hit\))/);
     expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
   });
 

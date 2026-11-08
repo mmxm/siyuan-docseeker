@@ -172,6 +172,16 @@ describe("settingsPanel : libellé du bouton de diagnostic", () => {
 });
 
 describe("settingsPanel : style", () => {
+  it("E4b : les blocs de texte (<pre>) portent une classe CSS, sans style en ligne", () => {
+    const panel = createSettingsPanel(h.deps);
+    const pres = [...panel.reindex.querySelectorAll("pre")];
+    expect(pres.length).toBeGreaterThan(0);
+    for (const pre of pres) {
+      expect(pre.classList.contains("docseeker-text-block")).toBe(true);
+      expect(pre.getAttribute("style")).toBeNull();
+    }
+  });
+
   it("injecte la feuille de style (le panneau n'a pas l'onglet pour le faire)", () => {
     document.getElementById(SEARCH_STYLE_ID)?.remove();
     const panel = createSettingsPanel(h.deps);

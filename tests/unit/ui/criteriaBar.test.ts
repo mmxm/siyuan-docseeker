@@ -329,7 +329,7 @@ describe("dialogue « Enregistrer les critères »", () => {
     saveBtn(s.header).click();
     const dialog = inputDialog()!;
     expect(dialog.querySelector(".b3-dialog__header")!.textContent).toBe("Enregistrer les critères");
-    expect(dialog.querySelector<HTMLElement>(".b3-dialog__container")!.style.width).toBe("520px");
+    expect(dialog.querySelector<HTMLElement>(".b3-dialog__container")!.style.width).toBe("min(520px, 94vw)");
     expect(field().value).toBe("");
     expect(field().placeholder).toBe("Remarques");
     expect(dialog.querySelector(".b3-button--cancel")!.textContent).toBe("Annuler");

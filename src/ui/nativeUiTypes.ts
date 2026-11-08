@@ -27,7 +27,7 @@ export interface MenuAnchor {
 export interface NativeDialogOptions {
   /** Texte brut ; l'adaptateur l'échappe (SiYuan l'insère comme HTML). */
   readonly title: string;
-  /** « 420px » exactement ce format. */
+  /** « 420px » ou « min(420px, 94vw) » (px, vw, vh, dvw, dvh). */
   readonly width?: string;
   /** Remplit le conteneur vide du dialogue (DOM seulement, jamais de chaîne HTML). */
   build(container: HTMLElement): void;
@@ -70,6 +70,11 @@ export interface FloatingDialogOptions {
    * sans position mémorisée (mobile).
    */
   readonly layout?: "window" | "fullscreen";
+  /**
+   * Libellé (texte brut) de la barre basse « Fermer » de 48 px, ajoutée après la vue en plein écran seulement (la croix native est
+   * petite au doigt). Absent ou vide : pas de barre (le visionneur a la sienne). Sans effet en fenêtre.
+   */
+  readonly closeLabel?: string;
   /** Remplit le conteneur vide (DOM seulement, jamais de chaîne HTML). */
   build(container: HTMLElement): void;
   /**
@@ -102,7 +107,7 @@ export interface FloatingDialogHandle {
 export interface CustomDialogOptions {
   /** Texte brut ; l'adaptateur l'échappe et le place dans le gabarit de titre natif. */
   readonly title: string;
-  /** « 50vw », « 420px » : nombre de 1 à 4 chiffres suivi de px, vw ou vh. */
+  /** « 50vw », « 420px » : nombre de 1 à 4 chiffres suivi de px, vw, vh, dvw ou dvh, ou « min(a, b) » de deux telles tailles. */
   readonly width: string;
   readonly height: string;
   /** Posé en `data-key` sur la racine du dialogue (a-z, 0-9, tiret). */

@@ -39,7 +39,7 @@ const button = (selector: string): HTMLButtonElement => last().element.querySele
 describe("openInputDialog : structure native", () => {
   it("largeur 520px par défaut, data-key, titre en texte", () => {
     openInputDialog(inputOptions());
-    expect(last().options.width).toBe("520px");
+    expect(last().options.width).toBe("min(520px, 94vw)");
     expect(last().element.getAttribute("data-key")).toBe("dialog-savecriterion");
     expect(last().element.querySelector(".b3-dialog__header")!.textContent).toBe("Enregistrer les critères");
   });
@@ -164,7 +164,7 @@ function confirmOptions(over: Partial<ConfirmDialogOptions> = {}): ConfirmDialog
 describe("openConfirmDialog : structure native", () => {
   it("520px, data-key dialog-confirm, titre", () => {
     openConfirmDialog(confirmOptions());
-    expect(last().options.width).toBe("520px");
+    expect(last().options.width).toBe("min(520px, 94vw)");
     expect(last().element.getAttribute("data-key")).toBe("dialog-confirm");
     expect(last().element.querySelector(".b3-dialog__header")!.textContent).toBe("Confirmer");
   });

@@ -39,6 +39,8 @@ export interface FloatingSearchDeps {
   readonly openDialog: OpenFloatingDialog;
   /** Titre du dialogue (texte brut, échappé par l'adaptateur). */
   readonly title: string;
+  /** Libellé de la barre basse « Fermer » (plein écran mobile) ; absent : pas de barre. */
+  readonly closeLabel?: string;
   readonly session: SearchSessionStore;
   /** Monte la vue de recherche dans le conteneur du dialogue. */
   mount(host: HTMLElement, options: FloatingMountOptions): FloatingSearchView;
@@ -152,6 +154,7 @@ export function createFloatingSearch(deps: FloatingSearchDeps): FloatingSearch {
     try {
       inst.handle = deps.openDialog({
         title: deps.title,
+        ...(deps.closeLabel ? { closeLabel: deps.closeLabel } : {}),
         build: (container) => {
           inst.view = deps.mount(container, {
             initial: deps.session.get(),

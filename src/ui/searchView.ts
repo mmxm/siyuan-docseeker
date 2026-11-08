@@ -503,6 +503,11 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     path.appendChild(pathText);
     path.hidden = folder === "";
     path.title = result.path; // chemin complet en infobulle
+    // Sans souris pas d'infobulle : le chemin complet est aussi du texte, affiché par la feuille de style sous `pointer: coarse`.
+    const fullPath = doc.createElement("div");
+    fullPath.className = "docseeker-doc-fullpath";
+    fullPath.textContent = result.path;
+    fullPath.hidden = folder === "";
     const cardsEl = doc.createElement("div");
     cardsEl.className = "docseeker-cards";
     cardsEl.id = nextUiId("docseeker-cards");
@@ -537,7 +542,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
 
     const wanted = Math.min(Math.max(expanded.get(result.docId) ?? MAX_CARDS_PER_DOC, MAX_CARDS_PER_DOC), total);
     for (const { page } of result.pages.slice(0, wanted)) addCard(page);
-    li.append(title, path, cardsEl);
+    li.append(title, path, fullPath, cardsEl);
     if (total <= MAX_CARDS_PER_DOC) {
       expanded.delete(result.docId); // état périmé d'un document qui avait été déplié puis a rétréci
       return entry;

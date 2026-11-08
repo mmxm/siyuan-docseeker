@@ -462,7 +462,7 @@ describe("« Filtres » : dialogue", () => {
     expect(fakes.openDialog).toHaveBeenCalledTimes(1);
     const o = fakes.lastDialog().options;
     expect(o.title).toBe("Filtres");
-    expect(o.width).toBe("420px");
+    expect(o.width).toBe("min(420px, 94vw)");
     expect(o.labels).toEqual({ cancel: "Annuler", confirm: "Confirmer" });
     expect(`${o.title}${o.labels.cancel}${o.labels.confirm}`).not.toMatch(/[<>&]/);
   });

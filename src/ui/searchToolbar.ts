@@ -109,7 +109,8 @@ export function formatLocalDate(ms: number): string {
 
 
 type FieldKey = "min" | "max" | "date";
-const DIALOG_WIDTH = "420px";
+/** 420px sur un grand écran, 94vw sur un téléphone étroit (E4b). */
+const DIALOG_WIDTH = "min(420px, 94vw)";
 
 /** Filtres sans portée de documents (la clé disparaît). */
 function withoutScope(filters: ResultFilters): ResultFilters {

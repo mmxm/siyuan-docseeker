@@ -146,8 +146,7 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   /** Bloc de texte ; `live` en fait une région d'état annoncée poliment, `label` lui donne un nom. */
   const textBlock = (options: { live: boolean; label?: string; role?: "alert" }): HTMLPreElement => {
     const pre = doc.createElement("pre");
-    pre.style.whiteSpace = "pre-wrap";
-    pre.style.userSelect = "text";
+    pre.className = "docseeker-text-block"; // retour à la ligne et sélection : voir la feuille de style
     if (options.label) pre.setAttribute("aria-label", options.label);
     if (options.live) {
       pre.setAttribute("role", "status");

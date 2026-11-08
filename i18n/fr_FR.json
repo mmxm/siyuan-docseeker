@@ -166,6 +166,7 @@
   "traceKeysFailed": "Trace impossible : voir le journal",
   "traceKeysNoKey": "Aucune touche reçue en 30 secondes : cliquez dans l'onglet de recherche visible puis recommencez",
   "floatingTitle": "Recherche dans les PDF",
+  "floatingClose": "Fermer",
   "openInNewTab": "Ouvrir dans un nouvel onglet",
   "openMode": "Ouverture de la recherche",
   "openModeDesc": "Choisit où s'ouvre la recherche dans les PDF : dans un onglet, ou dans une fenêtre flottante comme la recherche de SiYuan.",

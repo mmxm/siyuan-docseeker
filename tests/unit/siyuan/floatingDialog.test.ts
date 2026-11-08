@@ -262,9 +262,9 @@ describe("openFloatingDialog : disposition plein écran (mobile)", () => {
     openFloatingDialog({ title: "T", layout: "fullscreen", build: () => undefined });
     const container = last().element.querySelector<HTMLElement>(".b3-dialog__container")!;
     expect(container.style.width).toBe("100vw");
-    expect(container.style.height).toBe("100dvh");
+    expect(container.style.height).toBe(""); // posée par la feuille (vh -> dvh -> --docseeker-vvh), pas en ligne
     expect(container.style.maxWidth).toBe("100vw");
-    expect(container.style.maxHeight).toBe("100dvh");
+    expect(container.style.maxHeight).toBe("");
   });
 
   it("window (explicite) et défaut : strictement le comportement du bureau", () => {
