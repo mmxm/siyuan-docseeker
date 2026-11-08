@@ -1,5 +1,8 @@
 /** Shared thumbnail constants, ported from crop-worker.js (mirror of search-core constants.rs). */
 export const CROP_RENDER_SCALE = 1.5;
+/** Cache de vignettes du bureau : entrées et octets au plus. */
+export const THUMBNAIL_CACHE_MAX_ENTRIES = 2000;
+export const THUMBNAIL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_CROP_WIDTH = 300;
 export const DEFAULT_CROP_HEIGHT = 120;
 export const GOODNOTES_YELLOW_CSS = "rgba(255, 226, 0, 0.45)";
@@ -27,3 +30,7 @@ export const ASSUMED_PAGE_HEIGHT_PT = 842;
 export const FONT_SIZE_BONUS_THRESHOLD = 10;
 export const FONT_SIZE_BONUS_MULTIPLIER = 25;
 export const FONT_SIZE_BONUS_MAX = 400;
+
+/** Rendu PDF : documents ouverts en même temps et pages rendues en parallèle (profil bureau). */
+export const DEFAULT_MAX_OPEN_DOCUMENTS = 3;
+export const DEFAULT_RENDER_CONCURRENCY = 2;

@@ -1,7 +1,6 @@
+import { DEFAULT_MAX_OPEN_DOCUMENTS, DEFAULT_RENDER_CONCURRENCY } from "../core/constants";
 import type { CropBounds } from "../core/crop";
 
-const DEFAULT_MAX_OPEN_DOCUMENTS = 3;
-const DEFAULT_CONCURRENCY = 2;
 const DEFAULT_MIME_TYPE = "image/webp";
 const DEFAULT_QUALITY = 0.8;
 const FALLBACK_MIME_TYPE = "image/png";
@@ -173,7 +172,7 @@ interface QueueItem {
 
 export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
   const maxOpen = Math.max(1, deps.maxOpenDocuments ?? DEFAULT_MAX_OPEN_DOCUMENTS);
-  const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_CONCURRENCY);
+  const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_RENDER_CONCURRENCY);
   const mimeType = deps.mimeType ?? DEFAULT_MIME_TYPE;
   const quality = deps.quality ?? DEFAULT_QUALITY;
   const disposal = new AbortController();

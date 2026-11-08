@@ -18,6 +18,7 @@ import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
 import { IndexUnavailableError, NotFoundError, type KernelApi } from "./siyuan/kernelApi";
 import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
+import { THUMBNAIL_CACHE_MAX_BYTES, THUMBNAIL_CACHE_MAX_ENTRIES } from "./core/constants";
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
@@ -28,8 +29,6 @@ import { DEFAULT_STRINGS, mountSearchView } from "./ui/searchView";
 
 export { DSX_SUFFIX, REFRESH_DEBOUNCE_MS } from "./search/sharedIndex";
 const THUMBNAIL_DOC_VERSION = 2; // 2 : cadrage par termes distincts (le recadrage mis en cache change)
-const CACHE_MAX_ENTRIES = 2000;
-const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const MESSAGE_CLASS = "docseeker-message";
 const ERROR_CLASS = "docseeker-error";
 
@@ -369,8 +368,8 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   const cache: ThumbnailCache =
     deps.cache ??
     new IndexedDbThumbnailCache({
-      maxEntries: CACHE_MAX_ENTRIES,
-      maxBytes: CACHE_MAX_BYTES,
+      maxEntries: THUMBNAIL_CACHE_MAX_ENTRIES,
+      maxBytes: THUMBNAIL_CACHE_MAX_BYTES,
       factory: deps.indexedDB,
       onWarn,
     });

@@ -345,7 +345,7 @@ ui/searchView.ts  (via search/searchController.ts)  liste par document, pages d�
 ## 4. Décisions d'architecture et pièges rencontrés
 
 ### Décisions
-- **Cible v1** : SiYuan webapp sur ordinateur (testée en 3.8.9), y compris Docker. Le mobile n'a pas `openTab` pour les plugins (`openTab` y est un « TODO: Mobile » dans l'API de plugin, lu dans le dépôt SiYuan lors du plan : non revérifié ici) : hors v1. L'application de bureau est déclarée (`plugin.json`) mais non testée.
+- **Cible v1** : SiYuan webapp sur ordinateur (testée en 3.8.9), y compris Docker. Le mobile n'a pas `openTab` pour les plugins (`openTab` y est un « TODO: Mobile » dans l'API de plugin, lu dans le dépôt SiYuan lors du plan : non revérifié ici) : hors v1. **Revérifié le 2026-11-08 dans SiYuan v3.8.9 : `openTab` et `addTab` sont bien des stubs sur mobile.** Le chantier mobile (PWA iOS et application) est planifié dans `PLAN_MOBILE.md` (plan validé le 2026-11-08, E0 à E6, non implémenté). L'application de bureau est déclarée (`plugin.json`) mais non testée.
 - **PDF.js** : celui de SiYuan (`window.pdfjsLib`, 6.4.299), non embarqué. Le plugin ne vérifie pas la version à l'exécution (le plan le prévoyait) ; M0 la rapporte seulement.
 - **Surlignage** : calque dessiné par le plugin dans le visualiseur natif, pas la barre de recherche de PDF.js (qui ne gère ni préfixes ni termes non adjacents). Les boîtes sont enregistrées en fractions de page pour être utilisées en pourcentages CSS.
 - **Un `.dsx` par PDF**, nommé `<empreinte>.dsx` (empreinte = chemin et taille, `manifest.ts`). Dans `data/storage/petal/siyuan-docseeker/idx/`, synchronisé par SiYuan.
@@ -576,3 +576,16 @@ Le mode à blanc (`workflow_dispatch` de `release.yml`) construit et vérifie la
 - **MAX_EXPANDED_PAGES** : plafond de 200 pages par document (`src/core/bm25.ts`).
 - **DocSeeker (application d'origine)** : `~/Documents/DocFastExplorer`, backend Rust `search-core`, dont le classement est répliqué.
 - **M0** : diagnostic technique (spike) exécuté dans SiYuan.
+
+### Mobile — E0 (spike), partie bureau, 2026-11-08
+
+Bac à sable SiYuan 3.8.9, manifeste de développement avec `mobile` et `browser-mobile` (hors dépôt), Chrome émulé en 375×812 (UA Android, donc ni WebKit ni iOS réels) :
+- Le noyau charge le plugin pour `browser-mobile` (`loadPetals`) ; l'entrée « Ouvrir la recherche dans les PDF » apparaît dans le menu principal.
+- Un clic sur cette entrée n'ouvre rien et ne produit aucune erreur : échec silencieux, comme prévu (`addTab` renvoie `undefined`, `openTab` est un stub).
+- `window.pdfjsLib` est `undefined` au démarrage. Injecter `pdf.min.mjs?v=6.4.299-siyuan.1` en `<script type=module>` le définit en 22 ms ; avec le worker `pdf.worker.compat.mjs?v=6.4.299-siyuan.2`, un PDF de 3 pages s'ouvre et la page 1 se rend à l'échelle 1,5 en 16 ms (canvas 892×1263). `CompressionStream` existe dans ce Chrome.
+- Non vérifié : tout ce qui dépend de WebKit/iOS (workers module, mémoire, `CompressionStream` dans Safari, clavier, zone sûre), dialogues empilés, réglages, `sharedIndex.load()` sur un gros index, lien `assets/x.pdf?page=N`, comparaison des visionneurs PWA et application.
+- Partie iPhone : en attente de l'accord de l'utilisateur (le noyau jetable n'écoute que sur 127.0.0.1).
+- **iPhone réel (2026-11-08, Safari/PWA, SiYuan 3.8.9, bac à sable) :** l'entrée « Ouvrir la recherche dans les PDF » est présente, mais la toucher ne fait rien. Même échec silencieux que dans l'émulation. Restent à mesurer sur iPhone : fluidité du visionneur PDF de SiYuan, `CompressionStream`, workers module, mémoire.
+
+### Mobile — E1 (profil de plateforme), 2026-11-08
+Fait : `src/platform/frontend.ts` (type `Frontend`, `readFrontend` avec valeur injectée, dégradation vers le bureau avec avertissement) et `src/platform/profile.ts` (profils bureau et mobile, `applySettingsOverride` sans mutation ni écriture). Constantes de rendu et de cache déplacées dans `src/core/constants.ts` (valeurs bureau inchangées). Typecheck vert, 3866 tests verts. Pas encore branché : le câblage (`index.ts`, rendu, cache, réglages) est dans E3. Relectures : ecc:tdd-guide (écrit le code), ecc:typescript-reviewer et ecc:pr-test-analyzer (aucun bloquant, mineurs corrigés).
