@@ -4,6 +4,7 @@ import {
   DEFAULT_MAX_OPEN_DOCUMENTS,
   DEFAULT_RENDER_CONCURRENCY,
   THUMBNAIL_CACHE_MAX_BYTES,
+  PAGE_MATCHES_MAX_BYTES,
   THUMBNAIL_CACHE_MAX_ENTRIES,
 } from "../../../src/core/constants";
 import { FRONTENDS } from "../../../src/platform/frontend";
@@ -30,6 +31,14 @@ describe("desktopProfile", () => {
   it("ne modifie pas les réglages", () => {
     expect(applySettingsOverride(DEFAULT_SETTINGS, desktopProfile())).toEqual(DEFAULT_SETTINGS);
   });
+
+  it("garde les plafonds historiques de correspondances, de décodage et de téléchargement (E3)", () => {
+    const p = desktopProfile();
+    expect(p.pageMatchesLimit).toBe(PAGE_MATCHES_MAX_BYTES);
+    expect(p.pageMatchesLimit).toBe(64 * 1024 * 1024);
+    expect(p.decodeConcurrency).toBe(2);
+    expect(p.disableAutoFetch).toBe(false);
+  });
 });
 
 describe("mobileProfile", () => {
@@ -41,6 +50,13 @@ describe("mobileProfile", () => {
     expect(p.cropScale).toBe(1.0);
     expect(p.thumbnailCache).toEqual({ maxEntries: 500, maxBytes: 16 * 1024 * 1024 });
     expect(p.lazyIndexLoad).toBe(true);
+  });
+
+  it("réduit correspondances, décodage et téléchargement (E3)", () => {
+    const p = mobileProfile();
+    expect(p.pageMatchesLimit).toBe(16 * 1024 * 1024);
+    expect(p.decodeConcurrency).toBe(1);
+    expect(p.disableAutoFetch).toBe(true);
   });
 
   it("surcharge autoIndex et openMode sans muter l'original", () => {

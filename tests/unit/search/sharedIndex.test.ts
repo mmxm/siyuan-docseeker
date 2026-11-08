@@ -402,3 +402,35 @@ describe("createSharedIndex : refreshNow (après un vidage)", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 });
+
+describe("sharedIndex : concurrence de décodage transmise au magasin", () => {
+  async function peakParallel(concurrency: number | undefined): Promise<number> {
+    const files = new Map<string, Uint8Array>(["a", "b", "c", "d", "e"].map((id) => [`${id}.dsx`, bytes(id)]));
+    let running = 0;
+    let peak = 0;
+    const shared = createSharedIndex({
+      store: { list: async () => [...files.keys()], read: async (name) => files.get(name) ?? null },
+      decode: async () => {
+        running++;
+        peak = Math.max(peak, running);
+        await flush(); // minuteries simulées dans ce fichier : on cède par micro-tâches
+        running--;
+        return data(PDF_A);
+      },
+      indexer: { onEvent: () => () => undefined },
+      onWarn: vi.fn(),
+      ...(concurrency === undefined ? {} : { decodeConcurrency: concurrency }),
+    });
+    await shared.start();
+    shared.dispose();
+    return peak;
+  }
+
+  it("1 (profil mobile) : décodage séquentiel", async () => {
+    expect(await peakParallel(1)).toBe(1);
+  });
+
+  it("absent (bureau) : défaut du magasin, 2 en parallèle", async () => {
+    expect(await peakParallel(undefined)).toBe(2);
+  });
+});

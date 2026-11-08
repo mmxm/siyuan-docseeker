@@ -419,3 +419,54 @@ describe("createSearchStore", () => {
     expect(s.getIndex().segments[0]?.pages).toBe(decoded.postings.pages);
   });
 });
+
+describe("concurrence de décodage (E3)", () => {
+  async function maxParallel(concurrency: number | undefined): Promise<number> {
+    const h = harness(["a", "b", "c", "d", "e"]);
+    let running = 0;
+    let peak = 0;
+    const inner = h.deps.decode;
+    const store = createSearchStore({
+      ...h.deps,
+      ...(concurrency === undefined ? {} : { decodeConcurrency: concurrency }),
+      decode: async (b) => {
+        running++;
+        peak = Math.max(peak, running);
+        await new Promise((r) => setTimeout(r, 1));
+        const out = await inner(b);
+        running--;
+        return out;
+      },
+    });
+    await store.load();
+    return peak;
+  }
+
+  it("défaut : 2 décodages en parallèle (bureau inchangé)", async () => {
+    expect(await maxParallel(undefined)).toBe(2);
+  });
+
+  it("1 : décodage séquentiel", async () => {
+    expect(await maxParallel(1)).toBe(1);
+  });
+
+  it("valeur invalide (0, NaN, négative) : au moins 1, jamais zéro travailleur", async () => {
+    for (const bad of [0, Number.NaN, -3]) expect(await maxParallel(bad)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("valeur invalide : avertissement via onWarn (pas de repli silencieux), valeur valide ou absente : aucun", async () => {
+    for (const bad of [0, Number.NaN, -3, Number.POSITIVE_INFINITY]) {
+      const h = harness(["a"]);
+      const onWarn = vi.fn();
+      createSearchStore({ ...h.deps, onWarn, decodeConcurrency: bad });
+      expect(onWarn, String(bad)).toHaveBeenCalledTimes(1);
+      expect(String(onWarn.mock.calls[0]?.[0])).toContain("decodeConcurrency");
+    }
+    for (const good of [undefined, 1, 2, 4]) {
+      const h = harness(["a"]);
+      const onWarn = vi.fn();
+      createSearchStore({ ...h.deps, onWarn, ...(good === undefined ? {} : { decodeConcurrency: good }) });
+      expect(onWarn, String(good)).not.toHaveBeenCalled();
+    }
+  });
+});

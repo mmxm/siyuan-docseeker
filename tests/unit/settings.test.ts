@@ -582,3 +582,46 @@ describe("mode d'ouverture de la recherche (openMode, J10 10d)", () => {
     expect(store.get()).toMatchObject({ autoIndex: false, intervalMinutes: 60, openMode: "dialog" });
   });
 });
+
+describe("createSettings en lecture seule (mobile : le dossier du plugin est synchronisé)", () => {
+  const make = (readOnly: boolean, stored: unknown = undefined) => {
+    const save = vi.fn(async () => undefined);
+    const store = createSettings({ load: async () => stored, save, onWarn: vi.fn(), readOnly: () => readOnly });
+    return { store, save };
+  };
+
+  it("update() change la mémoire, notifie, mais n'appelle jamais save", async () => {
+    const { store, save } = make(true);
+    await store.load();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    await store.update({ intervalMinutes: 15, history: ["pco"], groupByDocument: false });
+    expect(store.get()).toMatchObject({ intervalMinutes: 15, history: ["pco"], groupByDocument: false });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("saveCriteria() et deleteCriteria() restent en mémoire, sans save", async () => {
+    const { store, save } = make(true);
+    await store.load();
+    const criteria = { name: "a", query: "pco", filters: { includeSubfolders: true, nameContains: "" }, sort: { key: "relevance", direction: "desc" }, groupByDocument: true } as const;
+    await store.saveCriteria(criteria);
+    expect(store.get().savedCriteria.map((c) => c.name)).toEqual(["a"]);
+    await expect(store.deleteCriteria("a")).resolves.toBe(true);
+    expect(store.get().savedCriteria).toEqual([]);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("réglages corrompus au chargement : pas de réécriture du fichier", async () => {
+    const { store, save } = make(true, { autoIndex: "oui" });
+    await store.load();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("bureau (readOnly faux) : save appelé comme avant", async () => {
+    const { store, save } = make(false);
+    await store.load();
+    await store.update({ intervalMinutes: 15 });
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+});

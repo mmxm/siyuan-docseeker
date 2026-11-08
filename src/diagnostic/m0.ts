@@ -46,6 +46,8 @@ export interface M0Deps {
   readonly now: () => number;
   readonly petalDir: string;
   readonly payloadBytes?: number;
+  /** Lecture seule (mobile) : le dossier du plugin est synchronisé, le test d'écriture/lecture n'écrit donc rien. */
+  readonly readOnly?: boolean;
 }
 
 export const DEFAULT_PAYLOAD_BYTES = 50 * 1024 * 1024;
@@ -150,6 +152,7 @@ async function probeRoundtrip(deps: M0Deps, path: string, size: number): Promise
 }
 
 async function checkRoundtrip(deps: M0Deps): Promise<Outcome> {
+  if (deps.readOnly === true) return skip("écriture ignorée : mode lecture seule (le dossier du plugin est synchronisé)");
   const path = `${deps.petalDir}/m0-probe.bin`;
   let outcome: Outcome;
   let removalError: string | undefined;

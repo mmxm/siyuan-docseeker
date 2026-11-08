@@ -4,6 +4,7 @@
  * L'annulation d'un demandeur n'interrompt jamais le travail partagé.
  */
 import { decodePageMatches, decodePagesMatches, type PageMatch } from "../core/codec/decode";
+import { PAGE_MATCHES_MAX_BYTES } from "../core/constants";
 import { tokenize } from "../core/normalize";
 import { makeTermIndexesOf, makeTermMatcher } from "./queryMatch";
 
@@ -36,7 +37,6 @@ export interface PageMatchService {
   invalidate(docId: string): void;
 }
 
-const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 3;
 const DEFAULT_MAX_PAGES = 200;
 
@@ -78,7 +78,7 @@ export function createPageMatchService(options: PageMatchServiceOptions): PageMa
           for (const page of new Set(pages)) out.set(page, await decode(bytes, page, wanted, limits, termIndexOf));
           return out;
         });
-  const maxBytes = options.maxBytesFiles ?? DEFAULT_MAX_BYTES;
+  const maxBytes = options.maxBytesFiles ?? PAGE_MATCHES_MAX_BYTES;
   const maxFiles = DEFAULT_MAX_FILES;
   const maxPages = Math.max(1, options.maxPages ?? DEFAULT_MAX_PAGES);
 

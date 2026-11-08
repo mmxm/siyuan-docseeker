@@ -84,6 +84,11 @@ export interface SettingsPanelDeps {
   readonly showMessage: (message: string, timeoutMs: number, type: MessageType) => void;
   readonly confirm: (title: string, text: string, onConfirm: () => void, onCancel?: () => void) => void;
   readonly doc?: Document;
+  /**
+   * Lecture seule (mobile) : « Réindexer » et « Vider l'index » n'agissent pas et l'expliquent par une information (pas une erreur).
+   * Le masquage visuel des boutons est prévu plus tard.
+   */
+  readonly readOnly?: boolean;
 }
 
 export interface SettingsPanel {
@@ -194,6 +199,10 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   // pour une passe demandée par le bouton.
   let manualRun = false;
   const indexButton = guardedButton("docseeker-index", t("reindex"), indexStatus, async () => {
+    if (deps.readOnly === true) {
+      indexStatus.textContent = t("readOnlyNotice"); // information : refus normal, ni erreur ni journal
+      return;
+    }
     if (clearing.active()) {
       indexStatus.textContent = t("reindexBlockedByClear");
       return;
@@ -291,6 +300,11 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   const unsubscribeClearing = clearing.subscribe(syncClearing);
 
   clearButton.addEventListener("click", () => {
+    // Lecture seule : testé avant tout (confirmation comprise) ; une information, pas une erreur.
+    if (deps.readOnly === true) {
+      report(t("readOnlyNotice"), "info");
+      return;
+    }
     if (clearing.active()) {
       clearStatus.textContent = t("alreadyRunning");
       return;

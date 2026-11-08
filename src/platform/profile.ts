@@ -1,7 +1,9 @@
 import {
   CROP_RENDER_SCALE,
+  DEFAULT_DECODE_CONCURRENCY,
   DEFAULT_MAX_OPEN_DOCUMENTS,
   DEFAULT_RENDER_CONCURRENCY,
+  PAGE_MATCHES_MAX_BYTES,
   THUMBNAIL_CACHE_MAX_BYTES,
   THUMBNAIL_CACHE_MAX_ENTRIES,
 } from "../core/constants";
@@ -16,6 +18,12 @@ export interface PlatformProfile {
   readonly maxOpenDocuments: number;
   readonly cropScale: number;
   readonly thumbnailCache: { readonly maxEntries: number; readonly maxBytes: number };
+  /** Plafond cumulé d'octets des fichiers d'index gardés en mémoire pour les correspondances par page. */
+  readonly pageMatchesLimit: number;
+  /** Décodages d'index en parallèle au chargement. */
+  readonly decodeConcurrency: number;
+  /** Ne pas télécharger le PDF en entier : PDF.js ne lit que les plages utiles (mobile). */
+  readonly disableAutoFetch: boolean;
   /** Index chargé à la première ouverture de la recherche plutôt qu'au démarrage. */
   readonly lazyIndexLoad: boolean;
   /** Valeurs imposées à la lecture des réglages (jamais écrites dans `settings.json`, qui est synchronisé). */
@@ -29,6 +37,9 @@ export function desktopProfile(): PlatformProfile {
     maxOpenDocuments: DEFAULT_MAX_OPEN_DOCUMENTS,
     cropScale: CROP_RENDER_SCALE,
     thumbnailCache: { maxEntries: THUMBNAIL_CACHE_MAX_ENTRIES, maxBytes: THUMBNAIL_CACHE_MAX_BYTES },
+    pageMatchesLimit: PAGE_MATCHES_MAX_BYTES,
+    decodeConcurrency: DEFAULT_DECODE_CONCURRENCY,
+    disableAutoFetch: false,
     lazyIndexLoad: false,
     settingsOverride: {},
   };
@@ -41,6 +52,9 @@ export function mobileProfile(): PlatformProfile {
     maxOpenDocuments: 1,
     cropScale: 1.0,
     thumbnailCache: { maxEntries: 500, maxBytes: 16 * 1024 * 1024 },
+    pageMatchesLimit: 16 * 1024 * 1024,
+    decodeConcurrency: 1,
+    disableAutoFetch: true,
     lazyIndexLoad: true,
     settingsOverride: { autoIndex: false, openMode: "dialog" },
   };

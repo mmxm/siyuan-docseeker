@@ -182,6 +182,29 @@ describe("runM0Diagnostic", () => {
     expect(store.size).toBe(0);
   });
 
+  it("roundtrip en lecture seule : ni putFile ni removeFile, test ignoré avec un détail clair, ok inchangé", async () => {
+    const { deps, store, removeFile } = makeDeps();
+    const putSpy = vi.spyOn(deps.kernel, "putFile");
+    const report = await runM0Diagnostic({ ...deps, readOnly: true });
+    const c = by(report, "roundtrip");
+    expect(c.status).toBe("skip");
+    expect(c.detail).toContain("écriture ignorée : mode lecture seule");
+    expect(putSpy).not.toHaveBeenCalled();
+    expect(removeFile).not.toHaveBeenCalled();
+    expect(store.size).toBe(0);
+    expect(report.ok).toBe(true);
+    expect(report.results.map((r) => r.id)).toEqual(["discovery", "head", "range", "roundtrip", "pdfjs", "worker", "auth"]);
+  });
+
+  it("roundtrip avec readOnly: false : comme le bureau (écrit puis supprime)", async () => {
+    const { deps, removeFile } = makeDeps();
+    const putSpy = vi.spyOn(deps.kernel, "putFile");
+    const c = by(await runM0Diagnostic({ ...deps, readOnly: false }), "roundtrip");
+    expect(c.status).toBe("pass");
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    expect(removeFile).toHaveBeenCalledWith(PROBE);
+  });
+
   it("roundtrip: payload aléatoire (deux exécutions différentes)", async () => {
     const seen: Uint8Array[] = [];
     for (let i = 0; i < 2; i++) {

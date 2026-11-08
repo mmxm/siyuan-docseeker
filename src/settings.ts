@@ -124,6 +124,11 @@ export interface SettingsDeps {
   readonly onWarn: Warn;
   /** Appelé UNE fois, à la lecture initiale, si des critères enregistrés ont été ignorés (message visible, une fois par session). */
   readonly onCriteriaIgnored?: (count: number) => void;
+  /**
+   * Lecture seule (mobile) : `/data/storage/petal/<plugin>/` est synchronisé par SiYuan, toute écriture ferait des allers-retours de
+   * synchronisation avec le bureau. Évalué à chaque écriture ; si vrai, les changements ne vivent qu'en mémoire (session) et `save` n'est jamais appelé.
+   */
+  readonly readOnly?: () => boolean;
 }
 
 export interface SettingsStore {
@@ -197,6 +202,10 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
    * n'efface pas un critère enregistré ou supprimé dans une autre.
    */
   const persist = (mergeCriteria = true): Promise<void> => {
+    if (deps.readOnly?.()) {
+      savedVersion = version; // rien à écrire : la valeur en mémoire fait foi pour la session
+      return Promise.resolve();
+    }
     const task = chain.then(async () => {
       if (savedVersion === version) return;
       const target = version;
@@ -284,7 +293,8 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
   const mutateCriteria = <R>(change: (fresh: readonly SavedCriteria[]) => { next?: SavedCriteria[]; result: R }): Promise<R> => {
     const run = (): Promise<R> => {
       const task = chain.then(async () => {
-        const out = change(await readFileCriteria());
+        // Lecture seule : le fichier n'est jamais réécrit, donc la liste en mémoire est la référence (le fichier serait périmé).
+        const out = change(deps.readOnly?.() ? current.savedCriteria : await readFileCriteria());
         if (out.next === undefined) return out.result;
         const previous = current.savedCriteria;
         current = { ...current, savedCriteria: out.next };
@@ -292,7 +302,7 @@ export function createSettings(deps: SettingsDeps): SettingsStore {
         notify();
         const target = version;
         try {
-          await deps.save(forDisk(current));
+          if (!deps.readOnly?.()) await deps.save(forDisk(current));
         } catch (error) {
           // Écriture échouée : la liste en mémoire doit rester celle du fichier (un critère supprimé ne doit pas disparaître du menu
           // pour revenir au redémarrage). Seule la clé des critères est restaurée : un autre réglage modifié entre-temps est gardé.

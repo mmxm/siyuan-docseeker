@@ -43,6 +43,7 @@
   "clearConfirmTitle": "Vider l'index ?",
   "clearConfirmText": "Tous les fichiers d'index seront supprimés. Si l'indexation automatique est activée, l'index sera reconstruit ensuite ; sinon la recherche ne trouvera plus rien tant que vous n'aurez pas lancé Réindexer.",
   "clearBusy": "Indexation en cours : attendez sa fin pour vider l'index.",
+  "readOnlyNotice": "Lecture seule sur mobile : l'index se construit et se vide sur ordinateur.",
   "clearFailed": "Impossible de vider l'index",
   "clearRefreshFailed": "Index vidé, mais la recherche n'a pas pu être mise à jour",
   "diagnosticDesc": "Teste PDF.js, le noyau et le stockage du plugin. Utile pour un rapport de bug.",

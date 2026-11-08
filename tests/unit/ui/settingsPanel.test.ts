@@ -56,6 +56,7 @@ const STRINGS: Record<string, string> = {
   openModeDesc: "Choisit où s'ouvre la recherche dans les PDF.",
   openModeTab: "Onglet",
   openModeDialog: "Fenêtre flottante",
+  readOnlyNotice: "Lecture seule sur mobile : l'index se construit sur ordinateur.",
 };
 
 interface Harness {
@@ -1098,5 +1099,41 @@ describe("settingsPanel : ouverture de la recherche (openMode, J10 10d)", () => 
     expect(selectOf(a).getAttribute("aria-describedby")).not.toBe(selectOf(b).getAttribute("aria-describedby"));
     a.dispose();
     b.dispose();
+  });
+});
+
+describe("settingsPanel : lecture seule (mobile)", () => {
+  const readOnlyDeps = (): SettingsPanelDeps => ({ ...h.deps, readOnly: true });
+
+  it("Vider l'index : information, ni confirmation ni clearIndex ni erreur ni warnLog, même pendant une indexation", () => {
+    h.isIndexing.mockReturnValue(true);
+    const panel = createSettingsPanel(readOnlyDeps());
+    btn(panel.clearIndex).click();
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(h.clearIndex).not.toHaveBeenCalled();
+    expect(h.warn).not.toHaveBeenCalled();
+    expect(statusOf(panel.clearIndex).textContent).toBe(STRINGS.readOnlyNotice);
+    expect(alertOf(panel.clearIndex).textContent).toBe("");
+    expect(h.showMessage).toHaveBeenCalledWith(STRINGS.readOnlyNotice, expect.any(Number), "info");
+    expect(h.showMessage).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "error");
+    panel.dispose();
+  });
+
+  it("Réindexer : information, ni startIndexing ni « Indexation en échec » ni warnLog", async () => {
+    const panel = createSettingsPanel(readOnlyDeps());
+    btn(panel.reindex).click();
+    await flush();
+    expect(h.startIndexing).not.toHaveBeenCalled();
+    expect(h.warn).not.toHaveBeenCalled();
+    expect(statusOf(panel.reindex).textContent).toBe(STRINGS.readOnlyNotice);
+    expect(h.showMessage).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "error");
+    panel.dispose();
+  });
+
+  it("bureau : comportement inchangé (confirmation, puis vidage)", () => {
+    const panel = createSettingsPanel(h.deps);
+    btn(panel.clearIndex).click();
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+    panel.dispose();
   });
 });

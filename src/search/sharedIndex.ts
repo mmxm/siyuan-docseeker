@@ -35,6 +35,8 @@ export interface SharedIndexDeps {
   readonly schedule?: (fn: () => void, ms: number) => unknown;
   readonly clear?: (handle: unknown) => void;
   readonly refreshDebounceMs?: number;
+  /** Décodages d'index en parallèle (profil de plateforme) ; défaut : celui du magasin. */
+  readonly decodeConcurrency?: number;
 }
 
 export interface SharedIndex {
@@ -62,7 +64,12 @@ export function createSharedIndex(deps: SharedIndexDeps): SharedIndex {
   const clear = deps.clear ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const debounceMs = deps.refreshDebounceMs ?? REFRESH_DEBOUNCE_MS;
   const lifetime = new AbortController();
-  const store = createSearchStore({ store: createDsxStore(deps.store), decode: deps.decode, onWarn });
+  const store = createSearchStore({
+    store: createDsxStore(deps.store),
+    decode: deps.decode,
+    onWarn,
+    ...(deps.decodeConcurrency === undefined ? {} : { decodeConcurrency: deps.decodeConcurrency }),
+  });
   const statusListeners = new Set<() => void>();
   const invalidateListeners = new Set<(docIds: readonly string[]) => void>();
   let disposed = false;

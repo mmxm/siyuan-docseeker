@@ -24,6 +24,21 @@ describe("createLoadPdf", () => {
     });
   });
 
+  it("bureau : getDocument ne reçoit que l'URL, sans option de téléchargement (comportement inchangé)", async () => {
+    const f = fakePdfjs();
+    await createLoadPdf(() => f.pdfjs)("assets/a.pdf", new AbortController().signal);
+    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf" });
+    const g = fakePdfjs();
+    await createLoadPdf(() => g.pdfjs, undefined, { disableAutoFetch: false })("assets/a.pdf", new AbortController().signal);
+    expect(g.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf" });
+  });
+
+  it("disableAutoFetch : pas de téléchargement complet, flux conservé pour les requêtes par plages", async () => {
+    const f = fakePdfjs();
+    await createLoadPdf(() => f.pdfjs, undefined, { disableAutoFetch: true })("assets/a.pdf", new AbortController().signal);
+    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", disableAutoFetch: true, disableStream: false });
+  });
+
   it("échoue clairement si PDF.js n'est pas disponible", async () => {
     const load = createLoadPdf(() => undefined);
     await expect(load("assets/a.pdf", new AbortController().signal)).rejects.toThrow(/PDF\.js/);

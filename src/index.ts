@@ -1,4 +1,6 @@
-import { Plugin, Setting, confirm, openTab, showMessage } from "siyuan";
+import { Plugin, Setting, confirm, getFrontend, openTab, showMessage } from "siyuan";
+import { readFrontend } from "./platform/frontend";
+import { applySettingsOverride, profileFor, type PlatformProfile } from "./platform/profile";
 import { openConfirmDialog, openCustomDialog, openDialog, openFloatingDialog, openInputDialog, openMenu } from "./siyuan/nativeUi";
 import { createFloatingSearch, type FloatingMountOptions, type FloatingSearch } from "./siyuan/floatingSearch";
 import { createSearchSessionStore, type SearchSessionState } from "./search/searchSession";
@@ -49,6 +51,9 @@ interface Transfer {
   /** `openTab` a répondu (résolu ou rejeté) : seule la reprise par `init` reste attendue. */
   settled: boolean;
 }
+
+/** Motif d'un refus d'indexer ou de vider l'index en lecture seule (mobile) ; tracé et affiché par le panneau. */
+const READ_ONLY_MESSAGE = "Mode lecture seule : l'index se construit sur ordinateur";
 
 /** Une saisie plus récente que cela retarde la synchronisation automatique (extraction dans le thread principal). */
 const TYPING_QUIET_MS = 3000;
@@ -143,7 +148,8 @@ export default class DocSeekerPlugin extends Plugin {
   override onLayoutReady(): void {
     if (this.unloaded) return;
     try {
-      void this.getSharedIndex().start();
+      // Mobile : l'index est chargé à la première ouverture de la recherche (le montage d'un onglet appelle `start()`).
+      if (!this.getProfile().lazyIndexLoad) void this.getSharedIndex().start();
     } catch (error) {
       this.warnLog.warn("Démarrage de l'index partagé en échec", error);
     }
@@ -161,6 +167,8 @@ export default class DocSeekerPlugin extends Plugin {
    */
   private startAutoIndex(): void {
     if (this.autoSync) return;
+    // Lecture seule (mobile) : ni indexation, ni nettoyage des .tmp (qui écrit dans le dossier d'index partagé).
+    if (this.getProfile().readOnly) return;
     const indexer = this.getIndexer();
     const store = this.getPetalStore(createKernelApi());
     const onVisible = (listener: () => void) => (): void => {
@@ -206,7 +214,7 @@ export default class DocSeekerPlugin extends Plugin {
       this.lastInputAt = Date.now();
     };
     for (const type of USER_ACTIVITY_EVENTS) document.addEventListener(type, onInput, { capture: true, passive: true });
-    const unsubscribeSettings = this.settings.subscribe(() => autoSync.configure(toConfig(this.settings.get())));
+    const unsubscribeSettings = this.settings.subscribe(() => autoSync.configure(toConfig(this.effectiveSettings())));
     this.autoSyncCleanup = () => {
       unsubscribeSettings();
       for (const type of USER_ACTIVITY_EVENTS) document.removeEventListener(type, onInput, { capture: true });
@@ -215,7 +223,7 @@ export default class DocSeekerPlugin extends Plugin {
     this.settings
       .load()
       .then((loaded) => {
-        if (!this.unloaded) autoSync.start(toConfig(loaded));
+        if (!this.unloaded) autoSync.start(toConfig(applySettingsOverride(loaded, this.getProfile())));
       })
       .catch((error: unknown) => this.warnLog.warn("Démarrage de l'indexation automatique en échec", error));
   }
@@ -245,10 +253,13 @@ export default class DocSeekerPlugin extends Plugin {
   private lastInputAt = Number.NEGATIVE_INFINITY;
   private autoSyncCleanup: (() => void) | null = null;
   private activity: IndexActivity | null = null;
+  private profile: PlatformProfile | undefined;
   private readonly settings: SettingsStore = createSettings({
     load: () => this.loadData(SETTINGS_FILE) as Promise<unknown>,
     save: (value) => this.saveData(SETTINGS_FILE, value) as Promise<unknown>,
     onWarn: (message, error) => this.warnLog.warn(message, error),
+    // Mobile : le dossier du plugin est synchronisé, les réglages ne vivent qu'en mémoire (jamais de saveData).
+    readOnly: () => this.getProfile().readOnly,
     // Une seule lecture par session : un seul message, la trace (un critère par ligne) est déjà dans le journal.
     onCriteriaIgnored: () => this.toast(this.t("criteriaLoadFailed")),
   });
@@ -349,17 +360,25 @@ export default class DocSeekerPlugin extends Plugin {
     const indexer = this.getIndexer();
     const sharedIndex = this.getSharedIndex();
     const store = this.getPetalStore(createKernelApi());
+    const readOnly = this.getProfile().readOnly;
     return createSettingsPanel({
       t: (key) => this.t(key),
       indexer,
       startIndexing: () => {
+        if (readOnly) return Promise.reject(new Error(READ_ONLY_MESSAGE));
         if (sharedIndex.getError() !== undefined) void sharedIndex.start(); // retente un chargement échoué (ne rejette jamais)
         return indexer.start();
       },
       isIndexing: () => indexer.getState().status !== "idle",
       clearing: this.clearing,
-      clearIndex: () => store.clear(),
-      settings: this.settings,
+      clearIndex: () => (readOnly ? Promise.reject(new Error(READ_ONLY_MESSAGE)) : store.clear()),
+      // Le panneau montre les valeurs EFFECTIVES (surcharges du profil comprises), pas les valeurs brutes du fichier.
+      settings: {
+        get: () => this.effectiveSettings(),
+        update: (patch) => this.settings.update(patch),
+        subscribe: (listener) => this.settings.subscribe(listener),
+      },
+      readOnly,
       startAutoSync: () => {
         indexer.resetFailures(); // index vidé : les PDF en échec doivent être retentés sans attendre leur délai
         return this.autoSync?.triggerNow() ?? false;
@@ -379,6 +398,19 @@ export default class DocSeekerPlugin extends Plugin {
     });
   }
 
+  /**
+   * Profil de plateforme, lu une seule fois : `getFrontend()` de l'API SiYuan (jamais le user-agent). Valeur inconnue ou erreur :
+   * profil bureau, avec un avertissement dans le journal.
+   */
+  private getProfile(): PlatformProfile {
+    return (this.profile ??= profileFor(readFrontend(() => getFrontend(), (message, error) => this.warnLog.warn(message, error))));
+  }
+
+  /** Réglages effectifs : ceux du fichier avec les surcharges du profil, appliquées à la lecture. En lecture seule (mobile), `settings.json` n'est jamais écrit non plus : les changements restent en mémoire pour la session. */
+  private effectiveSettings(): DocSeekerSettings {
+    return applySettingsOverride(this.settings.get(), this.getProfile());
+  }
+
   private t(key: string): string {
     const value = this.i18n[key];
     return typeof value === "string" ? value : key;
@@ -394,7 +426,7 @@ export default class DocSeekerPlugin extends Plugin {
     };
     this.settings.ready
       .then(
-        () => open(this.settings.get().openMode),
+        () => open(this.effectiveSettings().openMode),
         (error: unknown) => {
           this.warnLog.warn("Lecture des réglages impossible : la recherche s'ouvre dans un onglet", error);
           open("tab");
@@ -593,13 +625,15 @@ export default class DocSeekerPlugin extends Plugin {
     ensureSearchStyle(document);
     const { floating } = mode;
     const kernel = createKernelApi();
-    const loadPdf = createLoadPdf(this.getPdfjs());
+    const profile = this.getProfile();
+    const loadPdf = createLoadPdf(this.getPdfjs(), undefined, { disableAutoFetch: profile.disableAutoFetch });
     const sharedIndex = this.getSharedIndex();
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     return mountSearchTab(host, {
       store: this.getPetalStore(kernel),
       kernel, // filtre « portée de documents » (PDF cités par SQL, arbre des cahiers et documents)
       sharedIndex,
+      profile,
       onOpenSettings: () => this.openSetting(),
       openMenu,
       openDialog,
@@ -654,6 +688,7 @@ export default class DocSeekerPlugin extends Plugin {
       store: this.getPetalStore(createKernelApi()),
       decode: decodeIndexForSearch,
       indexer: this.getIndexer(),
+      decodeConcurrency: this.getProfile().decodeConcurrency,
       onWarn: (message, error) => this.warnLog.warn(message, error),
     });
     this.sharedIndex = shared;
@@ -697,7 +732,7 @@ export default class DocSeekerPlugin extends Plugin {
     this.indexer = createIndexer({
       discover: () => discoverPdfs({ api: kernel }),
       store: this.getPetalStore(kernel),
-      loadPdf: createLoadPdf(this.getPdfjs()),
+      loadPdf: createLoadPdf(this.getPdfjs(), undefined, { disableAutoFetch: this.getProfile().disableAutoFetch }),
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
       onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),
@@ -726,6 +761,7 @@ export default class DocSeekerPlugin extends Plugin {
       createWorker: (url) => new Worker(url, { type: "module" }),
       now: () => performance.now(),
       petalDir: `${PETAL_ROOT}/${this.name}`,
+      readOnly: this.getProfile().readOnly,
     });
     return formatReport(report);
   }

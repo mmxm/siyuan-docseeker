@@ -18,7 +18,7 @@ import { planFocusOrdinal } from "./search/thumbnailPlan";
 import { IndexedDbThumbnailCache, type ThumbnailCache } from "./search/thumbnailCache";
 import { IndexUnavailableError, NotFoundError, type KernelApi } from "./siyuan/kernelApi";
 import { openPdfAtPage as realOpenPdfAtPage, type OpenPdfOptions } from "./siyuan/openPdf";
-import { THUMBNAIL_CACHE_MAX_BYTES, THUMBNAIL_CACHE_MAX_ENTRIES } from "./core/constants";
+import { desktopProfile, type PlatformProfile } from "./platform/profile";
 import type { PetalStore } from "./siyuan/petalStore";
 import { createPdfRenderer, type RenderableDocument, type RenderCanvas } from "./siyuan/pdfRenderer";
 import { createThumbnailLoader, type ThumbnailObserver } from "./ui/thumbnailLoader";
@@ -33,6 +33,11 @@ const MESSAGE_CLASS = "docseeker-message";
 const ERROR_CLASS = "docseeker-error";
 
 export interface SearchTabDeps {
+  /**
+   * Profil de plateforme (plafonds de rendu, de cache, de correspondances et échelle des vignettes). Absent : profil bureau,
+   * dont les valeurs sont les constantes historiques. Un `cache` injecté reste prioritaire sur les plafonds du profil.
+   */
+  readonly profile?: PlatformProfile;
   /** Lecture des `.dsx` pour les correspondances par page (le chargement de l'index n'est pas ici). */
   readonly store: Pick<PetalStore, "read">;
   /** Index partagé entre onglets, créé et chargé par le plugin : l'onglet ne le charge ni ne le libère. */
@@ -232,6 +237,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   const schedule = deps.schedule ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
   const clear = deps.clear ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const openPdf = deps.openPdfAtPage ?? realOpenPdfAtPage;
+  const profile = deps.profile ?? desktopProfile();
   let disposed = false;
   let openController: AbortController | null = null;
   cleanups.push(() => {
@@ -307,6 +313,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       return bytes;
     },
     decode: deps.decodePageMatches ?? realDecodePageMatches,
+    maxBytesFiles: profile.pageMatchesLimit,
     ...((deps.decodePagesMatches ?? (deps.decodePageMatches ? undefined : realDecodePagesMatches))
       ? { decodePages: (deps.decodePagesMatches ?? realDecodePagesMatches) }
       : {}),
@@ -362,14 +369,16 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
   const renderer = createPdfRenderer({
     loadDocument: deps.loadDocument,
     createCanvas: deps.createCanvas,
+    concurrency: profile.renderConcurrency,
+    maxOpenDocuments: profile.maxOpenDocuments,
     onWarn,
   });
   cleanups.push(() => renderer.dispose());
   const cache: ThumbnailCache =
     deps.cache ??
     new IndexedDbThumbnailCache({
-      maxEntries: THUMBNAIL_CACHE_MAX_ENTRIES,
-      maxBytes: THUMBNAIL_CACHE_MAX_BYTES,
+      maxEntries: profile.thumbnailCache.maxEntries,
+      maxBytes: profile.thumbnailCache.maxBytes,
       factory: deps.indexedDB,
       onWarn,
     });
@@ -381,6 +390,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     renderer,
     cache,
     docVersion: THUMBNAIL_DOC_VERSION,
+    cropScale: profile.cropScale,
     onWarn,
   });
   cleanups.push(() => loader.dispose());

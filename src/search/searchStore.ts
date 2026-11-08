@@ -2,7 +2,7 @@
  * Magasin de recherche : charge les `.dsx` du dossier `idx/` et tient à jour l'index BM25 global.
  *
  * - Seuls les noms finissant par `.dsx` sont pris en compte (manifest.json, .tmp, .bak sont ignorés).
- * - Décodage avec une concurrence de 2 ; chaque document est ajouté à l'index dès qu'il est décodé
+ * - Décodage avec une concurrence de 2 par défaut (`decodeConcurrency`) ; chaque document est ajouté à l'index dès qu'il est décodé
  *   (résultats partiels) et les abonnés sont notifiés à chaque ajout. Les octets ne sont conservés
  *   que le temps du décodage.
  * - Un fichier illisible ou corrompu n'arrête pas le chargement : il est compté dans `failed`.
@@ -17,6 +17,7 @@
  * - Les tableaux typés renvoyés par `decode` sont cédés à l'index sans copie : `decode` doit renvoyer des
  *   tampons neufs à chaque appel.
  */
+import { DEFAULT_DECODE_CONCURRENCY } from "../core/constants";
 import type { Bm25Index } from "../core/bm25";
 import type { SearchIndexData } from "../core/codec/format";
 import { toBm25Index, withDocument, withoutDocument } from "../core/indexMerge";
@@ -44,6 +45,8 @@ export interface SearchStoreDeps {
   /** Doit renvoyer des tableaux neufs : l'index les conserve sans copie. */
   readonly decode: (bytes: Uint8Array) => Promise<SearchIndexData>;
   readonly onWarn: (message: string, error?: unknown) => void;
+  /** Décodages en parallèle (au moins 1) ; défaut : 2, la valeur historique du bureau. */
+  readonly decodeConcurrency?: number;
 }
 
 export interface RefreshOptions {
@@ -66,7 +69,6 @@ export interface SearchStore {
 }
 
 const DSX_SUFFIX = ".dsx";
-const DECODE_CONCURRENCY = 2;
 const SIYUAN_ID_SUFFIX = /-\d{14}-[a-z0-9]{7}$/i;
 const PDF_EXTENSION = /\.pdf$/i;
 
@@ -80,6 +82,12 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 
 export function createSearchStore(deps: SearchStoreDeps): SearchStore {
   const { store, decode, onWarn } = deps;
+  const requested = deps.decodeConcurrency;
+  // Valeur absente : défaut sans bruit ; valeur invalide (NaN, infinie, < 1) : repli signalé, jamais silencieux.
+  if (requested !== undefined && !(Number.isFinite(requested) && requested >= 1)) {
+    onWarn(`decodeConcurrency invalide (${String(requested)}) : ${Number.isFinite(requested) ? "ramenée à 1" : `défaut ${DEFAULT_DECODE_CONCURRENCY} utilisé`}`);
+  }
+  const decodeConcurrency = requested === undefined || !Number.isFinite(requested) ? DEFAULT_DECODE_CONCURRENCY : Math.max(1, Math.floor(requested));
   let index: Bm25Index = toBm25Index([]);
   const docs = new Map<string, DocInfo>();
   let phase: LoadPhase = "idle";
@@ -184,7 +192,7 @@ export function createSearchStore(deps: SearchStoreDeps): SearchStore {
         notify();
       }
     };
-    await Promise.all(Array.from({ length: Math.min(DECODE_CONCURRENCY, todo.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(decodeConcurrency, todo.length) }, worker));
 
     if (aborted || signal?.aborted) {
       phase = previousPhase === "loading" ? "idle" : previousPhase;

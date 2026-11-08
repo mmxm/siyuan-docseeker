@@ -11,10 +11,15 @@ const h = vi.hoisted(() => ({
   sharedStart: vi.fn(),
   sharedDispose: vi.fn(),
   sharedCreated: 0,
+  sharedDeps: [] as { decodeConcurrency?: number }[],
+  frontend: "desktop" as unknown,
+  frontendThrows: undefined as Error | undefined,
+  loadPdfOptions: [] as unknown[],
+  autoSyncCreated: 0,
   pdfjsGetters: [] as Array<() => unknown>,
   lazyCreated: 0,
   lazyOverride: undefined as undefined | (() => Promise<unknown>),
-  m0Deps: undefined as undefined | { pdfjs?: unknown; pdfjsError?: string },
+  m0Deps: undefined as undefined | { pdfjs?: unknown; pdfjsError?: string; readOnly?: boolean },
   indexerDeps: undefined as { onDestroyError?: (e: unknown) => void; shouldYield?: () => boolean } | undefined,
   commands: [] as { langKey: string; langText?: string; hotkey?: string; callback?: () => void }[],
   mounts: [] as {
@@ -59,7 +64,12 @@ const h = vi.hoisted(() => ({
   queue: null as null | { pending: string[]; running: string[]; completed: string[]; failed: unknown[] },
   mountDeps: [] as {
     indexActivity?: { getSnapshot(): unknown; subscribe(l: () => void): () => void };
-    settings?: { get(): { sort: unknown; groupByDocument: boolean }; update(patch: Record<string, unknown>): Promise<void> };
+    settings?: {
+      get(): { sort: unknown; groupByDocument: boolean };
+      update(patch: Record<string, unknown>): Promise<void>;
+      saveCriteria(criteria: unknown): Promise<unknown>;
+    };
+    profile?: unknown;
   }[],
 }));
 
@@ -112,6 +122,10 @@ vi.mock("siyuan", () => ({
     }
     removeTopBar() {}
   },
+  getFrontend: () => {
+    if (h.frontendThrows) throw h.frontendThrows;
+    return h.frontend;
+  },
   openTab: vi.fn(),
   showMessage: h.showMessage,
   confirm: h.confirm,
@@ -132,6 +146,7 @@ vi.mock("../../src/indexer/autoSync", async (orig) => {
     ...actual,
     createAutoSync: (deps: Parameters<typeof actual.createAutoSync>[0]) => {
       if (h.failCreate) throw new Error("création KO");
+      h.autoSyncCreated++;
       return actual.createAutoSync(deps);
     },
   };
@@ -161,7 +176,7 @@ vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.
 vi.mock("../../src/siyuan/petalStore", () => ({ createPetalStore: () => ({ clear: h.clear, removeStaleTmp: h.stale }) }));
 vi.mock("../../src/siyuan/discovery", () => ({ discoverPdfs: vi.fn() }));
 vi.mock("../../src/indexer/loadPdf", () => ({
-  createLoadPdf: (getter: () => unknown) => (h.pdfjsGetters.push(getter), vi.fn()),
+  createLoadPdf: (getter: () => unknown, _warn?: unknown, options?: unknown) => (h.pdfjsGetters.push(getter), h.loadPdfOptions.push(options), vi.fn()),
 }));
 vi.mock("../../src/indexer/indexer", () => ({
   createIndexer: (deps: { onDestroyError?: (e: unknown) => void; shouldYield?: () => boolean }) => ({
@@ -181,7 +196,8 @@ vi.mock("../../src/indexer/indexer", () => ({
   }),
 }));
 vi.mock("../../src/search/sharedIndex", () => ({
-  createSharedIndex: () => {
+  createSharedIndex: (deps: { decodeConcurrency?: number }) => {
+    h.sharedDeps.push(deps);
     h.sharedCreated++;
     return { start: h.sharedStart, dispose: h.sharedDispose, getError: h.getError, refreshNow: h.refresh };
   },
@@ -222,6 +238,8 @@ vi.mock("../../src/searchTab", async (orig) => {
   };
 });
 
+import { openTab } from "siyuan";
+import { desktopProfile, mobileProfile } from "../../src/platform/profile";
 import DocSeekerPlugin from "../../src/index";
 
 const plugins: { onunload(): void }[] = [];
@@ -273,6 +291,11 @@ beforeEach(() => {
   h.sharedStart.mockReset().mockResolvedValue(undefined);
   h.sharedDispose.mockClear();
   h.sharedCreated = 0;
+  h.sharedDeps.length = 0;
+  h.frontend = "desktop";
+  h.frontendThrows = undefined;
+  h.loadPdfOptions.length = 0;
+  h.autoSyncCreated = 0;
   h.showMessage.mockClear();
   h.start.mockReset();
   h.cancel.mockClear();
@@ -2174,3 +2197,222 @@ describe("fenêtre flottante ou onglet (J10 10d)", () => {
     });
   });
 });
+
+const m0Captured = (): { readOnly?: boolean } | undefined => h.m0Deps; // fonction : évite le rétrécissement de type après `= undefined`
+const CRITERIA = { name: "a", query: "pco", filters: { includeSubfolders: true, nameContains: "" }, sort: { key: "relevance", direction: "desc" }, groupByDocument: true };
+
+describe("profil de plateforme (E3)", () => {
+  const settle = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const start = async (stored: unknown = "") => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.loadData.mockResolvedValue(stored);
+    const s = setup();
+    s.plugin.onLayoutReady();
+    await settle(0);
+    return s;
+  };
+
+  describe("bureau : comportement inchangé", () => {
+    it.each(["desktop", "desktop-window", "browser-desktop"])("%s : profil bureau transmis, plafonds historiques", async (frontend) => {
+      h.frontend = frontend;
+      const s = await start();
+      s.render();
+      expect(h.mountDeps[0]).toMatchObject({ profile: desktopProfile() });
+      expect(h.sharedDeps[0]?.decodeConcurrency).toBe(2);
+      expect(h.loadPdfOptions.every((o) => (o as { disableAutoFetch?: boolean } | undefined)?.disableAutoFetch === false)).toBe(true);
+      expect(h.loadPdfOptions.length).toBeGreaterThan(0);
+    });
+
+    it("démarre l'index partagé et l'indexation automatique à onLayoutReady, comme avant", async () => {
+      const s = await start();
+      expect(h.sharedStart).toHaveBeenCalledTimes(1);
+      await settle(3100);
+      expect(h.autoSyncCreated).toBe(1);
+      expect(h.stale).toHaveBeenCalled();
+      expect(h.start).toHaveBeenCalledTimes(1);
+      s.plugin.onunload();
+    });
+
+    it("n'applique aucune surcharge : openMode « dialog » et autoIndex enregistrés sont lus tels quels", async () => {
+      const s = await start({ autoIndex: false, openMode: "dialog" });
+      s.plugin.topBar.callback();
+      await settle(0);
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      await settle(3100);
+      expect(h.start).not.toHaveBeenCalled(); // autoIndex désactivé par l'utilisateur
+    });
+
+    it("réglages, critères et diagnostic : écriture comme avant (saveData, diagnostic avec écriture)", async () => {
+      h.lazyOverride = async () => ({ getDocument: vi.fn() });
+      try {
+        const s = await start();
+        s.render();
+        await h.mountDeps[0]!.settings!.update({ groupByDocument: false });
+        expect(h.saveData).toHaveBeenCalledTimes(1);
+        await h.mountDeps[0]!.settings!.saveCriteria(CRITERIA);
+        expect(h.saveData).toHaveBeenCalledTimes(2);
+        h.m0Deps = undefined;
+        openPanel().diagnostic.querySelector<HTMLButtonElement>("button")!.click();
+        await settle(0);
+        expect(m0Captured()?.readOnly).toBe(false);
+        s.plugin.onunload();
+      } finally {
+        h.lazyOverride = undefined;
+      }
+    });
+
+    it("openMode « tab » enregistré : ouvre un onglet", async () => {
+      const s = await start({ openMode: "tab" });
+      s.plugin.topBar.callback();
+      await settle(0);
+      expect(h.openFloating).not.toHaveBeenCalled();
+      expect(vi.mocked(openTab)).toHaveBeenCalled();
+    });
+  });
+
+  describe("lecture du type d'interface", () => {
+    it("valeur inconnue : profil bureau et avertissement au journal", async () => {
+      h.frontend = "tablet";
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const s = await start();
+      s.render();
+      expect(h.mountDeps[0]).toMatchObject({ profile: desktopProfile() });
+      expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toContain("Type d'interface SiYuan inconnu");
+    });
+
+    it("getFrontend lève : profil bureau, avertissement avec l'erreur", async () => {
+      h.frontendThrows = new Error("API absente");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const s = await start();
+      s.render();
+      expect(h.mountDeps[0]).toMatchObject({ profile: desktopProfile() });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("illisible"), h.frontendThrows);
+    });
+
+    it("le type d'interface n'est lu qu'une fois par session", async () => {
+      h.frontend = "mobile";
+      const s = await start();
+      s.render();
+      s.render();
+      expect(h.mountDeps[0]!.profile).toBe(h.mountDeps[1]!.profile);
+    });
+  });
+
+  describe.each(["mobile", "browser-mobile"])("%s : lecture seule", (frontend) => {
+    beforeEach(() => {
+      h.frontend = frontend;
+    });
+
+    it("transmet le profil mobile à l'onglet, à l'index partagé et au chargement des PDF", async () => {
+      const s = await start();
+      s.render();
+      expect(h.mountDeps[0]).toMatchObject({ profile: mobileProfile() });
+      expect(h.sharedDeps[0]?.decodeConcurrency).toBe(1);
+      expect(h.loadPdfOptions.length).toBeGreaterThan(0);
+      expect(h.loadPdfOptions.every((o) => (o as { disableAutoFetch?: boolean }).disableAutoFetch === true)).toBe(true);
+    });
+
+    it("aucune indexation automatique ni écriture d'index, même avec autoIndex enregistré à vrai", async () => {
+      const s = await start({ autoIndex: true, intervalMinutes: 5 });
+      await settle(10 * 60_000);
+      expect(h.autoSyncCreated).toBe(0);
+      expect(h.start).not.toHaveBeenCalled(); // indexer.start
+      expect(h.stale).not.toHaveBeenCalled(); // removeStaleTmp écrit/supprime dans le dossier d'index
+      expect(h.clear).not.toHaveBeenCalled();
+      expect(h.saveData).not.toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+
+    it("l'index n'est pas chargé au démarrage mais à la première ouverture de la recherche", async () => {
+      const s = await start();
+      expect(h.sharedStart).not.toHaveBeenCalled();
+      s.render();
+      expect(h.sharedStart).toHaveBeenCalledTimes(1);
+    });
+
+    it("surcharge openMode à la lecture (fenêtre) sans jamais écrire settings.json", async () => {
+      const s = await start({ autoIndex: true, openMode: "tab" });
+      s.plugin.topBar.callback();
+      await settle(0);
+      expect(h.openFloating).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(openTab)).not.toHaveBeenCalled();
+      expect(h.saveData).not.toHaveBeenCalled();
+    });
+
+    it("diagnostic : le sous-test d'écriture est ignoré (readOnly transmis)", async () => {
+      h.lazyOverride = async () => ({ getDocument: vi.fn() }); // posé AVANT le démarrage : pas d'attente réelle de PDF.js
+      try {
+        const s = await start();
+        h.m0Deps = undefined;
+        openPanel().diagnostic.querySelector<HTMLButtonElement>("button")!.click();
+        await settle(0);
+        expect(m0Captured()?.readOnly).toBe(true);
+        s.plugin.onunload();
+      } finally {
+        h.lazyOverride = undefined;
+      }
+    });
+
+    it("aucune écriture de settings.json : recherche, changement de réglage, historique et critère enregistré", async () => {
+      const s = await start();
+      s.render();
+      const settings = h.mountDeps[0]!.settings!;
+      await settings.update({ history: ["pco"] });
+      await settings.update({ groupByDocument: false, sort: { key: "page", direction: "asc" } });
+      await settings.saveCriteria(CRITERIA);
+      await settings.update({ history: ["pco", "bpco"] });
+      expect(settings.get().groupByDocument).toBe(false); // gardé en mémoire pour la session
+      expect(h.saveData).not.toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+
+    it("panneau : affiche les valeurs EFFECTIVES (autoIndex désactivé, ouverture en fenêtre) et un changement d'intervalle n'écrit pas", async () => {
+      const s = await start({ autoIndex: true, openMode: "tab", intervalMinutes: 5 });
+      const panel = openPanel();
+      expect(panel.autoIndex.querySelector<HTMLInputElement>("input")!.checked).toBe(false);
+      expect(panel.openMode.querySelector<HTMLSelectElement>("select")!.value).toBe("dialog");
+      const interval = panel.autoIndexInterval.querySelector<HTMLSelectElement>("select")!;
+      interval.value = "15";
+      interval.dispatchEvent(new Event("change"));
+      await settle(0);
+      expect(h.saveData).not.toHaveBeenCalled();
+      expect(panel.autoIndex.querySelector<HTMLInputElement>("input")!.checked).toBe(false);
+      panel.close();
+      s.plugin.onunload();
+    });
+
+    it("« Vider l'index » et « Réindexer » : information de lecture seule, sans boîte de confirmation ni erreur", async () => {
+      const s = await start();
+      const panel = openPanel();
+      (panel.clear.querySelector("button") as HTMLButtonElement).click();
+      (panel.reindex.querySelector("button") as HTMLButtonElement).click();
+      await settle(0);
+      expect(h.confirm).not.toHaveBeenCalled();
+      expect(panel.clear.querySelector('[role="status"]')!.textContent).toBe("readOnlyNotice");
+      expect(panel.reindex.querySelector('[role="status"]')!.textContent).toBe("readOnlyNotice");
+      expect(panel.log.textContent ?? "").not.toContain("en échec");
+      s.plugin.onunload();
+    });
+
+    it("« Vider l'index » et « Réindexer » du panneau sont refusés avec une erreur, sans toucher au dossier d'index", async () => {
+      const s = await start();
+      const panel = openPanel();
+      (panel.clear.querySelector("button") as HTMLButtonElement).click();
+      (panel.reindex.querySelector("button") as HTMLButtonElement).click();
+      await settle(0);
+      expect(h.clear).not.toHaveBeenCalled();
+      expect(h.start).not.toHaveBeenCalled();
+      s.plugin.onunload();
+    });
+  });
+});
+

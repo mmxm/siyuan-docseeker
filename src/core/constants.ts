@@ -31,6 +31,11 @@ export const FONT_SIZE_BONUS_THRESHOLD = 10;
 export const FONT_SIZE_BONUS_MULTIPLIER = 25;
 export const FONT_SIZE_BONUS_MAX = 400;
 
+/** Plafond cumulé d'octets des fichiers d'index conservés pour les correspondances par page (profil bureau). */
+export const PAGE_MATCHES_MAX_BYTES = 64 * 1024 * 1024;
+/** Décodages d'index en parallèle au chargement (profil bureau). */
+export const DEFAULT_DECODE_CONCURRENCY = 2;
+
 /** Rendu PDF : documents ouverts en même temps et pages rendues en parallèle (profil bureau). */
 export const DEFAULT_MAX_OPEN_DOCUMENTS = 3;
 export const DEFAULT_RENDER_CONCURRENCY = 2;

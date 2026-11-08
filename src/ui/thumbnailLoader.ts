@@ -7,6 +7,7 @@
  * Les surlignages sont toujours recalculés (matches + taille de page, peu coûteux) ; seul le rendu
  * du recadrage (coûteux) est mis en cache.
  */
+import { CROP_RENDER_SCALE } from "../core/constants";
 import { tokenize } from "../core/normalize";
 import { thumbnailKey, type ThumbnailCache } from "../search/thumbnailCache";
 import { planThumbnail, type PageSize, type ThumbnailPlan } from "../search/thumbnailPlan";
@@ -47,6 +48,11 @@ export interface ThumbnailLoaderOptions {
   createObjectUrl?: (blob: Blob) => string;
   revokeObjectUrl?: (url: string) => void;
   docVersion: number;
+  /**
+   * Échelle de rendu du recadrage (défaut `CROP_RENDER_SCALE`). Une échelle différente du défaut entre dans la clé de cache :
+   * deux échelles ne se mélangent jamais, et les clés du défaut (bureau) restent exactement celles d'avant.
+   */
+  cropScale?: number;
   /** Délai avant de lancer le chargement d'un cadre entré dans la zone observée (défaut 100 ms ; 0 = immédiat). */
   loadDelayMs?: number;
   schedule?: (fn: () => void, ms: number) => unknown;
@@ -91,6 +97,12 @@ function isAbort(error: unknown): boolean {
 
 export function createThumbnailLoader(options: ThumbnailLoaderOptions): ThumbnailLoader {
   const { renderer, cache, docVersion } = options;
+  const requestedScale = options.cropScale;
+  const validScale = requestedScale === undefined || (Number.isFinite(requestedScale) && requestedScale > 0);
+  if (!validScale) options.onWarn?.(`cropScale invalide (${String(requestedScale)}) : échelle par défaut ${CROP_RENDER_SCALE} utilisée`);
+  const cropScale = validScale ? (requestedScale ?? CROP_RENDER_SCALE) : CROP_RENDER_SCALE;
+  // Suffixe d'échelle seulement hors défaut : les clés du bureau (1,5) restent celles des caches déjà remplis.
+  const scaleSuffix = cropScale === CROP_RENDER_SCALE ? "" : `:s${cropScale}`;
   const createUrl = options.createObjectUrl ?? ((b: Blob) => URL.createObjectURL(b));
   const revokeUrl = options.revokeObjectUrl ?? ((u: string) => URL.revokeObjectURL(u));
   const slots = new Map<Element, Slot>();
@@ -202,7 +214,7 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
         match.boxes,
         match.ordinals,
         size,
-        match.termIndexes ? { termIndexes: match.termIndexes } : {},
+        { ...(match.termIndexes ? { termIndexes: match.termIndexes } : {}), scale: cropScale },
       );
       const ratio = `${plan.crop.width} / ${plan.crop.height}`;
       el.style.setProperty("aspect-ratio", ratio);
@@ -213,7 +225,7 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
         pdfModifiedMs: req.pdfModifiedMs,
         page: req.page,
         version: docVersion,
-      })}:q${queryHash(req.query)}`;
+      })}:q${queryHash(req.query)}${scaleSuffix}`;
       let blob: Blob | undefined;
       try {
         blob = await cache.get(key);

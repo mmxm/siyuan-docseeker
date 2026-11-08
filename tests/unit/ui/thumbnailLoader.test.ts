@@ -11,6 +11,7 @@ function setup(
     getPageMatches?: ReturnType<typeof vi.fn>;
     delay?: number;
     cache?: ThumbnailCache;
+    cropScale?: number;
   } = {},
 ) {
   let cb: (e: Entry[]) => void = () => {};
@@ -40,6 +41,7 @@ function setup(
     revokeObjectUrl,
     docVersion: 1,
     loadDelayMs: overrides.delay ?? 0,
+    ...(overrides.cropScale === undefined ? {} : { cropScale: overrides.cropScale }),
     onWarn,
   });
   const show = (el: Element, v = true) => cb([{ target: el, isIntersecting: v }]);
@@ -341,6 +343,77 @@ describe("thumbnailLoader (review fixes)", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("échelle de recadrage (E3)", () => {
+    const renderedScale = (s: ReturnType<typeof setup>): number =>
+      (s.renderer.renderCrop as ReturnType<typeof vi.fn>).mock.calls[0]![0].scale as number;
+
+    it("défaut : échelle 1,5 transmise au rendu, clé de cache sans suffixe d'échelle", async () => {
+      const s = setup();
+      const el = document.createElement("div");
+      const keys: string[] = [];
+      const spy = vi.spyOn(s.cache, "put").mockImplementation(async (k) => void keys.push(k));
+      s.loader.attach(el, req);
+      s.show(el);
+      await flush();
+      expect(renderedScale(s)).toBe(1.5);
+      expect(keys).toHaveLength(1);
+      expect(keys[0]).not.toMatch(/:s\d/);
+      spy.mockRestore();
+    });
+
+    it("échelle 1,0 : transmise au rendu, et clé distincte de celle de l'échelle 1,5", async () => {
+      const keys15: string[] = [];
+      const keys10: string[] = [];
+      for (const [scale, sink] of [[undefined, keys15], [1, keys10]] as const) {
+        const s = setup(scale === undefined ? {} : { cropScale: scale });
+        vi.spyOn(s.cache, "put").mockImplementation(async (k) => void sink.push(k));
+        const el = document.createElement("div");
+        s.loader.attach(el, req);
+        s.show(el);
+        await flush();
+        expect(renderedScale(s)).toBe(scale ?? 1.5);
+      }
+      expect(keys10).toHaveLength(1);
+      expect(keys10[0]).not.toBe(keys15[0]);
+    });
+
+    it("ne ressert jamais une vignette d'une autre échelle depuis le cache partagé", async () => {
+      const cache = new MemoryThumbnailCache({ maxEntries: 10, maxBytes: 1e6 });
+      const a = setup({ cache });
+      const elA = document.createElement("div");
+      a.loader.attach(elA, req);
+      a.show(elA);
+      await flush();
+      const b = setup({ cache, cropScale: 1 });
+      const elB = document.createElement("div");
+      b.loader.attach(elB, req);
+      b.show(elB);
+      await flush();
+      expect(b.renderer.renderCrop).toHaveBeenCalledTimes(1); // pas de réutilisation de l'entrée 1,5
+    });
+  });
+
+  describe("validation de cropScale", () => {
+    const renderedScale = (s: ReturnType<typeof setup>): number =>
+      (s.renderer.renderCrop as ReturnType<typeof vi.fn>).mock.calls[0]![0].scale as number;
+
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("%s : échelle par défaut (1,5) et avertissement injecté", async (bad) => {
+      const s = setup({ cropScale: bad });
+      expect(s.onWarn).toHaveBeenCalledTimes(1);
+      expect(String(s.onWarn.mock.calls[0]?.[0])).toContain("cropScale");
+      const el = document.createElement("div");
+      s.loader.attach(el, req);
+      s.show(el);
+      await flush();
+      expect(renderedScale(s)).toBe(1.5);
+    });
+
+    it("échelle valide ou absente : aucun avertissement", () => {
+      expect(setup({ cropScale: 1 }).onWarn).not.toHaveBeenCalled();
+      expect(setup().onWarn).not.toHaveBeenCalled();
     });
   });
 });

@@ -2,7 +2,7 @@ import type { PdfDocumentLike } from "./indexer";
 
 /** Sous-ensemble du `window.pdfjsLib` de SiYuan utilisé pour l'indexation. */
 export interface PdfjsLoader {
-  getDocument(src: { url: string }): {
+  getDocument(src: { url: string; disableAutoFetch?: boolean; disableStream?: boolean }): {
     readonly promise: Promise<PdfDocumentLike>;
     destroy(): Promise<void> | void;
   };
@@ -60,6 +60,14 @@ function toAssetUrl(path: string): string {
   return `/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+export interface LoadPdfOptions {
+  /**
+   * Évite le téléchargement complet du PDF (mobile) : PDF.js ne demande que les plages utiles. Le flux reste actif
+   * (`disableStream: false`), car les requêtes par plages en dépendent. Absent ou faux : `getDocument({ url })`, comme avant.
+   */
+  readonly disableAutoFetch?: boolean;
+}
+
 /**
  * Fabrique le `loadPdf` de l'indexeur. `getPdfjs` est évalué (et attendu) à chaque appel : le PDF.js de SiYuan
  * peut ne pas être prêt au chargement du plugin.
@@ -67,6 +75,7 @@ function toAssetUrl(path: string): string {
 export function createLoadPdf(
   getPdfjs: () => PdfjsLoader | undefined | PromiseLike<PdfjsLoader | undefined>,
   onWarn: (message: string) => void = (message) => console.warn(`[docseeker] ${message}`),
+  options: LoadPdfOptions = {},
 ): (path: string, signal: AbortSignal) => Promise<PdfDocumentLike> {
   return async (path, signal) => {
     if (signal.aborted) throw abortError();
@@ -85,7 +94,11 @@ export function createLoadPdf(
     if (!ensureWorkerSrc(pdfjs)) {
       onWarn("pdfjsLib.GlobalWorkerOptions absent : impossible de définir workerSrc, PDF.js risque d'échouer");
     }
-    const task = pdfjs.getDocument({ url: toAssetUrl(path) });
+    const task = pdfjs.getDocument(
+      options.disableAutoFetch
+        ? { url: toAssetUrl(path), disableAutoFetch: true, disableStream: false }
+        : { url: toAssetUrl(path) },
+    );
     // La tâche n'est libérée qu'une fois, que ce soit par l'annulation ou par destroy() du document.
     let released: Promise<void> | undefined;
     const releaseTask = (): Promise<void> => (released ??= Promise.resolve().then(() => task.destroy()));
