@@ -11,6 +11,10 @@ const h = vi.hoisted(() => ({
   sharedStart: vi.fn(),
   sharedDispose: vi.fn(),
   sharedCreated: 0,
+  pdfjsGetters: [] as Array<() => unknown>,
+  lazyCreated: 0,
+  lazyOverride: undefined as undefined | (() => Promise<unknown>),
+  m0Deps: undefined as undefined | { pdfjs?: unknown; pdfjsError?: string },
   indexerDeps: undefined as { onDestroyError?: (e: unknown) => void; shouldYield?: () => boolean } | undefined,
   commands: [] as { langKey: string; langText?: string; hotkey?: string; callback?: () => void }[],
   mounts: [] as {
@@ -132,11 +136,33 @@ vi.mock("../../src/indexer/autoSync", async (orig) => {
     },
   };
 });
+vi.mock("../../src/siyuan/pdfjsLoader", async (orig) => {
+  const actual = await orig<typeof import("../../src/siyuan/pdfjsLoader")>();
+  return {
+    ...actual,
+    createLazyPdfjs: (deps: Parameters<typeof actual.createLazyPdfjs>[0]) => {
+      h.lazyCreated += 1;
+      return h.lazyOverride ?? actual.createLazyPdfjs(deps);
+    },
+  };
+});
+vi.mock("../../src/diagnostic/m0", async (orig) => {
+  const actual = await orig<typeof import("../../src/diagnostic/m0")>();
+  return {
+    ...actual,
+    runM0Diagnostic: (deps: Parameters<typeof actual.runM0Diagnostic>[0]) => {
+      h.m0Deps = deps;
+      return actual.runM0Diagnostic(deps);
+    },
+  };
+});
 vi.mock("../../src/siyuan/kernelApi", () => ({ createKernelApi: () => ({}) }));
 vi.mock("../../src/siyuan/nativeUi", () => ({ openMenu: vi.fn(), openDialog: vi.fn(), openCustomDialog: vi.fn(), openInputDialog: vi.fn(), openConfirmDialog: vi.fn(), openFloatingDialog: (o: unknown) => h.openFloating(o) }));
 vi.mock("../../src/siyuan/petalStore", () => ({ createPetalStore: () => ({ clear: h.clear, removeStaleTmp: h.stale }) }));
 vi.mock("../../src/siyuan/discovery", () => ({ discoverPdfs: vi.fn() }));
-vi.mock("../../src/indexer/loadPdf", () => ({ createLoadPdf: () => vi.fn() }));
+vi.mock("../../src/indexer/loadPdf", () => ({
+  createLoadPdf: (getter: () => unknown) => (h.pdfjsGetters.push(getter), vi.fn()),
+}));
 vi.mock("../../src/indexer/indexer", () => ({
   createIndexer: (deps: { onDestroyError?: (e: unknown) => void; shouldYield?: () => boolean }) => ({
     ...((h.indexerDeps = deps), {}),
@@ -337,6 +363,71 @@ describe("DocSeekerPlugin", () => {
     deps?.onDestroyError?.(error);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Libération du PDF en échec"), error);
     warn.mockRestore();
+  });
+
+  it("bureau : les points d'appel obtiennent window.pdfjsLib tel quel, sans injecter de script", async () => {
+    const lib = { getDocument: vi.fn() };
+    (window as { pdfjsLib?: unknown }).pdfjsLib = lib;
+    const scriptsBefore = document.querySelectorAll("script").length;
+    h.pdfjsGetters.length = 0;
+    try {
+      const s = setup();
+      s.render(); // point d'appel de l'onglet
+      s.plugin.onLayoutReady(); // point d'appel de l'indexeur
+      expect(h.pdfjsGetters.length).toBeGreaterThanOrEqual(2);
+      for (const getter of h.pdfjsGetters) await expect(getter()).resolves.toBe(lib);
+      expect(document.querySelectorAll("script")).toHaveLength(scriptsBefore);
+    } finally {
+      delete (window as { pdfjsLib?: unknown }).pdfjsLib;
+    }
+  });
+
+  it("les deux points d'appel partagent le même chargeur paresseux (une seule création)", () => {
+    h.lazyCreated = 0;
+    h.pdfjsGetters.length = 0;
+    const s = setup();
+    s.render();
+    s.plugin.onLayoutReady();
+    expect(h.pdfjsGetters.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(h.pdfjsGetters).size).toBe(1);
+    expect(h.lazyCreated).toBe(1);
+  });
+
+  it("Diagnostic : transmet le PDF.js obtenu du chargeur paresseux", async () => {
+    const lib = { getDocument: vi.fn() };
+    h.lazyOverride = async () => lib;
+    h.m0Deps = undefined;
+    const captured = (): { pdfjs?: unknown; pdfjsError?: string } | undefined => h.m0Deps;
+    try {
+      setup();
+      const panel = openPanel();
+      panel.diagnostic.querySelector<HTMLButtonElement>("button")!.click();
+      await flush();
+      expect(captured()?.pdfjs).toBe(lib);
+      expect(captured()?.pdfjsError).toBeUndefined();
+      panel.close();
+    } finally {
+      h.lazyOverride = undefined;
+    }
+  });
+
+  it("Diagnostic : l'échec de chargement de PDF.js est tracé et son message transmis au rapport", async () => {
+    h.lazyOverride = async () => {
+      throw new Error("PDF.js n'est pas apparu après 10000 ms");
+    };
+    h.m0Deps = undefined;
+    const captured = (): { pdfjs?: unknown; pdfjsError?: string } | undefined => h.m0Deps;
+    try {
+      setup();
+      const panel = openPanel();
+      panel.diagnostic.querySelector<HTMLButtonElement>("button")!.click();
+      await flush();
+      expect(captured()?.pdfjs).toBeUndefined();
+      expect(captured()?.pdfjsError).toContain("PDF.js n'est pas apparu après 10000 ms");
+      panel.close();
+    } finally {
+      h.lazyOverride = undefined;
+    }
   });
 
   it("onunload libère les onglets restants", () => {

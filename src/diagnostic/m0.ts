@@ -40,6 +40,8 @@ export interface M0Deps {
   readonly kernel: Pick<KernelApi, "readDir" | "getFile" | "putFile" | "removeFile" | "headAsset">;
   readonly fetch: FetchLike;
   readonly pdfjs: PdfjsLike | undefined;
+  /** Message de l'échec de chargement de PDF.js, rapporté quand `pdfjs` est absent. */
+  readonly pdfjsError?: string;
   readonly createWorker?: (url: string) => { terminate(): void; onerror: unknown };
   readonly now: () => number;
   readonly petalDir: string;
@@ -169,7 +171,10 @@ async function checkRoundtrip(deps: M0Deps): Promise<Outcome> {
 
 async function checkPdfjs(deps: M0Deps, pdf: PdfEntry): Promise<Outcome> {
   const pdfjs = deps.pdfjs;
-  if (pdfjs === undefined) return fail("pdfjs indisponible (window.pdfjsLib non défini)");
+  if (pdfjs === undefined) {
+    const cause = deps.pdfjsError === undefined ? "" : ` : ${deps.pdfjsError}`;
+    return fail(truncate(`pdfjs indisponible (window.pdfjsLib non défini)${cause}`));
+  }
   // Même préparation que l'indexeur ; si GlobalWorkerOptions est absent, PDF.js produit son erreur (check en échec).
   ensureWorkerSrc(pdfjs);
   const doc = await pdfjs.getDocument({ url: assetUrl(pdf.path) }).promise;

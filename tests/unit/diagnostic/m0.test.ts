@@ -325,6 +325,13 @@ describe("runM0Diagnostic", () => {
     expect(b.detail).toContain("invalid pdf");
   });
 
+  it("pdfjs: absent => le message de l'erreur de chargement figure dans le détail", async () => {
+    const { deps } = makeDeps({ pdfjs: undefined });
+    const c = by(await runM0Diagnostic({ ...deps, pdfjsError: "PDF.js n'est pas apparu après 10000 ms" }), "pdfjs");
+    expect(c.status).toBe("fail");
+    expect(c.detail).toContain("PDF.js n'est pas apparu après 10000 ms");
+  });
+
   it("worker: sans createWorker => skip", async () => {
     const { deps } = makeDeps({ createWorker: null });
     const r = await runM0Diagnostic(deps);

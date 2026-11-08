@@ -10,6 +10,7 @@ import { createIndexActivity, type IndexActivity } from "./indexer/indexActivity
 import { createIndexer, type Indexer } from "./indexer/indexer";
 import { SETTINGS_FILE, createSettings, type DocSeekerSettings, type OpenMode, type SettingsStore } from "./settings";
 import { createLoadPdf, type PdfjsLoader } from "./indexer/loadPdf";
+import { createLazyPdfjs } from "./siyuan/pdfjsLoader";
 import { discoverPdfs } from "./siyuan/discovery";
 import { createPetalStore, type PetalStore } from "./siyuan/petalStore";
 import { decodeIndexForSearch } from "./core/codec/decode";
@@ -221,6 +222,7 @@ export default class DocSeekerPlugin extends Plugin {
 
   private unloaded = false;
   private indexer: Indexer | null = null;
+  private lazyPdfjs: (() => Promise<PdfjsLoader>) | undefined;
   private sharedIndex: SharedIndex | null = null;
   private petalStore: PetalStore | null = null;
   private readonly tabCleanups = new Map<Element, Array<() => void>>();
@@ -591,8 +593,7 @@ export default class DocSeekerPlugin extends Plugin {
     ensureSearchStyle(document);
     const { floating } = mode;
     const kernel = createKernelApi();
-    const getPdfjs = (): PdfjsLoader | undefined => window.pdfjsLib as PdfjsLoader | undefined;
-    const loadPdf = createLoadPdf(getPdfjs);
+    const loadPdf = createLoadPdf(this.getPdfjs());
     const sharedIndex = this.getSharedIndex();
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     return mountSearchTab(host, {
@@ -681,13 +682,22 @@ export default class DocSeekerPlugin extends Plugin {
     return this.activity;
   }
 
+  /**
+   * Chargeur PDF.js paresseux, partagé par l'onglet, l'indexeur et le diagnostic. Sur bureau, `window.pdfjsLib`
+   * est normalement déjà posé par les gabarits de SiYuan : il est alors renvoyé tel quel, sans rien injecter.
+   * Sinon (mobile), l'injection du module PDF.js de SiYuan comble le manque.
+   */
+  private getPdfjs(): () => Promise<PdfjsLoader> {
+    return (this.lazyPdfjs ??= createLazyPdfjs({ window, document }));
+  }
+
   private getIndexer(): Indexer {
     if (this.indexer) return this.indexer;
     const kernel = createKernelApi();
     this.indexer = createIndexer({
       discover: () => discoverPdfs({ api: kernel }),
       store: this.getPetalStore(kernel),
-      loadPdf: createLoadPdf(() => window.pdfjsLib as PdfjsLoader | undefined),
+      loadPdf: createLoadPdf(this.getPdfjs()),
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
       onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),
@@ -698,10 +708,21 @@ export default class DocSeekerPlugin extends Plugin {
   }
 
   private async runDiagnostic(): Promise<string> {
+    // PDF.js : celui de SiYuan s'il existe (bureau), sinon chargé paresseusement ; un échec est tracé
+    // et son message est transmis au rapport (« pdfjs indisponible : <cause> »).
+    let pdfjs: PdfjsLike | undefined;
+    let pdfjsError: string | undefined;
+    try {
+      pdfjs = (await this.getPdfjs()()) as PdfjsLike;
+    } catch (error) {
+      this.warnLog.warn("Chargement de PDF.js en échec (diagnostic)", error);
+      pdfjsError = error instanceof Error ? error.message : String(error);
+    }
     const report = await runM0Diagnostic({
       kernel: createKernelApi(),
       fetch: (input, init) => fetch(input, init),
-      pdfjs: window.pdfjsLib as PdfjsLike | undefined,
+      pdfjs,
+      ...(pdfjsError === undefined ? {} : { pdfjsError }),
       createWorker: (url) => new Worker(url, { type: "module" }),
       now: () => performance.now(),
       petalDir: `${PETAL_ROOT}/${this.name}`,

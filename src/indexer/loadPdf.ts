@@ -34,22 +34,52 @@ function abortError(): Error {
   return new DOMException(ABORT_MESSAGE, "AbortError");
 }
 
+function isThenable<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return typeof (value as { then?: unknown } | null | undefined)?.then === "function";
+}
+
+/**
+ * Attend `promise`, mais rend la main avec l'erreur d'annulation dès que le signal tombe. Un catch est attaché
+ * à la promesse d'origine : son éventuel rejet tardif ne devient pas un rejet non géré.
+ */
+function awaitUnlessAborted<T>(promise: PromiseLike<T>, signal: AbortSignal): Promise<T> {
+  const source = Promise.resolve(promise);
+  source.catch(() => undefined);
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([source, aborted]).finally(() => {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  });
+}
+
 /** `assets/dossier a/é.pdf` devient `/assets/dossier%20a/%C3%A9.pdf` (encodage par segment). */
 function toAssetUrl(path: string): string {
   return `/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /**
- * Fabrique le `loadPdf` de l'indexeur. `getPdfjs` est évalué à chaque appel : le PDF.js de SiYuan
+ * Fabrique le `loadPdf` de l'indexeur. `getPdfjs` est évalué (et attendu) à chaque appel : le PDF.js de SiYuan
  * peut ne pas être prêt au chargement du plugin.
  */
 export function createLoadPdf(
-  getPdfjs: () => PdfjsLoader | undefined,
+  getPdfjs: () => PdfjsLoader | undefined | PromiseLike<PdfjsLoader | undefined>,
   onWarn: (message: string) => void = (message) => console.warn(`[docseeker] ${message}`),
 ): (path: string, signal: AbortSignal) => Promise<PdfDocumentLike> {
   return async (path, signal) => {
     if (signal.aborted) throw abortError();
-    const pdfjs = getPdfjs();
+    // Getter synchrone (bureau) : aucune attente, le déroulé reste identique. Asynchrone (chargeur paresseux,
+    // mobile) : on attend, puis on revérifie l'annulation survenue pendant l'attente.
+    const got = getPdfjs();
+    let pdfjs: PdfjsLoader | undefined;
+    if (isThenable(got)) {
+      pdfjs = await awaitUnlessAborted(got, signal);
+      if (signal.aborted) throw abortError();
+    } else {
+      pdfjs = got;
+    }
     if (!pdfjs) throw new Error("PDF.js de SiYuan indisponible (window.pdfjsLib absent)");
 
     if (!ensureWorkerSrc(pdfjs)) {

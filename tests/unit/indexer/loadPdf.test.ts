@@ -203,3 +203,92 @@ describe("createLoadPdf : workerSrc de PDF.js", () => {
     expect(String(onWarn.mock.calls[0]?.[0])).toMatch(/GlobalWorkerOptions/);
   });
 });
+
+describe("createLoadPdf avec un getter asynchrone", () => {
+  it("attend le getter asynchrone puis charge le document", async () => {
+    const f = fakePdfjs();
+    const load = createLoadPdf(async () => f.pdfjs);
+    await expect(load("assets/a.pdf", new AbortController().signal)).resolves.toBe(f.doc);
+    expect(f.getDocument).toHaveBeenCalledWith({ url: "/assets/a.pdf" });
+  });
+
+  it("propage l'échec du getter asynchrone", async () => {
+    const load = createLoadPdf(async () => {
+      throw new Error("injection KO");
+    });
+    await expect(load("assets/a.pdf", new AbortController().signal)).rejects.toThrow("injection KO");
+  });
+
+  it("échoue clairement si le getter asynchrone renvoie undefined", async () => {
+    const load = createLoadPdf(async () => undefined);
+    await expect(load("assets/a.pdf", new AbortController().signal)).rejects.toThrow(/PDF\.js/);
+  });
+
+  it("ne démarre rien si le signal est déjà annulé", async () => {
+    const getter = vi.fn(async () => fakePdfjs().pdfjs);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(createLoadPdf(getter)("assets/a.pdf", controller.signal)).rejects.toThrow();
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("abandonne si l'annulation survient pendant l'attente du getter", async () => {
+    const f = fakePdfjs();
+    const controller = new AbortController();
+    const load = createLoadPdf(async () => {
+      controller.abort();
+      return f.pdfjs;
+    });
+    await expect(load("assets/a.pdf", controller.signal)).rejects.toThrow();
+    expect(f.getDocument).not.toHaveBeenCalled();
+  });
+
+  it("rend la main tout de suite si l'annulation tombe pendant l'attente d'un getter resté en attente", async () => {
+    const f = fakePdfjs();
+    const controller = new AbortController();
+    const never = new Promise<PdfjsLoader>(() => undefined);
+    const load = createLoadPdf(() => never);
+    const outcome = load("assets/a.pdf", controller.signal).then(
+      () => "résolu",
+      (error: unknown) => (error as Error).name,
+    );
+    controller.abort();
+    const winner = await Promise.race([outcome, new Promise((r) => setTimeout(() => r("bloqué"), 50))]);
+    expect(winner).toBe("AbortError");
+    expect(f.getDocument).not.toHaveBeenCalled();
+  });
+
+  it("le rejet tardif du getter après annulation n'est pas un rejet non géré", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const controller = new AbortController();
+      let fail: (e: Error) => void = () => undefined;
+      const slow = new Promise<PdfjsLoader>((_, reject) => {
+        fail = reject;
+      });
+      const outcome = createLoadPdf(() => slow)("assets/a.pdf", controller.signal).catch(() => undefined);
+      controller.abort();
+      await outcome;
+      fail(new Error("échec tardif"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("accepte un thenable qui n'est pas une Promise", async () => {
+    const f = fakePdfjs();
+    const thenable = { then: (resolve: (v: PdfjsLoader) => void) => resolve(f.pdfjs) };
+    const load = createLoadPdf(() => thenable as unknown as Promise<PdfjsLoader>);
+    await expect(load("assets/a.pdf", new AbortController().signal)).resolves.toBe(f.doc);
+  });
+
+  it("getter synchrone : getDocument est appelé sans aucune attente de microtâche", () => {
+    const f = fakePdfjs();
+    const load = createLoadPdf(() => f.pdfjs);
+    void load("assets/a.pdf", new AbortController().signal);
+    expect(f.getDocument).toHaveBeenCalledTimes(1);
+  });
+});
