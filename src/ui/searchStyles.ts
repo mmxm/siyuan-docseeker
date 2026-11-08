@@ -169,7 +169,7 @@ export const SEARCH_CSS = `
 .docseeker-floating-body--fullscreen .docseeker-thumb { width: 100%; }
 .docseeker-floating-body--fullscreen .docseeker-doc { padding: 6px 0; }
 .docseeker-floating-body--fullscreen .docseeker-doc-title { font-size: 16px; font-weight: bold; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; }
-.docseeker-floating-body--fullscreen .docseeker-doc-fullpath { font-size: 12px; color: var(--b3-theme-on-surface); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.docseeker-floating-body--fullscreen .docseeker-doc-fullpath { display: none; }
 /* /mobile-compact */
 @media (forced-colors: active) {
   .docseeker-highlight { background: transparent; outline: 2px solid Highlight; outline-offset: -2px; }

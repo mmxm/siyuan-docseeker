@@ -61,17 +61,13 @@ describe("compactage mobile plein écran", () => {
     expect(body(".docseeker-thumb")).toContain("width: 100%");
   });
 
-  it("titre 16px gras sur 2 lignes max, chemin petit gris sur une ligne", () => {
+  it("titre 16px gras sur 2 lignes max ; chemin du PDF masqué (gain de place, le titre suffit)", () => {
     const t = body(".docseeker-doc-title");
     expect(t).toMatch(/font-size: 16px/);
     expect(t).toMatch(/font-weight: bold|font-weight: 600/);
     expect(t).toContain("-webkit-line-clamp: 2");
     expect(t).toContain("text-overflow: ellipsis");
-    const p = body(".docseeker-doc-fullpath");
-    expect(p).toMatch(/font-size: 12px/);
-    expect(p).toContain("white-space: nowrap");
-    expect(p).toContain("text-overflow: ellipsis");
-    expect(p).toContain("var(--b3-theme-on-surface)");
+    expect(body(".docseeker-doc-fullpath")).toMatch(/display: none/);
   });
 
   it("aucune couleur en dur dans le bloc", () => {

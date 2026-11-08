@@ -11,7 +11,7 @@ import { createAutoSync, type AutoSync, type AutoSyncConfig } from "./indexer/au
 import { createIndexActivity, type IndexActivity } from "./indexer/indexActivity";
 import { createIndexer, type Indexer } from "./indexer/indexer";
 import { SETTINGS_FILE, createSettings, type DocSeekerSettings, type OpenMode, type SettingsStore } from "./settings";
-import { createLoadPdf, type PdfjsLoader } from "./indexer/loadPdf";
+import { createLoadPdf, type LoadPdfOptions, type PdfjsLoader } from "./indexer/loadPdf";
 import { createLazyPdfjs } from "./siyuan/pdfjsLoader";
 import { discoverPdfs } from "./siyuan/discovery";
 import { createPetalStore, type PetalStore } from "./siyuan/petalStore";
@@ -24,6 +24,14 @@ import { createClearingFlag, createSettingsPanel, type SettingsPanel } from "./u
 import type { OpenTabFn } from "./siyuan/openPdf";
 import type { CustomDialogHandle } from "./ui/nativeUiTypes";
 import type { RenderableDocument } from "./siyuan/pdfRenderer";
+
+/** Options de `createLoadPdf` tirées du profil ; `canvasMaxAreaInBytes` n'est présent que s'il est défini (bureau : absent). */
+function loadPdfOptions(profile: PlatformProfile): LoadPdfOptions {
+  return {
+    disableAutoFetch: profile.disableAutoFetch,
+    ...(profile.canvasMaxAreaInBytes === undefined ? {} : { canvasMaxAreaInBytes: profile.canvasMaxAreaInBytes }),
+  };
+}
 
 const TAB_TYPE = "docseeker";
 const TOP_BAR_ID = "docseeker-top-bar";
@@ -701,7 +709,7 @@ export default class DocSeekerPlugin extends Plugin {
     const { floating } = mode;
     const kernel = createKernelApi();
     const profile = this.getProfile();
-    const loadPdf = createLoadPdf(this.getPdfjs(), undefined, { disableAutoFetch: profile.disableAutoFetch });
+    const loadPdf = createLoadPdf(this.getPdfjs(), undefined, loadPdfOptions(profile));
     const sharedIndex = this.getSharedIndex();
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     return mountSearchTab(host, {
@@ -811,7 +819,7 @@ export default class DocSeekerPlugin extends Plugin {
     this.indexer = createIndexer({
       discover: () => discoverPdfs({ api: kernel }),
       store: this.getPetalStore(kernel),
-      loadPdf: createLoadPdf(this.getPdfjs(), undefined, { disableAutoFetch: this.getProfile().disableAutoFetch }),
+      loadPdf: createLoadPdf(this.getPdfjs(), undefined, loadPdfOptions(this.getProfile())),
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
       onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),

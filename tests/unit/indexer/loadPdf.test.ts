@@ -57,6 +57,18 @@ describe("createLoadPdf", () => {
     expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: false });
   });
 
+  it("canvasMaxAreaInBytes : passé à getDocument seulement s'il est fourni (mobile), jamais par défaut (bureau)", async () => {
+    const m = fakePdfjs();
+    await createLoadPdf(() => m.pdfjs, undefined, { disableAutoFetch: true, canvasMaxAreaInBytes: 32_000_000 })("assets/a.pdf", new AbortController().signal);
+    expect(m.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: false, canvasMaxAreaInBytes: 32_000_000 });
+    const d = fakePdfjs();
+    await createLoadPdf(() => d.pdfjs, undefined, { disableAutoFetch: false })("assets/a.pdf", new AbortController().signal);
+    expect(d.getDocument.mock.calls[0]![0]).not.toHaveProperty("canvasMaxAreaInBytes");
+    const u = fakePdfjs();
+    await createLoadPdf(() => u.pdfjs, undefined, {})("assets/a.pdf", new AbortController().signal);
+    expect(u.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES });
+  });
+
   it("échoue clairement si PDF.js n'est pas disponible", async () => {
     const load = createLoadPdf(() => undefined);
     await expect(load("assets/a.pdf", new AbortController().signal)).rejects.toThrow(/PDF\.js/);

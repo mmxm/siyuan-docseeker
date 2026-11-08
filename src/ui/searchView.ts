@@ -844,7 +844,8 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
         // Hors tri par pertinence, l'ordre des documents vient du tri : seules les pages sont classées par proximité.
         const sortKey = opts?.getOptions().sort.key ?? "relevance";
         const refinedText = tr(sortKey === "relevance" ? "rankingRefined" : "rankingRefinedPages");
-        const refined = vm.ranking === "proximity" ? `${counted}. ${refinedText}` : counted;
+        // Mobile plein écran (readOnly) : la mention est omise, la place est comptée.
+        const refined = vm.ranking === "proximity" && !deps.readOnly ? `${counted}. ${refinedText}` : counted;
         setStatus(withIndexing(withFailed(refined, vm.failedCount)), { settings: vm.failedCount > 0 });
         renderResults(vm.docs, vm.query);
         break;

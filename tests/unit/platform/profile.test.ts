@@ -39,6 +39,11 @@ describe("desktopProfile", () => {
     expect(p.decodeConcurrency).toBe(2);
     expect(p.disableAutoFetch).toBe(false);
   });
+
+  it("n'impose aucun plafond de canevas (paramètre non passé à PDF.js)", () => {
+    expect(desktopProfile().canvasMaxAreaInBytes).toBeUndefined();
+    expect("canvasMaxAreaInBytes" in desktopProfile() && desktopProfile().canvasMaxAreaInBytes !== undefined).toBe(false);
+  });
 });
 
 describe("mobileProfile", () => {
@@ -57,6 +62,12 @@ describe("mobileProfile", () => {
     expect(p.pageMatchesLimit).toBe(16 * 1024 * 1024);
     expect(p.decodeConcurrency).toBe(1);
     expect(p.disableAutoFetch).toBe(true);
+  });
+
+  it("plafonne le canevas à 8 M pixels x 4 octets (limite iOS ~16,7 M px)", () => {
+    const v = mobileProfile().canvasMaxAreaInBytes;
+    expect(v).toBe(32_000_000);
+    expect(Number.isInteger(v) && v! > 0).toBe(true);
   });
 
   it("surcharge autoIndex et openMode sans muter l'original", () => {

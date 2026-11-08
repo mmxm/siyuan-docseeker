@@ -12,6 +12,7 @@ export interface PdfjsLoader {
     cMapPacked?: boolean;
     disableAutoFetch?: boolean;
     disableStream?: boolean;
+    canvasMaxAreaInBytes?: number;
   }): {
     readonly promise: Promise<PdfDocumentLike>;
     destroy(): Promise<void> | void;
@@ -76,6 +77,8 @@ export interface LoadPdfOptions {
    * (`disableStream: false`), car les requêtes par plages en dépendent. Absent ou faux : `getDocument({ url, ...ressources })`.
    */
   readonly disableAutoFetch?: boolean;
+  /** Aire maximale d'un canevas d'image en octets (mobile : iOS limite un canevas à ~16,7 M px). Absent : non passé à PDF.js. */
+  readonly canvasMaxAreaInBytes?: number;
 }
 
 /**
@@ -106,11 +109,12 @@ export function createLoadPdf(
     }
     // Les ressources (wasm, ICC, polices, CMap) sont passées partout : sans elles, les images JBIG2/JPX des
     // référentiels scannés ne sont pas décodées et les vignettes sont blanches.
-    const task = pdfjs.getDocument(
-      options.disableAutoFetch
-        ? { url: toAssetUrl(path), ...PDFJS_GETDOCUMENT_RESOURCES, disableAutoFetch: true, disableStream: false }
-        : { url: toAssetUrl(path), ...PDFJS_GETDOCUMENT_RESOURCES },
-    );
+    const task = pdfjs.getDocument({
+      url: toAssetUrl(path),
+      ...PDFJS_GETDOCUMENT_RESOURCES,
+      ...(options.disableAutoFetch ? { disableAutoFetch: true, disableStream: false } : {}),
+      ...(options.canvasMaxAreaInBytes === undefined ? {} : { canvasMaxAreaInBytes: options.canvasMaxAreaInBytes }),
+    });
     // La tâche n'est libérée qu'une fois, que ce soit par l'annulation ou par destroy() du document.
     let released: Promise<void> | undefined;
     const releaseTask = (): Promise<void> => (released ??= Promise.resolve().then(() => task.destroy()));

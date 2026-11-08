@@ -24,6 +24,11 @@ export interface PlatformProfile {
   readonly decodeConcurrency: number;
   /** Ne pas télécharger le PDF en entier : PDF.js ne lit que les plages utiles (mobile). */
   readonly disableAutoFetch: boolean;
+  /**
+   * Aire maximale (en octets, 4 par pixel) d'un canevas d'image pour PDF.js (`getDocument`) ; PDF.js sous-échantillonne
+   * les images plus grandes. Absent (bureau) : le paramètre n'est pas passé, comportement inchangé.
+   */
+  readonly canvasMaxAreaInBytes?: number;
   /** Index chargé à la première ouverture de la recherche plutôt qu'au démarrage. */
   readonly lazyIndexLoad: boolean;
   /** Disposition de la fenêtre de recherche : fenêtre flottante (bureau) ou plein écran (mobile). */
@@ -64,6 +69,9 @@ export function mobileProfile(): PlatformProfile {
     pageMatchesLimit: 16 * 1024 * 1024,
     decodeConcurrency: 1,
     disableAutoFetch: true,
+    // 8 M pixels x 4 octets : marge sous la limite d'un canevas iOS Safari (~16,7 M px, au-delà le dessin échoue
+    // silencieusement et la vignette reste blanche) et mémoire limitée du mobile.
+    canvasMaxAreaInBytes: 8_000_000 * 4,
     lazyIndexLoad: true,
     floatingLayout: "fullscreen",
     canOpenTab: false,

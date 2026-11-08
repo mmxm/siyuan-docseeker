@@ -869,6 +869,13 @@ describe("mountSearchView", () => {
       });
     });
 
+    it("mobile plein écran (readOnly) : la mention est omise, le décompte reste", () => {
+      mount({ readOnly: true });
+      update(results([doc("a", [1])], false, 0, "proximity"));
+      expect(status()).not.toContain(REFINED);
+      expect(status()).toMatch(/1 document.*1 page/);
+    });
+
     it("utilise la clé i18n rankingRefined", () => {
       mount({ t: (k) => (k === "rankingRefined" ? "Refined" : k) });
       update(results([doc("a", [1])], false, 0, "proximity"));
