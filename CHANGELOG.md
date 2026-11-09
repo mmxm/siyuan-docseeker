@@ -1,5 +1,15 @@
 # Journal des modifications
 
+## 0.5.0
+
+Publiée le 2026-11-09.
+
+- Mobile (iPhone, Android, navigateur du téléphone) : la recherche s'ouvre en plein écran, avec une mise en page compacte et des cibles tactiles de 44 px. Toucher une vignette ouvre le PDF dans le visionneur de SiYuan, à la bonne page, avec les mots surlignés.
+- Sur mobile, le plugin est en lecture seule : il utilise l'index construit sur ordinateur et n'indexe pas lui-même. Les PDF ajoutés depuis le téléphone apparaissent après une indexation sur ordinateur.
+- Sur mobile, le rendu des vignettes est limité (une à la fois, cache réduit, taille des images plafonnée) pour tenir dans la mémoire de Safari.
+- Les vignettes des PDF scannés compressés en JBIG2 ou JPEG 2000 ne sont plus blanches : les décodeurs de PDF.js sont activés.
+- Sur iPhone, Safari est très lent si SiYuan est ouvert en HTTP par une adresse IP du réseau local (une page de scan lourd peut prendre une minute). Utilisez une adresse en HTTPS.
+
 ## 0.4.0
 
 Publiée le 2026-11-07.

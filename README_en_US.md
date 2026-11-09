@@ -16,7 +16,7 @@ Full-text search inside the PDFs of your SiYuan workspace. Results are shown as 
 
 ## Installation
 
-Requirements: SiYuan 3.8.0 or later, used in the **desktop web browser** (webapp), including with Docker. The plugin does not work on mobile.
+Requirements: SiYuan 3.8.0 or later, used in the **desktop web browser** (webapp), including with Docker. On mobile (phone browser or SiYuan app), the plugin works read-only: indexing is done on a computer.
 
 ### From the SiYuan Marketplace
 
@@ -159,7 +159,7 @@ No command has a shortcut by default. To assign one, open SiYuan's settings, go 
 
 ## Known limitations
 
-- **Target: the SiYuan webapp on a computer**, tested with SiYuan 3.8.9. Mobile is not supported. The desktop application is declared in the manifest but has not been tested.
+- **Target: the SiYuan webapp on a computer**, tested with SiYuan 3.8.9. On mobile, the plugin is read-only and has been tried on iPhone (Safari); Android and the SiYuan mobile app have not been tested. Open SiYuan over HTTPS: over HTTP by a local network IP address, Safari is very slow on scanned PDFs. The desktop application is declared in the manifest but has not been tested.
 - **Filters, filtering by SiYuan document, saved criteria, sorting, keyboard, history and floating window** have been tried in the SiYuan 3.8.9 webapp, on a test workspace (the path dialogue and the criteria line were checked with screenshots). They are not yet validated in the desktop application. The dark theme, the 320 px width, the long path label and the highlight in the panel opened on the right have not been checked yet. The path dialogue has not been compared pixel by pixel with SiYuan's, and it does not have the input history chevron of SiYuan. On macOS, **Alt+↓** may be captured by the system before it reaches the plugin.
 - **PDFs without text are skipped**: a scanned PDF (an image with no text layer) is not indexed and is reported in the tab. There is no OCR.
 - **Substring search from 3 characters**: "pco" finds "BPCO". Below 3 characters, search works on whole words, with a prefix on the last word only. Whole words rank before prefixes, then substrings.

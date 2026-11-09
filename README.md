@@ -16,7 +16,7 @@ Recherche plein texte dans les PDF de votre espace SiYuan. Les résultats s'affi
 
 ## Installation
 
-Prérequis : SiYuan 3.8.0 ou plus, utilisé dans le **navigateur sur ordinateur** (webapp), y compris en Docker. Le plugin ne fonctionne pas sur mobile.
+Prérequis : SiYuan 3.8.0 ou plus, utilisé dans le **navigateur sur ordinateur** (webapp), y compris en Docker. Sur mobile (navigateur du téléphone ou application SiYuan), le plugin fonctionne en lecture seule : l'indexation se fait sur ordinateur.
 
 ### Par le Marché de SiYuan
 
@@ -159,7 +159,7 @@ Aucune commande n'a de raccourci par défaut. Pour en attribuer un, ouvrez les p
 
 ## Limites connues
 
-- **Cible : webapp SiYuan sur ordinateur**, testée avec SiYuan 3.8.9. Le mobile n'est pas pris en charge. L'application de bureau est déclarée dans le manifeste mais n'a pas été testée.
+- **Cible : webapp SiYuan sur ordinateur**, testée avec SiYuan 3.8.9. Sur mobile, le plugin est en lecture seule et a été essayé sur iPhone (Safari) ; Android et l'application mobile SiYuan n'ont pas été testés. Ouvrez SiYuan en HTTPS : en HTTP par une adresse IP du réseau local, Safari est très lent sur les PDF scannés. L'application de bureau est déclarée dans le manifeste mais n'a pas été testée.
 - **Filtres, filtre par document SiYuan, critères enregistrés, tris, clavier, historique et fenêtre flottante** ont été essayés dans la webapp de SiYuan 3.8.9, sur un espace de test (le dialogue de chemin et la ligne de critères ont été vérifiés avec des captures d'écran). Ils ne sont pas encore validés dans l'application de bureau. Le rendu en thème sombre, en largeur de 320 px, l'étiquette de chemin longue et le surlignage dans le volet ouvert à droite n'ont pas encore été contrôlés. Le dialogue de chemin n'a pas été comparé pixel à pixel à celui de SiYuan, et il n'a pas l'historique de saisie du chevron de SiYuan. Sous macOS, **Alt+↓** peut être capté par le système avant d'atteindre le plugin.
 - **PDF sans texte ignorés** : un PDF scanné (image sans couche de texte) n'est pas indexé. Il est signalé dans l'onglet. Il n'y a pas d'OCR.
 - **Sous-chaîne à partir de 3 caractères** : « pco » trouve « BPCO ». En dessous de 3 caractères, la recherche porte sur des mots entiers, avec préfixe sur le dernier mot. Les mots entiers passent avant les préfixes, puis les sous-chaînes.
