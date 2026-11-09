@@ -737,6 +737,11 @@ export interface PageMatch {
   /** Taille de la page en points (repli A4 pour un fichier v1, qui n'en stocke pas). */
   readonly pageSize: PageSize;
   /**
+   * Présent (`true`) seulement pour un fichier v1 : `pageSize` est alors le repli A4, pas la vraie taille.
+   * Absent pour un fichier v2 (taille lue dans l'index).
+   */
+  readonly pageSizeAssumed?: true;
+  /**
    * Index du mot de la requête satisfait par chaque ordinal (parallèle à `ordinals`) ; un ordinal que plusieurs
    * mots de la requête partagent figure autant de fois que de mots.
    * Absent quand aucun indexeur de termes n'est fourni.
@@ -784,7 +789,14 @@ export async function decodePagesMatches(
     if (last !== undefined && last >= boxes.length) {
       throw new CorruptDataError(`word ordinal ${last} beyond the ${boxes.length} boxes of page ${page}`);
     }
-    result.set(page, termIndexes ? { boxes, ordinals, pageSize, termIndexes } : { boxes, ordinals, pageSize });
+    const assumed = header.formatVersion < DSX_PAGE_SIZE_FORMAT_VERSION;
+    result.set(page, {
+      boxes,
+      ordinals,
+      pageSize,
+      ...(assumed ? { pageSizeAssumed: true as const } : {}),
+      ...(termIndexes ? { termIndexes } : {}),
+    });
   }
   return result;
 }

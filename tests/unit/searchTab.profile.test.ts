@@ -35,8 +35,9 @@ vi.mock("../../src/ui/thumbnailLoader", async (orig) => {
 
 import {
   CROP_RENDER_SCALE,
-  DEFAULT_MAX_OPEN_DOCUMENTS,
-  DEFAULT_RENDER_CONCURRENCY,
+  DESKTOP_MAX_OPEN_DOCUMENTS,
+  DESKTOP_RENDER_CONCURRENCY,
+  DESKTOP_WORKERS_PER_DOCUMENT,
   PAGE_MATCHES_MAX_BYTES,
   THUMBNAIL_CACHE_MAX_BYTES,
   THUMBNAIL_CACHE_MAX_ENTRIES,
@@ -71,9 +72,13 @@ describe("assemblage : bureau inchangé (aucun profil, ou profil bureau)", () =>
     ["sans profil", {}],
     ["profil bureau explicite", { profile: desktopProfile() }],
   ] as const) {
-    it(`${label} : constantes historiques partout`, () => {
+    it(`${label} : constantes du bureau partout`, () => {
       const { tab } = mount(over);
-      expect(spy.renderer[0]).toMatchObject({ concurrency: DEFAULT_RENDER_CONCURRENCY, maxOpenDocuments: DEFAULT_MAX_OPEN_DOCUMENTS });
+      expect(spy.renderer[0]).toMatchObject({
+        concurrency: DESKTOP_RENDER_CONCURRENCY,
+        maxOpenDocuments: DESKTOP_MAX_OPEN_DOCUMENTS,
+        workersPerDocument: DESKTOP_WORKERS_PER_DOCUMENT,
+      });
       expect(spy.cache[0]).toMatchObject({ maxEntries: THUMBNAIL_CACHE_MAX_ENTRIES, maxBytes: THUMBNAIL_CACHE_MAX_BYTES });
       expect(spy.pageMatches[0]).toMatchObject({ maxBytesFiles: PAGE_MATCHES_MAX_BYTES });
       expect((spy.loader[0] as { cropScale?: number }).cropScale).toBe(CROP_RENDER_SCALE);
@@ -86,7 +91,7 @@ describe("assemblage : profil mobile", () => {
   it("transmet concurrence, documents ouverts, cache, correspondances et échelle", () => {
     const profile = mobileProfile();
     const { tab } = mount({ profile });
-    expect(spy.renderer[0]).toMatchObject({ concurrency: 1, maxOpenDocuments: 1 });
+    expect(spy.renderer[0]).toMatchObject({ concurrency: 2, maxOpenDocuments: 2, workersPerDocument: 2 });
     expect(spy.cache[0]).toMatchObject({ maxEntries: 500, maxBytes: 16 * 1024 * 1024 });
     expect(spy.pageMatches[0]).toMatchObject({ maxBytesFiles: 16 * 1024 * 1024 });
     expect((spy.loader[0] as { cropScale?: number }).cropScale).toBe(1.0);

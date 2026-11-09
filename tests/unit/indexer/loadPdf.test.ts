@@ -35,7 +35,7 @@ describe("createLoadPdf", () => {
     expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES });
     expect(f.getDocument.mock.calls[0]![0]).toHaveProperty("wasmUrl", "/stage/protyle/js/pdf/wasm/");
     const g = fakePdfjs();
-    await createLoadPdf(() => g.pdfjs, undefined, { disableAutoFetch: false })("assets/a.pdf", new AbortController().signal);
+    await createLoadPdf(() => g.pdfjs, undefined, { rangeOnly: false })("assets/a.pdf", new AbortController().signal);
     expect(g.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES });
   });
 
@@ -51,18 +51,18 @@ describe("createLoadPdf", () => {
     expect(RES.cMapUrl).toBe("/stage/protyle/js/pdf/cmaps/");
   });
 
-  it("disableAutoFetch : pas de téléchargement complet, flux conservé pour les requêtes par plages", async () => {
+  it("rangeOnly : plages seules (disableAutoFetch et disableStream), sinon PDF.js télécharge tout le fichier", async () => {
     const f = fakePdfjs();
-    await createLoadPdf(() => f.pdfjs, undefined, { disableAutoFetch: true })("assets/a.pdf", new AbortController().signal);
-    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: false });
+    await createLoadPdf(() => f.pdfjs, undefined, { rangeOnly: true })("assets/a.pdf", new AbortController().signal);
+    expect(f.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: true });
   });
 
   it("canvasMaxAreaInBytes : passé à getDocument seulement s'il est fourni (mobile), jamais par défaut (bureau)", async () => {
     const m = fakePdfjs();
-    await createLoadPdf(() => m.pdfjs, undefined, { disableAutoFetch: true, canvasMaxAreaInBytes: 32_000_000 })("assets/a.pdf", new AbortController().signal);
-    expect(m.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: false, canvasMaxAreaInBytes: 32_000_000 });
+    await createLoadPdf(() => m.pdfjs, undefined, { rangeOnly: true, canvasMaxAreaInBytes: 32_000_000 })("assets/a.pdf", new AbortController().signal);
+    expect(m.getDocument.mock.calls[0]![0]).toStrictEqual({ url: "/assets/a.pdf", ...RES, disableAutoFetch: true, disableStream: true, canvasMaxAreaInBytes: 32_000_000 });
     const d = fakePdfjs();
-    await createLoadPdf(() => d.pdfjs, undefined, { disableAutoFetch: false })("assets/a.pdf", new AbortController().signal);
+    await createLoadPdf(() => d.pdfjs, undefined, { rangeOnly: false })("assets/a.pdf", new AbortController().signal);
     expect(d.getDocument.mock.calls[0]![0]).not.toHaveProperty("canvasMaxAreaInBytes");
     const u = fakePdfjs();
     await createLoadPdf(() => u.pdfjs, undefined, {})("assets/a.pdf", new AbortController().signal);
@@ -95,6 +95,41 @@ describe("createLoadPdf", () => {
     controller.abort();
     await expect(pending).rejects.toThrow();
     expect(destroyTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("signale à onWarn l'échec de destruction de la tâche sur le chemin d'annulation", async () => {
+    const pdfjs = {
+      getDocument: () => ({
+        promise: new Promise(() => undefined),
+        destroy: async () => {
+          throw new Error("task boom");
+        },
+      }),
+    } as unknown as PdfjsLoader;
+    const onWarn = vi.fn();
+    const controller = new AbortController();
+    const pending = createLoadPdf(() => pdfjs, onWarn)("assets/a.pdf", controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("task boom"));
+  });
+
+  it("signale à onWarn l'échec de destroy() du document annulé juste après sa résolution", async () => {
+    const pdfjs = {
+      getDocument: () => ({
+        promise: Promise.resolve({ numPages: 1, getPage: vi.fn() }),
+        destroy: async () => {
+          throw new Error("late boom");
+        },
+      }),
+    } as unknown as PdfjsLoader;
+    const onWarn = vi.fn();
+    const controller = new AbortController();
+    const pending = createLoadPdf(() => pdfjs, onWarn)("assets/a.pdf", controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining("late boom"));
   });
 
   it("propage l'échec de PDF.js", async () => {

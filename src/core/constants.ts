@@ -36,6 +36,21 @@ export const PAGE_MATCHES_MAX_BYTES = 64 * 1024 * 1024;
 /** Décodages d'index en parallèle au chargement (profil bureau). */
 export const DEFAULT_DECODE_CONCURRENCY = 2;
 
-/** Rendu PDF : documents ouverts en même temps et pages rendues en parallèle (profil bureau). */
+/** Rendu PDF : valeurs par défaut du moteur (documents ouverts en même temps, pages rendues en parallèle). */
 export const DEFAULT_MAX_OPEN_DOCUMENTS = 3;
 export const DEFAULT_RENDER_CONCURRENCY = 2;
+/**
+ * Rendu PDF (profil bureau) : exemplaires de document ouverts en même temps (un exemplaire = un worker PDF.js),
+ * pages rendues en parallèle, et exemplaires ouverts au plus pour un même PDF. Un worker décode une page à la fois :
+ * plusieurs exemplaires d'un même scan accélèrent ses vignettes.
+ */
+export const DESKTOP_MAX_OPEN_DOCUMENTS = 6;
+export const DESKTOP_RENDER_CONCURRENCY = 4;
+export const DESKTOP_WORKERS_PER_DOCUMENT = 3;
+/** Rendu PDF (profil mobile) : mémoire limitée, deux workers au plus. */
+export const MOBILE_MAX_OPEN_DOCUMENTS = 2;
+export const MOBILE_RENDER_CONCURRENCY = 2;
+export const MOBILE_WORKERS_PER_DOCUMENT = 2;
+
+/** Taille de PDF (octets) à partir de laquelle plusieurs exemplaires par document valent leur coût (workers et mémoire en plus). */
+export const HEAVY_PDF_BYTES = 20 * 1024 * 1024;

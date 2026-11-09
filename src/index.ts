@@ -25,10 +25,13 @@ import type { OpenTabFn } from "./siyuan/openPdf";
 import type { CustomDialogHandle } from "./ui/nativeUiTypes";
 import type { RenderableDocument } from "./siyuan/pdfRenderer";
 
-/** Options de `createLoadPdf` tirées du profil ; `canvasMaxAreaInBytes` n'est présent que s'il est défini (bureau : absent). */
-function loadPdfOptions(profile: PlatformProfile): LoadPdfOptions {
+/**
+ * Options de `createLoadPdf` tirées du profil ; `canvasMaxAreaInBytes` n'est présent que s'il est défini (bureau : absent).
+ * `rangeOnly` : plages seules pour le rendu (ordinateur et mobile) ; faux pour l'indexeur, qui lit toutes les pages.
+ */
+function loadPdfOptions(profile: PlatformProfile, rangeOnly: boolean): LoadPdfOptions {
   return {
-    disableAutoFetch: profile.disableAutoFetch,
+    rangeOnly,
     ...(profile.canvasMaxAreaInBytes === undefined ? {} : { canvasMaxAreaInBytes: profile.canvasMaxAreaInBytes }),
   };
 }
@@ -709,7 +712,7 @@ export default class DocSeekerPlugin extends Plugin {
     const { floating } = mode;
     const kernel = createKernelApi();
     const profile = this.getProfile();
-    const loadPdf = createLoadPdf(this.getPdfjs(), undefined, loadPdfOptions(profile));
+    const loadPdf = createLoadPdf(this.getPdfjs(), undefined, loadPdfOptions(profile, true));
     const sharedIndex = this.getSharedIndex();
     void sharedIndex.start(); // idempotent : filet si l'onglet est rendu avant onLayoutReady
     return mountSearchTab(host, {
@@ -819,7 +822,7 @@ export default class DocSeekerPlugin extends Plugin {
     this.indexer = createIndexer({
       discover: () => discoverPdfs({ api: kernel }),
       store: this.getPetalStore(kernel),
-      loadPdf: createLoadPdf(this.getPdfjs(), undefined, loadPdfOptions(this.getProfile())),
+      loadPdf: createLoadPdf(this.getPdfjs(), undefined, loadPdfOptions(this.getProfile(), false)),
       now: () => Date.now(),
       onListenerError: (error) => this.warnLog.warn("Écouteur d'indexation en échec", error),
       onDestroyError: (error) => this.warnLog.warn("Libération du PDF en échec", error),

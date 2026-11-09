@@ -12,6 +12,8 @@ function setup(
     delay?: number;
     cache?: ThumbnailCache;
     cropScale?: number;
+    freshWindowMs?: number;
+    now?: () => number;
   } = {},
 ) {
   let cb: (e: Entry[]) => void = () => {};
@@ -23,7 +25,11 @@ function setup(
   };
   const getPageMatches =
     overrides.getPageMatches ??
-    vi.fn(async () => ({ boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }], ordinals: [0] }));
+    vi.fn(async () => ({
+      boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }],
+      ordinals: [0],
+      pageSize: { widthPt: 600, heightPt: 800 },
+    }));
   const cache = overrides.cache ?? new MemoryThumbnailCache({ maxEntries: 10, maxBytes: 1e6 });
   let n = 0;
   const createObjectUrl = vi.fn(() => `blob:${++n}`);
@@ -41,6 +47,8 @@ function setup(
     revokeObjectUrl,
     docVersion: 1,
     loadDelayMs: overrides.delay ?? 0,
+    ...(overrides.freshWindowMs === undefined ? {} : { freshWindowMs: overrides.freshWindowMs }),
+    ...(overrides.now === undefined ? {} : { now: overrides.now }),
     ...(overrides.cropScale === undefined ? {} : { cropScale: overrides.cropScale }),
     onWarn,
   });
@@ -85,6 +93,7 @@ describe("thumbnailLoader", () => {
       boxes: [wb(50, 40), wb(50, 500), wb(120, 510)],
       ordinals: [0, 1, 2],
       termIndexes: [1, 0, 1],
+      pageSize: { widthPt: 600, heightPt: 800 },
     }));
     const s = setup({ getPageMatches });
     const el = document.createElement("div");
@@ -229,7 +238,7 @@ describe("thumbnailLoader", () => {
   });
 
   it("falls back to no highlight when there are no matches", async () => {
-    const s = setup({ getPageMatches: vi.fn(async () => ({ boxes: [], ordinals: [] })) });
+    const s = setup({ getPageMatches: vi.fn(async () => ({ boxes: [], ordinals: [], pageSize: { widthPt: 600, heightPt: 800 } })) });
     const el = document.createElement("div");
     s.loader.attach(el, req);
     s.show(el);
@@ -312,7 +321,7 @@ describe("thumbnailLoader (review fixes)", () => {
     it("waits before loading and cancels when the element leaves first", async () => {
       vi.useFakeTimers();
       try {
-        const s = setup({ delay: 100 });
+        const s = setup({ delay: 100, freshWindowMs: 0 });
         const el = document.createElement("div");
         s.loader.attach(el, req);
         s.show(el);
@@ -334,7 +343,7 @@ describe("thumbnailLoader (review fixes)", () => {
     it("does not leave a timer behind after detach", () => {
       vi.useFakeTimers();
       try {
-        const s = setup({ delay: 100 });
+        const s = setup({ delay: 100, freshWindowMs: 0 });
         const el = document.createElement("div");
         const detach = s.loader.attach(el, req);
         s.show(el);
@@ -414,6 +423,128 @@ describe("thumbnailLoader (review fixes)", () => {
     it("échelle valide ou absente : aucun avertissement", () => {
       expect(setup({ cropScale: 1 }).onWarn).not.toHaveBeenCalled();
       expect(setup().onWarn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("délai de chargement et fenêtre initiale", () => {
+    const delayed = (clock: { t: number }, freshWindowMs = 300) => {
+      const s = setup({ delay: 100, freshWindowMs, now: () => clock.t });
+      return { s };
+    };
+
+    it("charge sans délai un cadre visible dans la fenêtre suivant attach", async () => {
+      const clock = { t: 1000 };
+      const { s } = delayed(clock);
+      const el = document.createElement("div");
+      s.loader.attach(el, req);
+      clock.t += 50;
+      s.show(el);
+      expect(el.dataset.state).toBe("loading");
+      await flush();
+      expect(el.dataset.state).toBe("ready");
+    });
+
+    it("applique le délai à un cadre qui entre dans la zone après la fenêtre (défilement)", () => {
+      vi.useFakeTimers();
+      try {
+        const clock = { t: 1000 };
+        const { s } = delayed(clock);
+        const el = document.createElement("div");
+        s.loader.attach(el, req);
+        clock.t += 1000;
+        s.show(el);
+        expect(el.dataset.state).toBe("idle");
+        vi.advanceTimersByTime(100);
+        expect(el.dataset.state).toBe("loading");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("l'horloge par défaut est performance.now (insensible aux sauts de Date.now)", () => {
+      vi.useFakeTimers();
+      const perf = vi.spyOn(performance, "now").mockReturnValue(0);
+      try {
+        const s = setup({ delay: 100 });
+        const el = document.createElement("div");
+        s.loader.attach(el, req);
+        perf.mockReturnValue(10_000);
+        s.show(el);
+        expect(el.dataset.state).toBe("idle");
+      } finally {
+        perf.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("sans option freshWindowMs, la fenêtre par défaut est non nulle", () => {
+      const s = setup({ delay: 100 });
+      const el = document.createElement("div");
+      s.loader.attach(el, req);
+      s.show(el);
+      expect(el.dataset.state).toBe("loading");
+    });
+  });
+
+  describe("taille de fichier transmise au rendu", () => {
+    it("transmet pdfSize (octets) à renderCrop pour les exemplaires supplémentaires des PDF lourds", async () => {
+      const s = setup();
+      const el = document.createElement("div");
+      s.loader.attach(el, { ...req, pdfSize: 88_000_000 });
+      s.show(el);
+      await flush();
+      expect(s.renderer.renderCrop).toHaveBeenCalledWith(expect.objectContaining({ pdfSize: 88_000_000 }));
+    });
+  });
+
+  describe("taille de page", () => {
+    it("utilise match.pageSize (index v2) sans appeler renderer.getPageSize", async () => {
+      const getPageMatches = vi.fn(async () => ({
+        boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }],
+        ordinals: [0],
+        pageSize: { widthPt: 600, heightPt: 800 },
+      }));
+      const s = setup({ getPageMatches });
+      const el = document.createElement("div");
+      s.loader.attach(el, req);
+      s.show(el);
+      await flush();
+      expect(el.dataset.state).toBe("ready");
+      expect(s.renderer.getPageSize).not.toHaveBeenCalled();
+    });
+
+    it("garde getPageSize quand la taille est un repli supposé (index v1)", async () => {
+      const getPageMatches = vi.fn(async () => ({
+        boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }],
+        ordinals: [0],
+        pageSize: { widthPt: 595, heightPt: 842 },
+        pageSizeAssumed: true,
+      }));
+      const s = setup({ getPageMatches });
+      const el = document.createElement("div");
+      s.loader.attach(el, req);
+      s.show(el);
+      await flush();
+      expect(s.renderer.getPageSize).toHaveBeenCalledTimes(1);
+    });
+
+    it("produit la même clé de cache et le même recadrage que via getPageSize", async () => {
+      const mk = (extra: object) =>
+        vi.fn(async () => ({ boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.02 }], ordinals: [0], ...extra }));
+      const a = setup({ getPageMatches: mk({ pageSize: { widthPt: 600, heightPt: 800 } }) });
+      const b = setup({ getPageMatches: mk({ pageSize: { widthPt: 595, heightPt: 842 }, pageSizeAssumed: true }) });
+      const putA = vi.spyOn(a.cache, "put");
+      const putB = vi.spyOn(b.cache, "put");
+      for (const s of [a, b]) {
+        const el = document.createElement("div");
+        s.loader.attach(el, req);
+        s.show(el);
+        await flush();
+      }
+      expect(putA.mock.calls[0]?.[0]).toBe(putB.mock.calls[0]?.[0]);
+      expect(a.renderer.renderCrop).toHaveBeenCalledWith(
+        expect.objectContaining({ crop: (b.renderer.renderCrop as ReturnType<typeof vi.fn>).mock.calls[0]?.[0].crop }),
+      );
     });
   });
 });

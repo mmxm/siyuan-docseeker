@@ -71,12 +71,19 @@ function toAssetUrl(path: string): string {
   return `/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** Message d'avertissement pour une destruction qui échoue sur le chemin d'annulation (onWarn ne reçoit qu'un texte). */
+function describeDestroyFailure(path: string, error: unknown): string {
+  return `Échec de la libération du PDF ${path} après annulation : ${error instanceof Error ? error.message : String(error)}`;
+}
+
 export interface LoadPdfOptions {
   /**
-   * Évite le téléchargement complet du PDF (mobile) : PDF.js ne demande que les plages utiles. Le flux reste actif
-   * (`disableStream: false`), car les requêtes par plages en dépendent. Absent ou faux : `getDocument({ url, ...ressources })`.
+   * Plages seules (rendu des vignettes, visionneur) : `disableAutoFetch` et `disableStream` à vrai. PDF.js ne lit alors que
+   * les plages utiles (quelques centaines de Ko par page) au lieu de télécharger tout le fichier. `disableAutoFetch` seul
+   * ne suffit pas : avec `disableStream: false` le flux initial n'est jamais coupé et le PDF est quand même lu en entier.
+   * Faux ou absent (indexeur, qui lit toutes les pages) : `getDocument({ url, ...ressources })`, téléchargement complet.
    */
-  readonly disableAutoFetch?: boolean;
+  readonly rangeOnly?: boolean;
   /** Aire maximale d'un canevas d'image en octets (mobile : iOS limite un canevas à ~16,7 M px). Absent : non passé à PDF.js. */
   readonly canvasMaxAreaInBytes?: number;
 }
@@ -112,7 +119,7 @@ export function createLoadPdf(
     const task = pdfjs.getDocument({
       url: toAssetUrl(path),
       ...PDFJS_GETDOCUMENT_RESOURCES,
-      ...(options.disableAutoFetch ? { disableAutoFetch: true, disableStream: false } : {}),
+      ...(options.rangeOnly ? { disableAutoFetch: true, disableStream: true } : {}),
       ...(options.canvasMaxAreaInBytes === undefined ? {} : { canvasMaxAreaInBytes: options.canvasMaxAreaInBytes }),
     });
     // La tâche n'est libérée qu'une fois, que ce soit par l'annulation ou par destroy() du document.
@@ -121,7 +128,7 @@ export function createLoadPdf(
     let onAbort: (() => void) | undefined;
     const aborted = new Promise<never>((_, reject) => {
       onAbort = () => {
-        releaseTask().catch(() => undefined);
+        releaseTask().catch((error: unknown) => onWarn(describeDestroyFailure(path, error)));
         reject(abortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
@@ -135,7 +142,7 @@ export function createLoadPdf(
     const document = withTaskDestroy(doc, releaseTask);
     if (signal.aborted) {
       // annulation survenue pendant la résolution : l'appelant ne recevra jamais le document
-      await Promise.resolve(document.destroy()).catch(() => undefined);
+      await Promise.resolve(document.destroy()).catch((error: unknown) => onWarn(describeDestroyFailure(path, error)));
       throw abortError();
     }
     return document;

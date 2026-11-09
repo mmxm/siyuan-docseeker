@@ -400,6 +400,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
     createCanvas: deps.createCanvas,
     concurrency: profile.renderConcurrency,
     maxOpenDocuments: profile.maxOpenDocuments,
+    workersPerDocument: profile.workersPerDocument,
     onWarn,
   });
   cleanups.push(() => renderer.dispose());

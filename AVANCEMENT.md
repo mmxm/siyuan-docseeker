@@ -510,6 +510,7 @@ npm run typecheck              # tsc --noEmit (src), puis tsconfig.test.json
 npm run test:coverage          # couverture, seuil 80 % (src/**)
 npm run package                # vite build -> dist/index.js, puis package.zip
 npm run release:check          # vérifie une release SANS rien publier (tag, version, CHANGELOG, tests, zip)
+npm run measure:thumbs         # banc de vignettes dans un vrai navigateur : ouvrir http://127.0.0.1:5198/bench.html (page visible ; iPhone en HTTPS seulement) ; tests/perf/thumbs
 
 # Banc d'essai SiYuan jetable (J10) : noyau sur le port 6807, espace marqué, jamais ~/SiYuan
 npm run build && npm run sandbox -- start     # --dir D, --port P, --pdfs N (8 par défaut) ; ouvrir l'URL affichée
@@ -611,3 +612,17 @@ Reste : pas de zoom ni de pincement (texte petit sur les pages denses) ; documen
 ### Mobile — E4b (ergonomie tactile), 2026-11-08
 Fait : `--docseeker-hit` (32 px, 44 px sous `pointer: coarse`) sur toutes les commandes interactives, champs et `select` à 16 px (pas de zoom iOS), `:hover` sous `@media (hover: hover)` + `:active`, `touch-action: manipulation`, dialogue plein écran avec `dvh` + hauteur réelle du clavier (`--docseeker-vvh`) et décalage `offsetTop` (`--docseeker-vv-top`), zones sûres (haut, bas, gauche, droite), barre basse « Fermer » de 48 px masquée clavier ouvert, chemin complet lisible sans survol, dialogues `min(520px, 94vw)` (validation `CSS_SIZE` durcie et testée), forced-colors. Relectures : ecc:a11y-architect, ecc:typescript-reviewer (2 bloquants : style inline qui annulait la hauteur du clavier, `offsetTop` non suivi ; corrigés). 4327 tests, typecheck et build verts. Bureau inchangé (rendu identique au-delà de 553 px).
 À vérifier sur iPhone uniquement : non-zoom au focus, liste visible clavier ouvert, `translateY(var(--docseeker-vv-top))` selon le positionnement natif du conteneur de SiYuan, seuil de 150 px du clavier, zones sûres, cibles de 44 px réelles, `pointer: coarse` dans le WebView de l'application.
+
+### Vignettes : temps d'apparition et bande passante, 2026-11-09
+Mesuré d'abord (banc `npm run measure:thumbs`, Chromium, PDF.js 6.4.299 de SiYuan, vrai pipeline du plugin) :
+- Sur les scans (Pilly), le temps est passé dans le worker PDF.js à décoder les images en pleine résolution (1 à 1,4 s par page) ; le thread principal est quasi inactif ; l'échelle de la vignette n'y change rien. `reducePower` (décodage JPX réduit) existe dans PDF.js mais ne se déclenche qu'au-delà d'environ 268 Mpx et ne se règle pas. Un document = un worker, donc les vignettes d'un même PDF passaient une par une.
+- `disableAutoFetch` seul ne limitait rien : avec `disableStream: false`, le flux initial télécharge tout le fichier (Pilly 88 Mo, mobile compris).
+- 100 ms de délai fixe avant chaque vignette, et un passage par la file de rendu pour lire la taille de page déjà présente dans l'index v2.
+- L'encodage WebP coûte 4 à 14 ms en régime établi : afficher avant d'encoder a été écarté (gain trop faible).
+
+Fait (TDD, `ecc:tdd-guide`) : `rangeOnly` (`disableAutoFetch` + `disableStream`) pour le rendu, sur ordinateur et mobile (l'indexeur garde le téléchargement complet) ; `workersPerDocument` dans `pdfRenderer` (plusieurs `getDocument` par PDF, seulement si `pdfSize >= HEAVY_PDF_BYTES` = 20 Mo, plafonné par `maxOpenDocuments`, repli sur un exemplaire sain si un exemplaire supplémentaire échoue) ; profils bureau concurrence 4 / 3 workers / 6 documents, mobile 2 / 2 / 2 ; `freshWindowMs` (400 ms) : pas de délai pour les cadres visibles dès l'affichage ; taille de page lue dans l'index v2 (`pageSizeAssumed` pour v1) ; chaîne d'encodage WebP → JPEG 0,8 → PNG avec mémorisation et un avertissement unique.
+
+Résultats (bureau, avant → après) : texte 10 vignettes, 1re 267 → 179 ms, dernière 425 → 282 ms ; Pilly 12 vignettes, 1re 1,50 → 1,08 s, dernière 7,8 → 4,0 s, 85 → 8 Mo ; mélange de 5 PDF, médiane 1,93 → 0,86 s, dernière 3,9 → 2,0 s, 875 → 15 Mo. Mobile (profil, mesuré dans Chromium) : Pilly dernière 8,1 → 4,5 s, 85 → 7 Mo.
+Comportement changé sur ordinateur : plages seules au lieu du téléchargement complet, concurrence et documents ouverts relevés, chaîne d'encodage avec JPEG.
+Relectures : `ecc:performance-optimizer`, `ecc:typescript-reviewer`, `ecc:code-reviewer`, `ecc:silent-failure-hunter` (aucun défaut critique ; corrigés : double encodage quand aucun format n'est honoré, dégradation durable sur un `null`, workers inutiles pour les PDF légers, pic au-delà de `maxOpenDocuments`, échecs de destruction avalés). 4445 tests, typecheck, build verts ; couverture 97,6 % (lignes).
+À vérifier sur iPhone (HTTPS) : mémoire avec 2 workers et 2 rendus, encodage WebP de Safari (repli JPEG), réponses 206 du serveur de SiYuan dans l'application iOS (sinon téléchargement complet par worker). Piste non traitée : cache indépendant de la requête (même page, autre recherche = nouveau rendu).

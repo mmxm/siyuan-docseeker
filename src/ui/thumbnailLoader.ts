@@ -21,6 +21,8 @@ export interface ThumbnailRenderer {
     page: number;
     crop: CropBounds;
     scale: number;
+    /** Taille du fichier en octets : les PDF lourds justifient plusieurs exemplaires de document. */
+    pdfSize?: number;
     signal?: AbortSignal;
   }): Promise<Blob>;
 }
@@ -55,6 +57,13 @@ export interface ThumbnailLoaderOptions {
   cropScale?: number;
   /** Délai avant de lancer le chargement d'un cadre entré dans la zone observée (défaut 100 ms ; 0 = immédiat). */
   loadDelayMs?: number;
+  /**
+   * Fenêtre (ms) après `attach` pendant laquelle un cadre visible est chargé sans délai (défaut 400 ms) : le délai
+   * anti-défilement ne vise que les cadres qui entrent dans la zone après coup, pas ceux d'un lot tout juste affiché.
+   */
+  freshWindowMs?: number;
+  /** Horloge en ms (défaut `performance.now`, monotone : insensible aux sauts d'horloge), injectable pour les tests. */
+  now?: () => number;
   schedule?: (fn: () => void, ms: number) => unknown;
   clear?: (handle: unknown) => void;
   onWarn?: (message: string, error?: unknown) => void;
@@ -68,9 +77,11 @@ export interface ThumbnailLoader {
 export const HIGHLIGHT_ATTRIBUTE = "data-docseeker-highlight";
 export const HIGHLIGHT_CLASS = "docseeker-highlight";
 export const DEFAULT_LOAD_DELAY_MS = 100;
+export const DEFAULT_FRESH_WINDOW_MS = 400;
 export const THUMBNAIL_ERROR_TEXT = "Aperçu indisponible";
 
 interface Slot {
+  attachedAt: number;
   el: HTMLElement;
   req: ThumbnailRequest;
   controller?: AbortController | undefined;
@@ -107,6 +118,8 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
   const revokeUrl = options.revokeObjectUrl ?? ((u: string) => URL.revokeObjectURL(u));
   const slots = new Map<Element, Slot>();
   const loadDelayMs = options.loadDelayMs ?? DEFAULT_LOAD_DELAY_MS;
+  const freshWindowMs = options.freshWindowMs ?? DEFAULT_FRESH_WINDOW_MS;
+  const now = options.now ?? ((): number => performance.now());
   const schedule = options.schedule ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
   const clear =
     options.clear ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
@@ -132,7 +145,7 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
   });
 
   function request(slot: Slot): void {
-    if (loadDelayMs <= 0) {
+    if (loadDelayMs <= 0 || now() - slot.attachedAt < freshWindowMs) {
       void load(slot);
       return;
     }
@@ -209,7 +222,11 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
     el.setAttribute("aria-busy", "true");
     try {
       const match = await options.getPageMatches(req.docId, req.page, req.query, signal);
-      const size = await renderer.getPageSize(req.path, req.page, signal);
+      // Taille lue dans l'index (v2) : évite un passage par la file de rendu. Un index v1 n'a qu'un repli A4.
+      const size: PageSize =
+        !match.pageSizeAssumed
+          ? { width: match.pageSize.widthPt, height: match.pageSize.heightPt }
+          : await renderer.getPageSize(req.path, req.page, signal);
       const plan = planThumbnail(
         match.boxes,
         match.ordinals,
@@ -234,7 +251,14 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
       }
       if (signal.aborted) return;
       if (!blob) {
-        blob = await renderer.renderCrop({ path: req.path, page: req.page, crop: plan.crop, scale: plan.scale, signal });
+        blob = await renderer.renderCrop({
+          path: req.path,
+          page: req.page,
+          crop: plan.crop,
+          scale: plan.scale,
+          pdfSize: req.pdfSize,
+          signal,
+        });
         if (signal.aborted) return;
         try {
           await cache.put(key, blob);
@@ -264,7 +288,7 @@ export function createThumbnailLoader(options: ThumbnailLoaderOptions): Thumbnai
 
   return {
     attach(el, req) {
-      const slot: Slot = { el, req, highlights: [] };
+      const slot: Slot = { el, req, highlights: [], attachedAt: now() };
       slots.set(el, slot);
       el.dataset.state = "idle";
       observer.observe(el);

@@ -2272,8 +2272,10 @@ describe("profil de plateforme (E3)", () => {
       s.render();
       expect(h.mountDeps[0]).toMatchObject({ profile: desktopProfile() });
       expect(h.sharedDeps[0]?.decodeConcurrency).toBe(2);
-      expect(h.loadPdfOptions.every((o) => (o as { disableAutoFetch?: boolean } | undefined)?.disableAutoFetch === false)).toBe(true);
+      // Rendu des vignettes : plages seules aussi sur ordinateur ; l'indexeur (s'il est créé) télécharge tout.
       expect(h.loadPdfOptions.length).toBeGreaterThan(0);
+      expect(h.loadPdfOptions.some((o) => (o as { rangeOnly?: boolean }).rangeOnly === true)).toBe(true);
+      expect(h.loadPdfOptions.some((o) => (o as { rangeOnly?: boolean }).rangeOnly === false)).toBe(true);
     });
 
     it("démarre l'index partagé et l'indexation automatique à onLayoutReady, comme avant", async () => {
@@ -2363,7 +2365,7 @@ describe("profil de plateforme (E3)", () => {
       expect(h.mountDeps[0]).toMatchObject({ profile: mobileProfile() });
       expect(h.sharedDeps[0]?.decodeConcurrency).toBe(1);
       expect(h.loadPdfOptions.length).toBeGreaterThan(0);
-      expect(h.loadPdfOptions.every((o) => (o as { disableAutoFetch?: boolean }).disableAutoFetch === true)).toBe(true);
+      expect(h.loadPdfOptions.some((o) => (o as { rangeOnly?: boolean }).rangeOnly === true)).toBe(true);
     });
 
     it("aucune indexation automatique ni écriture d'index, même avec autoIndex enregistré à vrai", async () => {

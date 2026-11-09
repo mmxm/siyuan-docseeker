@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CROP_RENDER_SCALE,
-  DEFAULT_MAX_OPEN_DOCUMENTS,
-  DEFAULT_RENDER_CONCURRENCY,
+  DESKTOP_MAX_OPEN_DOCUMENTS,
+  DESKTOP_RENDER_CONCURRENCY,
   THUMBNAIL_CACHE_MAX_BYTES,
   PAGE_MATCHES_MAX_BYTES,
   THUMBNAIL_CACHE_MAX_ENTRIES,
@@ -14,15 +14,15 @@ import { DEFAULT_SETTINGS } from "../../../src/settings";
 describe("desktopProfile", () => {
   it("reprend les constantes importées, sans copie de valeurs", () => {
     const p = desktopProfile();
-    expect(p.renderConcurrency).toBe(DEFAULT_RENDER_CONCURRENCY);
-    expect(p.maxOpenDocuments).toBe(DEFAULT_MAX_OPEN_DOCUMENTS);
+    expect(p.renderConcurrency).toBe(DESKTOP_RENDER_CONCURRENCY);
+    expect(p.maxOpenDocuments).toBe(DESKTOP_MAX_OPEN_DOCUMENTS);
     expect(p.cropScale).toBe(CROP_RENDER_SCALE);
     expect(p.thumbnailCache).toEqual({ maxEntries: THUMBNAIL_CACHE_MAX_ENTRIES, maxBytes: THUMBNAIL_CACHE_MAX_BYTES });
   });
 
   it("garde les valeurs historiques du bureau", () => {
     const p = desktopProfile();
-    expect([p.renderConcurrency, p.maxOpenDocuments, p.cropScale]).toEqual([2, 3, 1.5]);
+    expect([p.renderConcurrency, p.maxOpenDocuments, p.cropScale]).toEqual([4, 6, 1.5]);
     expect(p.thumbnailCache).toEqual({ maxEntries: 2000, maxBytes: 64 * 1024 * 1024 });
     expect(p.readOnly).toBe(false);
     expect(p.lazyIndexLoad).toBe(false);
@@ -37,7 +37,9 @@ describe("desktopProfile", () => {
     expect(p.pageMatchesLimit).toBe(PAGE_MATCHES_MAX_BYTES);
     expect(p.pageMatchesLimit).toBe(64 * 1024 * 1024);
     expect(p.decodeConcurrency).toBe(2);
-    expect(p.disableAutoFetch).toBe(false);
+    expect(p.renderConcurrency).toBe(4);
+    expect(p.workersPerDocument).toBe(3);
+    expect(p.maxOpenDocuments).toBe(6);
   });
 
   it("n'impose aucun plafond de canevas (paramètre non passé à PDF.js)", () => {
@@ -50,8 +52,6 @@ describe("mobileProfile", () => {
   it("est en lecture seule avec des plafonds réduits", () => {
     const p = mobileProfile();
     expect(p.readOnly).toBe(true);
-    expect(p.renderConcurrency).toBe(1);
-    expect(p.maxOpenDocuments).toBe(1);
     expect(p.cropScale).toBe(1.0);
     expect(p.thumbnailCache).toEqual({ maxEntries: 500, maxBytes: 16 * 1024 * 1024 });
     expect(p.lazyIndexLoad).toBe(true);
@@ -61,7 +61,9 @@ describe("mobileProfile", () => {
     const p = mobileProfile();
     expect(p.pageMatchesLimit).toBe(16 * 1024 * 1024);
     expect(p.decodeConcurrency).toBe(1);
-    expect(p.disableAutoFetch).toBe(true);
+    expect(p.renderConcurrency).toBe(2);
+    expect(p.workersPerDocument).toBe(2);
+    expect(p.maxOpenDocuments).toBe(2);
   });
 
   it("plafonne le canevas à 8 M pixels x 4 octets (limite iOS ~16,7 M px)", () => {

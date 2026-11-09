@@ -1,9 +1,11 @@
-import { DEFAULT_MAX_OPEN_DOCUMENTS, DEFAULT_RENDER_CONCURRENCY } from "../core/constants";
+import { DEFAULT_MAX_OPEN_DOCUMENTS, DEFAULT_RENDER_CONCURRENCY, HEAVY_PDF_BYTES } from "../core/constants";
 import type { CropBounds } from "../core/crop";
 
 const DEFAULT_MIME_TYPE = "image/webp";
 const DEFAULT_QUALITY = 0.8;
 const FALLBACK_MIME_TYPE = "image/png";
+const JPEG_MIME_TYPE = "image/jpeg";
+const JPEG_QUALITY = 0.8;
 
 /** Minimal 2D canvas surface (HTMLCanvasElement or OffscreenCanvas wrapper). */
 export interface RenderCanvas {
@@ -46,6 +48,11 @@ export interface RenderCropRequest {
   readonly page: number;
   readonly crop: CropBounds;
   readonly scale: number;
+  /**
+   * Taille du fichier PDF en octets, si connue. Les exemplaires supplémentaires (`workersPerDocument`) ne servent
+   * que les PDF lourds (>= `HEAVY_PDF_BYTES`) : absente ou plus petite, un seul exemplaire.
+   */
+  readonly pdfSize?: number | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -66,6 +73,12 @@ export interface PdfRendererDeps {
   readonly createCanvas: (width: number, height: number) => RenderCanvas;
   readonly maxOpenDocuments?: number | undefined;
   readonly concurrency?: number | undefined;
+  /**
+   * Exemplaires ouverts au plus pour un même PDF (un exemplaire = un `loadDocument` = un worker PDF.js) : les rendus
+   * d'un même document se répartissent dessus. 1 (défaut) : un seul exemplaire par PDF. `maxOpenDocuments` plafonne le
+   * total d'exemplaires, tous PDF confondus.
+   */
+  readonly workersPerDocument?: number | undefined;
   /** Output image type for toBlob (default image/webp, PNG fallback). */
   readonly mimeType?: string | undefined;
   readonly quality?: number | undefined;
@@ -166,22 +179,40 @@ interface DocEntry {
   dropped: boolean;
   /** destroy() already requested: never call it twice. */
   destroyed: boolean;
+  /** Exemplaire supplémentaire d'un PDF déjà ouvert : son échec de chargement retombe sur un autre exemplaire. */
+  readonly extra: boolean;
 }
 
 interface QueueItem {
   readonly start: () => void;
 }
 
+/** Nom lisible d'un type d'image pour les avertissements. */
+function encodingLabel(type: string): string {
+  return { "image/webp": "WebP", "image/jpeg": "JPEG", "image/png": "PNG" }[type] ?? type;
+}
+
+/** Vrai si la taille connue du PDF justifie d'ouvrir plusieurs exemplaires. */
+function isHeavy(pdfSize: number | undefined): boolean {
+  return pdfSize !== undefined && pdfSize >= HEAVY_PDF_BYTES;
+}
+
 export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
   const maxOpen = Math.max(1, deps.maxOpenDocuments ?? DEFAULT_MAX_OPEN_DOCUMENTS);
+  const workersPerDocument = Math.max(1, deps.workersPerDocument ?? 1);
   const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_RENDER_CONCURRENCY);
   const mimeType = deps.mimeType ?? DEFAULT_MIME_TYPE;
   const quality = deps.quality ?? DEFAULT_QUALITY;
   const disposal = new AbortController();
-  /** Map insertion order is the LRU order (oldest first). */
-  const documents = new Map<string, DocEntry>();
+  /** Un élément par exemplaire ouvert ou en cours d'ouverture ; l'ordre du tableau est l'ordre LRU (le plus ancien d'abord). */
+  const documents: DocEntry[] = [];
   const pending: QueueItem[] = [];
   let active = 0;
+
+  function forget(entry: DocEntry): void {
+    const index = documents.indexOf(entry);
+    if (index >= 0) documents.splice(index, 1);
+  }
 
   function destroyDocument(entry: DocEntry, doc: RenderableDocument, path: string): void {
     if (entry.destroyed) return;
@@ -195,16 +226,17 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
     }
   }
 
-  function evictIdle(): void {
-    for (const [path, entry] of documents) {
-      if (documents.size <= maxOpen) return;
+  /** Détruit les exemplaires inactifs (les plus anciens d'abord) tant que le pool dépasse `limit`. */
+  function evictIdle(limit = maxOpen): void {
+    for (const entry of [...documents]) {
+      if (documents.length <= limit) return;
       if (entry.refs > 0 || !entry.doc) continue;
-      documents.delete(path);
-      destroyDocument(entry, entry.doc, path);
+      forget(entry);
+      destroyDocument(entry, entry.doc, entry.path);
     }
   }
 
-  function startLoad(path: string): DocEntry {
+  function startLoad(path: string, extra: boolean): DocEntry {
     const controller = new AbortController();
     const entry: DocEntry = {
       path,
@@ -212,6 +244,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       dropped: false,
       destroyed: false,
       refs: 0,
+      extra,
       promise: Promise.resolve().then(() => deps.loadDocument(path, controller.signal)),
     };
     // Replace the raw promise by the tracked one (readonly for consumers only).
@@ -225,7 +258,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
         return doc;
       },
       (error: unknown) => {
-        if (documents.get(path) === entry) documents.delete(path);
+        forget(entry);
         throw isAbortError(error) ? error : new PdfLoadError(`Chargement impossible : ${path}`, error);
       },
     );
@@ -244,23 +277,43 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       // Nobody waits for this load any more: cancel it and forget it.
       entry.dropped = true;
       entry.controller.abort();
-      if (documents.get(entry.path) === entry) documents.delete(entry.path);
+      forget(entry);
       return;
     }
     evictIdle();
   }
 
-  async function acquire(
-    path: string,
+  /**
+   * Choisit l'exemplaire de `path` : un exemplaire libre (refs == 0), sinon un nouveau tant qu'on est sous
+   * `workersPerDocument` (sauf `reuseOnly` : on préfère réutiliser), sinon le moins chargé. Un exemplaire
+   * SUPPLÉMENTAIRE n'est ouvert que s'il tient dans `maxOpenDocuments` après éviction des exemplaires inactifs.
+   */
+  function pickEntry(path: string, reuseOnly: boolean): DocEntry {
+    const same = documents.filter((e) => e.path === path && !e.dropped);
+    const free = same.find((e) => e.refs === 0);
+    if (free) return free;
+    if (same.length === 0) return startLoad(path, false);
+    if (!reuseOnly && same.length < workersPerDocument) {
+      evictIdle(maxOpen - 1);
+      if (documents.length < maxOpen) return startLoad(path, true);
+    }
+    return leastLoaded(same);
+  }
+
+  /** Le moins chargé ; à charge égale, un exemplaire déjà chargé plutôt qu'en cours d'ouverture. */
+  function leastLoaded(entries: readonly DocEntry[]): DocEntry {
+    return entries.reduce((best, e) =>
+      e.refs < best.refs || (e.refs === best.refs && e.doc && !best.doc) ? e : best,
+    );
+  }
+
+  /** Prend une référence sur l'exemplaire et attend son chargement. */
+  async function open(
+    entry: DocEntry,
     signal: AbortSignal,
   ): Promise<{ entry: DocEntry; doc: RenderableDocument }> {
-    let entry = documents.get(path);
-    if (entry) {
-      documents.delete(path); // refresh recency
-    } else {
-      entry = startLoad(path);
-    }
-    documents.set(path, entry);
+    forget(entry); // refresh recency
+    documents.push(entry);
     entry.refs++;
     try {
       const doc = await raceAbort(entry.promise, signal);
@@ -269,6 +322,24 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
     } catch (error) {
       release(entry);
       throw error;
+    }
+  }
+
+  async function acquire(
+    path: string,
+    signal: AbortSignal,
+    reuseOnly = false,
+  ): Promise<{ entry: DocEntry; doc: RenderableDocument }> {
+    const entry = pickEntry(path, reuseOnly);
+    try {
+      return await open(entry, signal);
+    } catch (error) {
+      if (!entry.extra || signal.aborted || isAbortError(error)) throw error;
+      // L'exemplaire supplémentaire n'a pas pu s'ouvrir : un exemplaire chargé du même PDF suffit.
+      const loaded = documents.filter((e) => e.path === path && e.doc && !e.dropped && e !== entry);
+      if (loaded.length === 0) throw error;
+      deps.onWarn(`Exemplaire supplémentaire du PDF ${path} non ouvert, exemplaire existant utilisé`, error);
+      return await open(leastLoaded(loaded), signal);
     }
   }
 
@@ -327,9 +398,10 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
     path: string,
     page: number,
     signal: AbortSignal,
+    reuseOnly: boolean,
     use: (page: RenderablePage) => Promise<T>,
   ): Promise<T> {
-    const { entry, doc } = await acquire(path, signal);
+    const { entry, doc } = await acquire(path, signal, reuseOnly);
     try {
       assertPage(page, doc.numPages);
       let pdfPage: RenderablePage;
@@ -380,21 +452,68 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
     }
   }
 
+  /** Qualité à transmettre : ignorée par le PNG (sans perte). */
+  function qualityFor(type: string): number | undefined {
+    if (type === FALLBACK_MIME_TYPE) return undefined;
+    if (type === JPEG_MIME_TYPE) return JPEG_QUALITY;
+    return quality;
+  }
+
   function toBlobOnce(canvas: RenderCanvas, type: string): Promise<Blob | null> {
     return new Promise<Blob | null>((resolve) => {
-      canvas.toBlob((blob) => resolve(blob), type, type === mimeType ? quality : undefined);
+      canvas.toBlob((blob) => resolve(blob), type, qualityFor(type));
     });
   }
 
-  /** Requested type first; PNG when the browser answers null (unsupported type or encoder failure). */
+  /** Types essayés dans l'ordre. Par défaut WebP puis JPEG puis PNG ; type imposé par l'appelant : ce type puis PNG. */
+  const encodingChain: readonly string[] = deps.mimeType
+    ? [...new Set([mimeType, FALLBACK_MIME_TYPE])]
+    : [DEFAULT_MIME_TYPE, JPEG_MIME_TYPE, FALLBACK_MIME_TYPE];
+  /** Index du premier type à demander : mémorise le repli qui a fonctionné pour ne pas payer deux encodages par image. */
+  let chainStart = 0;
+
+  let warnedEncoding = false;
+  function warnEncoding(message: string): void {
+    if (warnedEncoding) return;
+    warnedEncoding = true;
+    deps.onWarn(message);
+  }
+
+  /**
+   * Un navigateur qui ne sait pas encoder le type demandé (Safari pour le WebP) ignore souvent la demande et
+   * renvoie un PNG non nul, environ 4 fois plus gros (vignette 450x180 mesurée : WebP 21 Ko, JPEG 0,8 29 Ko,
+   * PNG 47 à 114 Ko), ce qui sature vite le cache (16 Mo sur mobile). On compare donc `blob.type` au type
+   * demandé (type vide compris) et on passe au type suivant de la chaîne en cas d'écart.
+   *
+   * Mémorisation : seul un blob non nul d'un autre type fait avancer `chainStart` ; un `null` isolé (échec ponctuel
+   * de l'encodeur) n'abaisse jamais durablement la qualité. Si aucun type n'est honoré, on garde le premier blob
+   * de type connu (à défaut, de type vide) plutôt que d'échouer, et les vignettes suivantes ne paient qu'un
+   * encodage ; `null` partout est une erreur.
+   */
   async function toBlob(canvas: RenderCanvas): Promise<Blob> {
-    const first = await toBlobOnce(canvas, mimeType);
-    if (first) return first;
-    if (mimeType !== FALLBACK_MIME_TYPE) {
-      const second = await toBlobOnce(canvas, FALLBACK_MIME_TYPE);
-      if (second) return second;
+    let lastMismatch = -1;
+    let kept: Blob | null = null;
+    let keptUntyped: Blob | null = null;
+    for (let i = chainStart; i < encodingChain.length; i++) {
+      const type = encodingChain[i]!;
+      const blob = await toBlobOnce(canvas, type);
+      if (!blob) continue;
+      if (blob.type === type) {
+        if (lastMismatch >= 0) chainStart = lastMismatch + 1;
+        if (i > 0) {
+          warnEncoding(`${encodingLabel(encodingChain[0]!)} non encodé par ce navigateur : ${encodingLabel(type)} utilisé`);
+        }
+        return blob;
+      }
+      lastMismatch = i;
+      if (blob.type === "") keptUntyped ??= blob;
+      else kept ??= blob;
     }
-    throw new PdfRenderError("toBlob a renvoyé null");
+    const result = kept ?? keptUntyped;
+    if (!result) throw new PdfRenderError("toBlob a renvoyé null");
+    chainStart = lastMismatch;
+    warnEncoding(`Aucun type d'image demandé n'est encodé par ce navigateur : ${result.type || "type inconnu"} conservé`);
+    return result;
   }
 
   function guard(): void {
@@ -409,7 +528,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
         if (linked.signal.aborted) throw abortError();
         const { signal } = linked;
         return await schedule(signal, () =>
-          withPage(path, page, signal, async (pdfPage) => {
+          withPage(path, page, signal, true, async (pdfPage) => {
             const { width, height } = pdfPage.getViewport({ scale: 1 });
             return { width, height };
           }),
@@ -426,7 +545,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
         if (linked.signal.aborted) throw abortError();
         const { signal } = linked;
         return await schedule(signal, async () => {
-          const { entry, doc } = await acquire(path, signal);
+          const { entry, doc } = await acquire(path, signal, true);
           try {
             return doc.numPages;
           } finally {
@@ -447,7 +566,7 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
         if (linked.signal.aborted) throw abortError();
         const { signal } = linked;
         return await schedule(signal, () =>
-          withPage(request.path, request.page, signal, (pdfPage) =>
+          withPage(request.path, request.page, signal, !isHeavy(request.pdfSize), (pdfPage) =>
             renderToBlob(pdfPage, request, signal),
           ),
         );
@@ -460,14 +579,14 @@ export function createPdfRenderer(deps: PdfRendererDeps): PdfRenderer {
       if (disposal.signal.aborted) return;
       disposal.abort();
       pending.length = 0;
-      for (const [path, entry] of documents) {
+      for (const entry of documents) {
         entry.dropped = true;
         if (entry.refs === 0) {
-          if (entry.doc) destroyDocument(entry, entry.doc, path);
+          if (entry.doc) destroyDocument(entry, entry.doc, entry.path);
           else entry.controller.abort();
         }
       }
-      documents.clear();
+      documents.length = 0;
     },
   };
 }

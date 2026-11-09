@@ -207,8 +207,16 @@ describe("compatibilité v1", () => {
     expect(await decodePageBoxes(bytes, 1)).toEqual([BOX]);
     const match = await decodePageMatches(bytes, 1, (t) => t === "a");
     expect(match.pageSize).toEqual(FALLBACK);
+    expect(match.pageSizeAssumed).toBe(true);
     expect(match.boxes).toEqual([BOX]);
     expect((await decodeIndexForSearch(bytes)).pageTermCounts).toEqual(Uint32Array.of(1));
+  });
+
+  it("une v2 ne porte pas le drapeau pageSizeAssumed (taille réellement lue)", async () => {
+    const bytes = await handBuilt(2, [...varint(6120), ...varint(7920), ...ONE_BOX]);
+    const match = await decodePageMatches(bytes, 1, (t) => t === "a");
+    expect(match.pageSize).toEqual({ widthPt: 612, heightPt: 792 });
+    expect("pageSizeAssumed" in match).toBe(false);
   });
 
   it("une v1 ne doit pas être lue comme une v2 (blob v1 sous un en-tête v2 : rejeté ou incohérent)", async () => {

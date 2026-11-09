@@ -1,5 +1,12 @@
 # Journal des modifications
 
+## Non publiée
+
+- Vignettes plus rapides : sur un PDF scanné lourd, 12 vignettes s'affichent en environ 4 s au lieu de 7,8 s ; sur un PDF de texte, la première vignette apparaît en environ 180 ms au lieu de 270 ms.
+- Beaucoup moins de données téléchargées : le plugin ne lit plus que les parties utiles du PDF (environ 1 Mo par page au lieu du fichier entier). Une recherche sur cinq gros PDF passe de 875 Mo à 15 Mo, ce qui compte surtout sur mobile et sur un serveur distant.
+- Les PDF lourds (20 Mo et plus) sont rendus par plusieurs moteurs en parallèle ; les vignettes visibles dès l'affichage des résultats se chargent sans attendre.
+- Si le navigateur ne sait pas produire d'images WebP (Safari à confirmer), les vignettes sont enregistrées en JPEG plutôt qu'en PNG, quatre fois plus lourd.
+
 ## 0.5.0
 
 Publiée le 2026-11-09.
