@@ -2,7 +2,7 @@
   "name": "siyuan-docseeker",
   "author": "mmxm",
   "url": "https://github.com/mmxm/siyuan-docseeker",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "minAppVersion": "3.8.0",
   "backends": ["all"],
   "frontends": ["desktop", "browser-desktop", "mobile", "browser-mobile"],
