@@ -71,7 +71,7 @@ describe("--docseeker-hit : cible tactile", () => {
     ".docseeker-action",
   ])("la cible %s a une taille minimale égale à la variable", (selectors) => {
     const first = selectors.split(",")[0]!.trim();
-    expect(rulesIn(base, first).join(" ")).toMatch(/min-(height|width): var\(--docseeker-hit\)/);
+    expect(rulesIn(base, first).join(" ")).toMatch(/min-(height|width): var\(--docseeker-hit(-compact)?\)/);
   });
 
   it("les cases à cocher : c'est le <label> qui grandit (pas l'input), sous pointer: coarse seulement", () => {
@@ -140,7 +140,8 @@ describe("hauteur, clavier et zones sûres", () => {
   it("la liste défilante peut rétrécir (min-height: 0) et ne propage pas son défilement", () => {
     const rule = rulesIn(base, ".docseeker-list").join(" ");
     expect(rule).toContain("min-height: 0");
-    expect(rule).toContain("overscroll-behavior: contain");
+    expect(rule).not.toContain("overscroll-behavior"); // bureau : ne bloque jamais la molette
+    expect(rulesIn(SEARCH_CSS, ".docseeker-floating-body--fullscreen .docseeker-list").join(" ")).toContain("overscroll-behavior: contain");
   });
 
   it("la vue de recherche en plein écran remplit l'espace restant au-dessus de la barre basse", () => {
@@ -191,7 +192,7 @@ describe("barre basse « Fermer » et chemin complet (mobile)", () => {
   it("bureau inchangé : le dossier tronqué n'est masqué que sous coarse, le chemin complet est masqué par défaut", () => {
     expect(rulesIn(base, ".docseeker-doc-path").join(" ")).not.toContain("display: none");
     expect(rulesIn(base, ".docseeker-doc-fullpath").join(" ")).toContain("display: none");
-    expect(rulesIn(base, ".docseeker-list").join(" ")).toContain("overscroll-behavior: contain");
+    expect(rulesIn(base, ".docseeker-list").join(" ")).not.toContain("overscroll-behavior");
   });
 
   it("le chemin complet est masqué par défaut et remplace le dossier tronqué sous pointer: coarse", () => {

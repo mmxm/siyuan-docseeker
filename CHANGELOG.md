@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## Non publiée
+
+- Résultats plus compacts sur ordinateur : vignettes plus petites, espacements réduits, boutons « et N autres pages » et des critères moins hauts, chemin du document sur la ligne du titre.
+- La molette fait de nouveau défiler les résultats dans Chrome. Seule la liste défile : le champ de recherche et les critères restent visibles.
+
 ## 0.6.0
 
 Publiée le 2026-11-09.

@@ -66,8 +66,8 @@ describe("SEARCH_CSS", () => {
   it("garantit des cibles d'au moins 32px pour les boutons", () => {
     expect(rulesFor(".docseeker-open-settings").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
     expect(rulesFor(".docseeker-card").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
-    expect(rulesFor(".docseeker-more").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
-    expect(rulesFor(".docseeker-less").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+    expect(rulesFor(".docseeker-more").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit(-compact)?\)/);
+    expect(rulesFor(".docseeker-less").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit(-compact)?\)/);
   });
 
   it("n'a plus de règle pour l'ancienne section « Avancé »", () => {
@@ -161,7 +161,7 @@ describe("SEARCH_CSS", () => {
       const rule = rulesFor(BTN).join(" ");
       expect(rule).toMatch(/background:\s*transparent/);
       expect(rule).toMatch(/border:\s*0|border:\s*none/);
-      expect(rule).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+      expect(rule).toMatch(/min-height:\s*var\(--docseeker-hit(-compact)?\)/);
       expect(rule).toMatch(/min-width:\s*var\(--docseeker-hit\)/);
       expect(rule).toContain("justify-content: center");
     });
@@ -222,7 +222,7 @@ describe("SEARCH_CSS", () => {
     });
 
     it("la largeur max d'une carte plate reste liée à la variable --docseeker-thumb-width", () => {
-      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*120px/);
+      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*96px/);
       expect(rulesFor(".docseeker-thumb").join(" ")).toContain("width: var(--docseeker-thumb-width)");
       expect(rulesFor(".docseeker-card--flat").join(" ")).toMatch(/max-width:\s*calc\(var\(--docseeker-thumb-width\)\s*\+\s*\d+px\)/);
       expect(SEARCH_CSS).not.toContain("136px");
@@ -240,7 +240,7 @@ describe("SEARCH_CSS", () => {
       const rule = rulesFor(".docseeker-filter-field input").join(" ");
       expect(rule).toContain("width: 100%");
       expect(rule).toContain("box-sizing: border-box");
-      expect(rule).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+      expect(rule).toMatch(/min-height:\s*var\(--docseeker-hit(-compact)?\)/);
       expect(rule).not.toMatch(/(?<![-\w])width:\s*\d+px/);
       expect(rulesFor(".docseeker-filter-field input:focus-visible").join(" ")).toContain(FOCUS);
     });
@@ -253,7 +253,7 @@ describe("SEARCH_CSS", () => {
 
     it("boutons de réinitialisation : 32 px, focus visible, aria-disabled estompé", () => {
       for (const sel of [".docseeker-filter-reset", ".docseeker-reset-filters"]) {
-        expect(rulesFor(sel).join(" "), sel).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+        expect(rulesFor(sel).join(" "), sel).toMatch(/min-height:\s*var\(--docseeker-hit(-compact)?\)/);
         expect(rulesFor(`${sel}:focus-visible`).join(" "), sel).toContain(FOCUS);
       }
       expect(rulesFor('.docseeker-filter-reset[aria-disabled="true"]').join(" ")).toContain("cursor: not-allowed");
@@ -274,7 +274,7 @@ describe("SEARCH_CSS", () => {
       expect(rulesFor(".docseeker-list--flat").join(" ")).toContain("flex-wrap: wrap");
       expect(rulesFor(".docseeker-card-title").join(" ")).toMatch(/overflow-wrap:\s*anywhere|text-overflow/);
       expect(rulesFor(".docseeker-flat-item").join(" ")).toContain("min-width: 0");
-      expect(rulesFor(".docseeker-flat-more").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit\)/);
+      expect(rulesFor(".docseeker-flat-more").join(" ")).toMatch(/min-height:\s*var\(--docseeker-hit(-compact)?\)/);
       expect(rulesFor(".docseeker-flat-more:focus-visible").join(" ")).toContain(FOCUS);
       expect(rulesFor(".docseeker-flat-more[hidden]").join(" ")).toContain("display: none");
       expect(rulesFor(".docseeker-flat-footer[hidden]").join(" ")).toContain("display: none");

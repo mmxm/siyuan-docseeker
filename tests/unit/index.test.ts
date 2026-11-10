@@ -539,6 +539,16 @@ describe("DocSeekerPlugin", () => {
     expect(h.mounts.length).toBe(mounts);
   });
 
+  it("onglet : conteneur et searchHost portent les classes de hauteur bornée (la liste défile)", () => {
+    const s = setup();
+    const tab = s.render();
+    const container = tab.element.querySelector(".docseeker-tab") as HTMLElement;
+    expect(container).not.toBeNull();
+    expect((container as HTMLElement).style.padding).toBe("");
+    const searchHost = container.querySelector(":scope > .docseeker-tab-search");
+    expect(searchHost).not.toBeNull();
+  });
+
   it("l'onglet ne contient plus la section Avancé : seulement la recherche", () => {
     const s = setup();
     const tab = s.render();

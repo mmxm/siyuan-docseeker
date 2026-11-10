@@ -687,10 +687,11 @@ export default class DocSeekerPlugin extends Plugin {
     this.tabCleanups.set(host, cleanups);
     host.replaceChildren();
     const container = document.createElement("div");
-    container.style.padding = "16px";
+    container.className = "docseeker-tab";
     host.append(container);
 
     const searchHost = document.createElement("div");
+    searchHost.className = "docseeker-tab-search";
     container.append(searchHost);
     // Onglet ouvert par « Ouvrir dans un nouvel onglet » : il reçoit la session une seule fois, d'après son jeton.
     const initial = this.takeTransfer(custom);
