@@ -53,12 +53,17 @@ describe("compactage mobile plein écran", () => {
     expect(body(".docseeker-toolbar")).toContain("flex-wrap: nowrap");
   });
 
-  it("marges réduites à 8px et vignettes sur 2 colonnes", () => {
+  it("marges réduites à 8px", () => {
     expect(body(".docseeker-floating-body--fullscreen {")).toMatch(/padding: 8px/);
-    expect(body(".docseeker-cards")).toMatch(/display: grid/);
-    expect(body(".docseeker-cards")).toMatch(/grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
     expect(body(".docseeker-cards")).toMatch(/gap: 4px/);
-    expect(body(".docseeker-thumb")).toContain("width: 100%");
+  });
+
+  it("vignettes en rangée horizontale à 70vw (max 280px), sans overscroll-behavior sur la rangée", () => {
+    const row = body(".docseeker-cards");
+    expect(row).not.toContain("flex-wrap: wrap"); // hérite de la rangée nowrap + overflow-x: auto de la base
+    expect(row).not.toContain("display: grid");
+    expect(row).not.toContain("overscroll-behavior");
+    expect(body(".docseeker-search")).toMatch(/--docseeker-thumb-width: min\(70vw, 280px\)/);
   });
 
   it("titre 16px gras sur 2 lignes max ; chemin du PDF masqué (gain de place, le titre suffit)", () => {

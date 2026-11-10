@@ -3,6 +3,7 @@
 ## Non publiée
 
 - Résultats plus compacts sur ordinateur : vignettes plus petites, espacements réduits, boutons « et N autres pages » et des critères moins hauts, chemin du document sur la ligne du titre.
+- Les vignettes de chaque document s'affichent sur une rangée qui défile horizontalement, plus grandes (240 px) et plus serrées ; le numéro de page est inscrit sur la vignette.
 - La molette fait de nouveau défiler les résultats dans Chrome. Seule la liste défile : le champ de recherche et les critères restent visibles.
 
 ## 0.6.0

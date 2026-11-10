@@ -14,9 +14,9 @@ const coarse = SEARCH_CSS.slice(coarseStart + "@media (pointer: coarse) {".lengt
 const base = SEARCH_CSS.slice(0, coarseStart);
 
 describe("rendu compact (bureau)", () => {
-  it("conteneur et document resserrés, miniature 96px", () => {
+  it("conteneur et document resserrés, miniature 240px", () => {
     const search = rulesFor(".docseeker-search", base);
-    expect(search).toContain("--docseeker-thumb-width: 96px");
+    expect(search).toContain("--docseeker-thumb-width: 240px");
     expect(search).toMatch(/padding: 6px;\s*gap: 4px/);
     expect(rulesFor(".docseeker-doc", base)).toMatch(/padding: 4px 0/);
   });
@@ -31,11 +31,28 @@ describe("rendu compact (bureau)", () => {
   });
 
   it("cartes et libellé de page resserrés", () => {
-    expect(rulesFor(".docseeker-cards", base)).toMatch(/gap: 4px;\s*margin-top: 2px/);
+    expect(rulesFor(".docseeker-cards", base)).toMatch(/gap: 4px/);
     const card = rulesFor(".docseeker-card", base);
     expect(card).toMatch(/gap: 0/);
-    expect(card).toMatch(/padding: 2px/);
+    expect(card).toMatch(/padding: 0/);
     expect(rulesFor(".docseeker-card-page", base)).toMatch(/line-height: 1\.2/);
+  });
+
+  it("rangée de vignettes : défilement horizontal, sans overscroll-behavior, pastille de page", () => {
+    const row = rulesFor(".docseeker-cards", base);
+    for (const d of ["display: flex", "flex-wrap: nowrap", "overflow-x: auto", "overflow-y: hidden", "gap: 4px", "scroll-snap-type: x proximity", "scrollbar-width: thin", "padding-bottom"]) expect(row).toContain(d);
+    expect(row).not.toContain("overscroll-behavior");
+    expect(SEARCH_CSS).not.toMatch(/\.docseeker-cards[^{]*\{[^}]*overscroll-behavior/);
+    const card = rulesFor(".docseeker-card", base);
+    expect(card).toContain("flex: none");
+    expect(card).toContain("scroll-snap-align: start");
+    expect(card).toMatch(/scroll-margin-inline: \d+px/);
+    const badge = rulesFor(".docseeker-card-page", base);
+    for (const d of ["position: absolute", "bottom: 4px", "left: 4px", "pointer-events: none", "border-radius: 4px", "font-weight: bold", "color: #fff"]) expect(badge).toContain(d);
+    expect(badge).toMatch(/rgba\(30, 30, 30, 0?\.75\)/);
+    expect(badge).toMatch(/z-index: \d/);
+    expect(rulesFor(".docseeker-more", base) + rulesFor(".docseeker-less", base)).toMatch(/width: 110px/);
+    expect(rulesFor(".docseeker-list--flat", base)).toMatch(/gap: 4px/);
   });
 
   it("boutons « et N autres pages » compacts sur bureau, 44px sous coarse", () => {
@@ -46,7 +63,6 @@ describe("rendu compact (bureau)", () => {
       expect(r).toContain("font-size: 12px");
     }
     expect(rulesFor(".docseeker-less", base)).toContain("min-height: var(--docseeker-hit-compact)");
-    expect(rulesFor(".docseeker-more-actions", base)).toMatch(/gap: 4px;\s*margin-top: 2px/);
     expect(rulesFor(":root", base)).toContain("--docseeker-hit-compact: 24px");
     expect(rulesFor(":root", coarse)).toContain("--docseeker-hit-compact: 44px");
     expect(rulesFor(":root", coarse)).toContain("--docseeker-hit: 44px");
@@ -92,5 +108,13 @@ describe("hauteur bornée : la liste est le vrai conteneur de défilement", () =
   it("overscroll-behavior seulement en plein écran, jamais sur la liste bureau", () => {
     expect(rulesFor(".docseeker-list", base)).not.toContain("overscroll-behavior");
     expect(rulesFor(".docseeker-floating-body--fullscreen .docseeker-list", SEARCH_CSS)).toContain("overscroll-behavior: contain");
+  });
+});
+
+describe("vignette en attente de chargement", () => {
+  it("a le format du recadrage par défaut (300 x 120 pt) : une vignette pas encore chargée n'agrandit pas la rangée", () => {
+    expect(rulesFor(".docseeker-thumb", base)).toMatch(/aspect-ratio:\s*300\s*\/\s*120/);
+    expect(rulesFor(".docseeker-thumb", base)).not.toMatch(/aspect-ratio:\s*3\s*\/\s*4/);
+    expect(rulesFor(".docseeker-thumb", base)).toMatch(/max-width:\s*100%/);
   });
 });

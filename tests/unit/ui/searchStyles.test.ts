@@ -222,7 +222,7 @@ describe("SEARCH_CSS", () => {
     });
 
     it("la largeur max d'une carte plate reste liée à la variable --docseeker-thumb-width", () => {
-      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*96px/);
+      expect(rulesFor(".docseeker-search").join(" ")).toMatch(/--docseeker-thumb-width:\s*240px/);
       expect(rulesFor(".docseeker-thumb").join(" ")).toContain("width: var(--docseeker-thumb-width)");
       expect(rulesFor(".docseeker-card--flat").join(" ")).toMatch(/max-width:\s*calc\(var\(--docseeker-thumb-width\)\s*\+\s*\d+px\)/);
       expect(SEARCH_CSS).not.toContain("136px");

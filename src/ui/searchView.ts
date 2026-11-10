@@ -450,6 +450,14 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     };
   };
 
+  /** Pastille du numéro de page, superposée à la vignette (le nom accessible de la carte porte déjà la page). */
+  const pageBadge = (page: number): HTMLSpanElement => {
+    const badge = doc.createElement("span");
+    badge.className = "docseeker-card-page";
+    badge.textContent = tr("cardPage", { page });
+    return badge;
+  };
+
   /** Une carte seule (liste plate) : vignette, titre du document et page. */
   const buildFlat = (result: ResultDoc, page: number, query: string, signature: string): DocEntry => {
     const li = doc.createElement("li");
@@ -466,10 +474,8 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     const name = doc.createElement("span");
     name.className = "docseeker-card-title";
     name.textContent = result.title;
-    const label = doc.createElement("span");
-    label.className = "docseeker-card-page";
-    label.textContent = tr("cardPage", { page });
-    card.append(frame, name, label);
+    frame.appendChild(pageBadge(page));
+    card.append(frame, name);
     li.appendChild(card);
     return {
       li,
@@ -522,6 +528,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       collapseAll: () => undefined,
     };
 
+    let firstAction: HTMLElement | null = null; // premier bouton de fin de rangée : les cartes s'insèrent avant
     const addCard = (page: number): void => {
       const card = doc.createElement("button");
       card.type = "button";
@@ -532,11 +539,9 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       card.setAttribute("aria-label", tr("cardLabel", { title: result.title, page }));
       const frame = doc.createElement("span");
       frame.className = "docseeker-thumb";
-      const label = doc.createElement("span");
-      label.className = "docseeker-card-page";
-      label.textContent = tr("cardPage", { page });
-      card.append(frame, label);
-      cardsEl.appendChild(card);
+      frame.appendChild(pageBadge(page));
+      card.appendChild(frame);
+      cardsEl.insertBefore(card, firstAction);
       entry.detachers.push(deps.thumbnails.attach(frame, thumbnailRequest(result, page, query)));
     };
 
@@ -562,10 +567,8 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     for (const b of [more, lessBtn]) b.setAttribute("aria-controls", cardsEl.id);
     const note = doc.createElement("span");
     note.className = "docseeker-truncated";
-    const actionsEl = doc.createElement("div");
-    actionsEl.className = "docseeker-more-actions";
-    actionsEl.append(more, lessBtn, note);
-    li.appendChild(actionsEl);
+    firstAction = more;
+    cardsEl.append(more, lessBtn, note); // en fin de rangée, sous forme de carte
 
     const announce = (): void =>
       setText(statusEl, tr("shownStatus", { n: shownCount(), title: result.title }));
@@ -600,7 +603,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
     const collapseCards = (): void => {
       while (entry.detachers.length > MAX_CARDS_PER_DOC) {
         entry.detachers.pop()?.();
-        cardsEl.lastElementChild?.remove();
+        Array.from(cardsEl.querySelectorAll("button.docseeker-card")).pop()?.remove();
       }
       sync();
     };
@@ -618,7 +621,7 @@ export function mountSearchView(host: HTMLElement, deps: SearchViewDeps): Search
       announce();
     });
     lessBtn.addEventListener("click", () => {
-      const focusWasInCards = cardsEl.contains(doc.activeElement);
+      const focusWasInCards = !!doc.activeElement?.closest("button.docseeker-card") && cardsEl.contains(doc.activeElement);
       collapseCards();
       if (focusWasInCards) (more.hidden ? lessBtn : more).focus();
       announce();

@@ -426,9 +426,59 @@ describe("mountSearchView", () => {
       mount();
       update(results([doc("a", [4], "Mon titre")]));
       const c = cards()[0]!;
-      const visible = c.querySelector(".docseeker-card-page")!.textContent!;
+      const visible = c.querySelector(".docseeker-thumb .docseeker-card-page")!.textContent!;
       expect(c.getAttribute("aria-label")).toContain(visible);
       expect(c.getAttribute("aria-label")).toBe("Mon titre, p. 4");
+    });
+
+    it("le numéro de page est une pastille dans la vignette, sans libellé sous la vignette", () => {
+      mount();
+      update(results([doc("a", [4], "Mon titre")]));
+      const c = cards()[0]!;
+      const badge = c.querySelector(".docseeker-thumb > .docseeker-card-page")!;
+      expect(badge.textContent).toBe("p. 4");
+      expect(c.querySelectorAll(".docseeker-card-page")).toHaveLength(1);
+      expect(Array.from(c.children).some((k) => k.classList.contains("docseeker-card-page"))).toBe(false);
+    });
+
+    const rowShape = (row: Element): string[] =>
+      Array.from(row.children).map((k) =>
+        k.matches("button.docseeker-card") ? "card" : k.classList.contains("docseeker-more") ? "more" : k.classList.contains("docseeker-less") ? "less" : k.classList.contains("docseeker-truncated") ? "note" : "autre",
+      );
+    const rep = (n: number, v: string): string[] => Array.from({ length: n }, () => v);
+
+    it("« et N autres pages » et « Replier » sont dans la rangée, à la suite des cartes", () => {
+      mount();
+      update(results([doc("a", Array.from({ length: 12 }, (_, i) => i + 1))]));
+      const row = host.querySelector(".docseeker-cards")!;
+      const more = row.querySelector("button.docseeker-more") as HTMLButtonElement;
+      expect(host.querySelector(".docseeker-more-actions")).toBeNull();
+      expect(rowShape(row)).toEqual([...rep(5, "card"), "more", "less", "note"]);
+      more.focus();
+      more.click();
+      expect(rowShape(row)).toEqual([...rep(12, "card"), "more", "less", "note"]);
+      expect(row.querySelector<HTMLElement>("button.docseeker-less")!.hidden).toBe(false);
+    });
+
+    it("deux dépliages puis Replier : cartes, ordre de la rangée et focus conservés", () => {
+      mount();
+      update(results([doc("a", Array.from({ length: 30 }, (_, i) => i + 1))]));
+      const row = host.querySelector(".docseeker-cards")!;
+      const more = row.querySelector("button.docseeker-more") as HTMLButtonElement;
+      const less = row.querySelector("button.docseeker-less") as HTMLButtonElement;
+      more.focus();
+      more.click();
+      more.click();
+      expect(row.querySelectorAll("button.docseeker-card")).toHaveLength(25);
+      expect(rowShape(row)).toEqual([...rep(25, "card"), "more", "less", "note"]);
+      less.focus();
+      less.click();
+      expect(row.querySelectorAll("button.docseeker-card")).toHaveLength(5);
+      expect(rowShape(row)).toEqual([...rep(5, "card"), "more", "less", "note"]);
+      expect(more.hidden).toBe(false);
+      expect(less.hidden).toBe(true);
+      expect(document.activeElement).toBe(more);
+      expect(document.activeElement).not.toBe(document.body);
     });
 
     it("annonce les pages non affichées au-delà de 5", () => {

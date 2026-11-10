@@ -157,7 +157,7 @@ describe("regroupement : liste plate", () => {
     mount({ initialGroupByDocument: false });
     const first = cards()[0]!;
     expect(first.textContent).toContain("Beta");
-    expect(first.textContent).toContain("p. 4");
+    expect(first.querySelector(".docseeker-thumb > .docseeker-card-page")!.textContent).toBe("p. 4");
     expect(first.getAttribute("aria-label")).toBe("Beta, p. 4");
     expect(cards()[2]!.textContent).toContain("Alpha");
   });
