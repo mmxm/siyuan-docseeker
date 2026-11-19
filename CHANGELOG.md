@@ -1,5 +1,11 @@
 # Journal des modifications
 
+## 0.6.2
+
+Publiée le 2026-11-20.
+
+- Ouvrir un PDF depuis un résultat est plus rapide sur les gros fichiers : le visionneur de SiYuan ne lit plus que les parties utiles du PDF au lieu de le télécharger en entier. Sur un PDF de 154 Mo, la page s'affiche en 1 à 2 s au lieu d'environ 3 s, avec 11 à 41 Mo téléchargés au lieu de 156 Mo. Gain faible sur les PDF scannés, où le décodage des images domine. Les autres ouvertures de PDF dans SiYuan ne changent pas.
+
 ## 0.6.1
 
 Publiée le 2026-11-10.
