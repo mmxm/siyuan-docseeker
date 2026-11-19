@@ -24,6 +24,7 @@ import {
   type Disposer,
 } from "../ui/highlightOverlay";
 import type { PercentStyle } from "../core/crop";
+import { armRangeLoading } from "./rangeLoading";
 
 export interface PdfTarget {
   readonly app: unknown;
@@ -64,6 +65,8 @@ export interface OpenPdfOptions
   readonly openNewTab?: boolean;
   /** Transmis tel quel à `openTab` (`target.signal`). */
   readonly signal?: AbortSignal;
+  /** `window.pdfjsLib` (bureau) : le visionneur ouvre alors ce PDF par plages (voir `rangeLoading`). Absent : rien n'est changé. */
+  readonly pdfjsLib?: unknown;
 }
 
 export class InvalidPdfPathError extends RangeError {
@@ -143,7 +146,7 @@ async function finish(
  * release explicitly (idempotent); it also self-releases when the page is gone for good.
  */
 export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<OpenPdfReport>> {
-  const { openTab, app, path, page, rects, focusIndex = 0, root = document, position, openNewTab, signal, ...rest } = options;
+  const { openTab, app, path, page, rects, focusIndex = 0, root = document, position, openNewTab, signal, pdfjsLib, ...rest } = options;
   assertValidPdfPath(path);
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError(`page must be an integer >= 1, got ${page}`);
@@ -159,7 +162,15 @@ export async function openPdfAtPage(options: OpenPdfOptions): Promise<Disposer<O
     ...(openNewTab !== undefined && { openNewTab }),
     ...(signal !== undefined && { signal }),
   };
-  const opened = await openTab(target);
+  // Pas de désarmement après `openTab` : le visionneur appelle `getDocument` plus tard, l'enveloppe se retire seule.
+  const disarm = pdfjsLib === undefined ? undefined : armRangeLoading(pdfjsLib, path, rest.onWarn ? { onWarn: rest.onWarn } : {});
+  let opened: unknown;
+  try {
+    opened = await openTab(target);
+  } catch (error) {
+    disarm?.();
+    throw error;
+  }
   if (mine !== generation) return supersededHandle(page);
   // Side by side, both viewers are visible and may show the same page number: look in the opened tab's panel only.
   const wantsPanel = position !== undefined && !rest.resolvePageRoot;

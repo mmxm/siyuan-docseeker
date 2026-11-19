@@ -51,6 +51,8 @@ export interface SearchTabDeps {
    * rien) ou profil sans `canOpenTab` : le PDF s'ouvre par `openPdfFallback`, jamais par `openTab`.
    */
   readonly openTab?: OpenPdfOptions["openTab"] | undefined;
+  /** Lit `window.pdfjsLib` au moment de l'ouverture (bureau seulement) : le visionneur charge alors le PDF par plages. */
+  readonly getPdfjsLib?: (() => unknown) | undefined;
   /**
    * Repli sans onglet (mobile) : ouvre le PDF `assets/x.pdf` à la page (1-based) et renvoie faux si le navigateur bloque la fenêtre.
    * Défaut : `openPdfInBrowser` (seul adaptateur de `window.open`). Peut lever : l'erreur est tracée et un message est affiché.
@@ -685,6 +687,7 @@ function assembleSearchTab(host: HTMLElement, deps: SearchTabDeps, cleanups: Arr
       try {
         handle = await openPdf({
           openTab: tabFn,
+          ...(!native && deps.getPdfjsLib ? { pdfjsLib: deps.getPdfjsLib() } : {}),
           app: deps.app,
           path: doc.path,
           page,

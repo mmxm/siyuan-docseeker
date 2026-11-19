@@ -42,6 +42,14 @@ afterEach(() => {
 });
 
 describe("mobile : visionneur natif d'abord", () => {
+  it("ne transmet pas pdfjsLib sur le chemin natif", async () => {
+    const getPdfjsLib = vi.fn(() => ({}));
+    const h = setup({ getPdfjsLib });
+    await clickFirst(h);
+    expect(getPdfjsLib).not.toHaveBeenCalled();
+    expect(h.openPdfAtPage.mock.calls[0]![0]).not.toHaveProperty("pdfjsLib");
+  });
+
   it("openPdfAtPage reçoit openNativePdf comme openTab, avec chemin, page et rectangles du surlignage", async () => {
     const h = setup();
     const tab = await clickFirst(h);

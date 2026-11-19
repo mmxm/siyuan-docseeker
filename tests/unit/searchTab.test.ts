@@ -337,6 +337,22 @@ describe("mountSearchTab", () => {
     tab.dispose();
   });
 
+  it("au clic (bureau), transmet la valeur de getPdfjsLib comme pdfjsLib, lue à l'ouverture", async () => {
+    const lib = { getDocument: vi.fn() };
+    const getPdfjsLib = vi.fn(() => lib);
+    const h = harness();
+    (h.deps as { getPdfjsLib?: () => unknown }).getPdfjsLib = getPdfjsLib;
+    const tab = mountSearchTab(h.host, h.deps);
+    await flush();
+    expect(getPdfjsLib).not.toHaveBeenCalled();
+    await type(h.host, "chat");
+    cards(h.host)[1]!.click();
+    await flush();
+    expect(getPdfjsLib).toHaveBeenCalledTimes(1);
+    expect((h.openPdfAtPage.mock.calls[0]![0] as { pdfjsLib: unknown }).pdfjsLib).toBe(lib);
+    tab.dispose();
+  });
+
   it("au clic, ouvre le PDF à la bonne page avec des rectangles en pourcentage", async () => {
     const h = harness();
     const tab = mountSearchTab(h.host, h.deps);

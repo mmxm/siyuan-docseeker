@@ -21,6 +21,7 @@ import { createWarnLog, mountSearchTab, type SearchTab } from "./searchTab";
 import { ensureSearchStyle } from "./ui/searchStyles";
 import { isShown } from "./ui/visibility";
 import { createClearingFlag, createSettingsPanel, type SettingsPanel } from "./ui/settingsPanel";
+import { disarmRangeLoading } from "./siyuan/rangeLoading";
 import type { OpenTabFn } from "./siyuan/openPdf";
 import type { CustomDialogHandle } from "./ui/nativeUiTypes";
 import type { RenderableDocument } from "./siyuan/pdfRenderer";
@@ -291,6 +292,7 @@ export default class DocSeekerPlugin extends Plugin {
 
   override onunload(): void {
     this.unloaded = true;
+    disarmRangeLoading();
     this.autoSyncCleanup?.();
     this.autoSyncCleanup = null;
     this.activity?.dispose();
@@ -731,7 +733,12 @@ export default class DocSeekerPlugin extends Plugin {
       settings: this.settings, // tri et regroupement mémorisés
       indexActivity: this.getActivity(),
       // Mobile : `openTab` est un stub qui ne fait rien : il n'est pas injecté.
-      ...(profile.canOpenTab ? { openTab: openTab as unknown as OpenTabFn } : {}),
+      ...(profile.canOpenTab
+        ? {
+            openTab: openTab as unknown as OpenTabFn,
+            getPdfjsLib: () => (window as unknown as { pdfjsLib?: unknown }).pdfjsLib,
+          }
+        : {}),
       // Mobile : le PDF s'ouvre dans le visionneur de page, un second dialogue plein écran empilé sur la recherche.
       ...(profile.canOpenTab ? {} : { openFloatingDialog }),
       app: this.app,

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OVERLAY_ATTRIBUTE } from "../../../src/ui/highlightOverlay";
+import { armRangeLoading, disarmRangeLoading } from "../../../src/siyuan/rangeLoading";
 import { InvalidPdfPathError, openPdfAtPage, type OpenTabFn } from "../../../src/siyuan/openPdf";
 
 const RECT = { left: 10, top: 20, width: 30, height: 5 };
@@ -20,6 +21,7 @@ function addPage(root: Element, n: number): HTMLElement {
 
 let root: HTMLElement;
 afterEach(() => {
+  disarmRangeLoading();
   vi.useRealTimers();
 });
 beforeEach(() => {
@@ -512,5 +514,48 @@ describe("openPdfAtPage : ouverture dans un volet (position, openNewTab)", () =>
     expect((await handle.ready).status).toBe("attached");
     expect(page.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).not.toBeNull();
     expect(mainPage.querySelector(`[${OVERLAY_ATTRIBUTE}]`)).toBeNull();
+  });
+});
+
+describe("openPdfAtPage : chargement par plages", () => {
+  it("arme pdfjsLib avant openTab, pour le chemin ouvert", async () => {
+    const original = vi.fn();
+    const lib = { getDocument: original };
+    let armedDuringOpen = false;
+    const openTab = vi.fn<OpenTabFn>().mockImplementation(async () => {
+      armedDuringOpen = lib.getDocument !== original;
+    });
+    await openPdfAtPage(base(openTab, { pdfjsLib: lib }));
+    expect(armedDuringOpen).toBe(true);
+    lib.getDocument({ url: "/assets/x.pdf" });
+    expect(original).toHaveBeenCalledOnce();
+    expect(original.mock.calls[0]![0]).toMatchObject({ url: "/assets/x.pdf", disableStream: true, rangeChunkSize: expect.any(Number) });
+  });
+
+  it("désarme si openTab lève", async () => {
+    const original = vi.fn();
+    const lib = { getDocument: original };
+    await expect(
+      openPdfAtPage(base(vi.fn<OpenTabFn>().mockRejectedValue(new Error("boom")), { pdfjsLib: lib })),
+    ).rejects.toThrow("boom");
+    expect(lib.getDocument).toBe(original);
+  });
+
+  it("sans l'option, un armement précédent n'est pas remplacé", async () => {
+    const original = vi.fn();
+    const lib = { getDocument: original };
+    armRangeLoading(lib, "assets/x.pdf");
+    const armed = lib.getDocument;
+    await openPdfAtPage(base(vi.fn<OpenTabFn>().mockResolvedValue(undefined)));
+    expect(lib.getDocument).toBe(armed);
+  });
+
+  it("pdfjsLib non modifiable : openTab est quand même appelé", async () => {
+    const lib = Object.freeze({ getDocument: vi.fn() });
+    const openTab = vi.fn<OpenTabFn>().mockResolvedValue(undefined);
+    const onWarn = vi.fn();
+    await openPdfAtPage(base(openTab, { pdfjsLib: lib, onWarn }));
+    expect(openTab).toHaveBeenCalledOnce();
+    expect(onWarn).toHaveBeenCalledOnce();
   });
 });
